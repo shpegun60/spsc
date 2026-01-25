@@ -28,14 +28,14 @@ template<
     reg   FifoCapacity  = 0,
     typename Policy     = ::spsc::policy::default_policy,
     typename Alloc      = ::spsc::alloc::default_alloc
->
+    >
 class chunk_fifo
     : public ::spsc::fifo<
           ::spsc::chunk<T, ChunkCapacity, Alloc>,
           FifoCapacity,
           Policy,
           Alloc
-      >
+          >
 {
     using ChunkT = ::spsc::chunk<T, ChunkCapacity, Alloc>;
     using Base   = ::spsc::fifo<ChunkT, FifoCapacity, Policy, Alloc>;
@@ -84,13 +84,13 @@ template<
     reg   FifoCapacity  = 0,
     typename Policy     = ::spsc::policy::default_policy,
     typename Alloc      = ::spsc::alloc::default_alloc
->
+    >
 class chunk_fifo_view
     : public ::spsc::fifo_view<
           ::spsc::chunk<T, ChunkCapacity, Alloc>,
           FifoCapacity,
           Policy
-      >
+          >
 {
     using ChunkT = ::spsc::chunk<T, ChunkCapacity, Alloc>;
     using Base   = ::spsc::fifo_view<ChunkT, FifoCapacity, Policy>;

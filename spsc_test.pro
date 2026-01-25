@@ -21,12 +21,14 @@ SOURCES += \
     src/fifo_bench.cpp \
     src/fifo_test.cpp \
     src/fifo_view_test.cpp \
-    src/pool_test.cpp
+    src/pool_test.cpp \
+    src/queue_test.cpp
 
 HEADERS += \
     mainwindow.h \
     basic_types.h \
     macro.h \
+    src/queue_test.h \
     src/latest_test.h \
     src/pool_view_test.h \
     src/fifo_bench.h \

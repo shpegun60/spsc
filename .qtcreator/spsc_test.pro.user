@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 18.0.1, 2026-01-17T15:36:36. -->
+<!-- Written by QtCreator 18.0.1, 2026-01-25T19:35:58. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -72,6 +72,8 @@
    </valuemap>
    <value type="bool" key="AutoTest.ApplyFilter">false</value>
    <valuemap type="QVariantMap" key="AutoTest.CheckStates">
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/latest_test.cpp:cleanupTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/latest_test.cpp:initTestCase">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_128">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_256">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_32">Unchecked</value>
@@ -88,6 +90,7 @@
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:threaded_atomic_A">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:threaded_cached_CA">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:tst_pool_api_paranoid">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/queue_test.cpp:initTestCase">Unchecked</value>
    </valuemap>
    <valuelist type="QVariantList" key="AutoTest.PathFilters"/>
    <value type="int" key="AutoTest.RunAfterBuild">0</value>

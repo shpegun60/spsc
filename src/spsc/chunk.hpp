@@ -46,7 +46,7 @@ template<
     class T,
     reg   ChunkCapacity = 0,
     typename Alloc      = ::spsc::alloc::default_alloc
->
+    >
 class chunk;
 
 /* =======================================================================
@@ -59,7 +59,7 @@ template<
     class T,
     reg   ChunkCapacity,
     typename Alloc
->
+    >
 class chunk
 {
 public:
@@ -83,15 +83,15 @@ public:
     // Static Assertions
     // --------------------------------------------------------------------------
     static_assert(ChunkCapacity > 0,
-        "[spsc::chunk]: Static capacity must be > 0.");
+                  "[spsc::chunk]: Static capacity must be > 0.");
     static_assert(std::is_default_constructible_v<T>,
-        "[spsc::chunk]: T must be default-constructible (stored in std::array).");
+                  "[spsc::chunk]: T must be default-constructible (stored in std::array).");
     static_assert(std::is_move_assignable_v<T> || std::is_copy_assignable_v<T>,
-        "[spsc::chunk]: T must be move- or copy-assignable.");
+                  "[spsc::chunk]: T must be move- or copy-assignable.");
 
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
-        "[spsc::chunk]: no-exceptions mode requires noexcept default constructor.");
+                  "[spsc::chunk]: no-exceptions mode requires noexcept default constructor.");
 #endif
 
 private:
@@ -180,7 +180,7 @@ public:
     reference emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
-    ) {
+        ) {
         SPSC_ASSERT(!full());
         reference slot = storage_[len_];
         // Note: Logic implies assignment because slots are already constructed.
@@ -193,7 +193,7 @@ public:
     [[nodiscard]] pointer try_emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
-    ) {
+        ) {
         if (RB_UNLIKELY(full())) { return nullptr; }
         reference slot = storage_[len_];
         slot = value_type(std::forward<Args>(args)...);
@@ -249,7 +249,7 @@ public:
 
     using base_allocator_type    = Alloc;
     using allocator_type         = typename std::allocator_traits<base_allocator_type>
-                                      ::template rebind_alloc<value_type>;
+        ::template rebind_alloc<value_type>;
     using alloc_traits           = std::allocator_traits<allocator_type>;
     using alloc_pointer          = typename alloc_traits::pointer;
 
@@ -265,17 +265,17 @@ public:
     // Static Assertions
     // --------------------------------------------------------------------------
     static_assert(alloc_traits::is_always_equal::value,
-        "[spsc::chunk]: dynamic chunk requires stateless allocator.");
+                  "[spsc::chunk]: dynamic chunk requires stateless allocator.");
     static_assert(std::is_same_v<alloc_pointer, pointer>,
-        "[spsc::chunk]: allocator must return raw pointers (T*).");
+                  "[spsc::chunk]: allocator must return raw pointers (T*).");
     static_assert(std::is_default_constructible_v<T>,
-        "[spsc::chunk]: T must be default-constructible (eager initialization).");
+                  "[spsc::chunk]: T must be default-constructible (eager initialization).");
     static_assert(std::is_move_assignable_v<T> || std::is_copy_assignable_v<T>,
-        "[spsc::chunk]: T must be assignable.");
+                  "[spsc::chunk]: T must be assignable.");
 
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
-        "[spsc::chunk]: no-exceptions mode requires noexcept default constructor.");
+                  "[spsc::chunk]: no-exceptions mode requires noexcept default constructor.");
 #endif
 
     // --------------------------------------------------------------------------
@@ -442,7 +442,7 @@ public:
     reference emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
-    ) {
+        ) {
         SPSC_ASSERT(!full());
         reference slot = storage_[len_];
         slot = value_type(std::forward<Args>(args)...);
@@ -454,7 +454,7 @@ public:
     [[nodiscard]] pointer try_emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
-    ) {
+        ) {
         if (RB_UNLIKELY(full())) { return nullptr; }
         reference slot = storage_[len_];
         slot = value_type(std::forward<Args>(args)...);
