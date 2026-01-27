@@ -22,7 +22,8 @@ SOURCES += \
     src/fifo_test.cpp \
     src/fifo_view_test.cpp \
     src/pool_test.cpp \
-    src/queue_test.cpp
+    src/queue_test.cpp \
+    src/typed_pool_test.cpp
 
 HEADERS += \
     mainwindow.h \
@@ -34,7 +35,8 @@ HEADERS += \
     src/fifo_bench.h \
     src/fifo_test.h \
     src/fifo_view_test.h \
-    src/pool_test.h
+    src/pool_test.h \
+    src/typed_pool_test.h
 
 FORMS += \
     mainwindow.ui

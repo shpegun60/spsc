@@ -340,14 +340,24 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return iterator(nullptr, 0u, 0u);
         }
-        return iterator(storage_, Base::mask(), Base::tail());
+
+        const size_type tail = static_cast<size_type>(Base::tail());
+        const size_type used = safe_used_from_tail_(tail);
+        (void)used; // begin() only needs a stable tail; end() uses the same logic.
+
+        return iterator(storage_, Base::mask(), tail);
     }
 
     iterator end() noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return iterator(nullptr, 0u, 0u);
         }
-        return iterator(storage_, Base::mask(), Base::head());
+
+        const size_type tail = static_cast<size_type>(Base::tail());
+        const size_type used = safe_used_from_tail_(tail);
+        const size_type head = static_cast<size_type>(tail + used);
+
+        return iterator(storage_, Base::mask(), head);
     }
 
     const_iterator begin() const noexcept { return cbegin(); }
@@ -357,14 +367,24 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return const_iterator(nullptr, 0u, 0u);
         }
-        return const_iterator(storage_, Base::mask(), Base::tail());
+
+        const size_type tail = static_cast<size_type>(Base::tail());
+        const size_type used = safe_used_from_tail_(tail);
+        (void)used;
+
+        return const_iterator(storage_, Base::mask(), tail);
     }
 
     const_iterator cend() const noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return const_iterator(nullptr, 0u, 0u);
         }
-        return const_iterator(storage_, Base::mask(), Base::head());
+
+        const size_type tail = static_cast<size_type>(Base::tail());
+        const size_type used = safe_used_from_tail_(tail);
+        const size_type head = static_cast<size_type>(tail + used);
+
+        return const_iterator(storage_, Base::mask(), head);
     }
 
     reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
@@ -384,10 +404,13 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
-        const auto t = Base::tail();
-        const auto h = Base::head();
-        const auto m = Base::mask();
-        return snapshot(it(data(), m, t), it(data(), m, h));
+
+        const size_type tail = static_cast<size_type>(Base::tail());
+        const size_type used = safe_used_from_tail_(tail);
+        const size_type head = static_cast<size_type>(tail + used);
+        const size_type mask = static_cast<size_type>(Base::mask());
+
+        return snapshot(it(data(), mask, tail), it(data(), mask, head));
     }
 
     [[nodiscard]] const_snapshot make_snapshot() const noexcept {
@@ -395,10 +418,13 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return const_snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
-        const auto t = Base::tail();
-        const auto h = Base::head();
-        const auto m = Base::mask();
-        return const_snapshot(it(data(), m, t), it(data(), m, h));
+
+        const size_type tail = static_cast<size_type>(Base::tail());
+        const size_type used = safe_used_from_tail_(tail);
+        const size_type head = static_cast<size_type>(tail + used);
+        const size_type mask = static_cast<size_type>(Base::mask());
+
+        return const_snapshot(it(data(), mask, tail), it(data(), mask, head));
     }
 
     template <class Snap> void consume(const Snap &s) noexcept {
@@ -484,15 +510,7 @@ public:
         }
 
         const size_type cap = Base::capacity();
-        const size_type head = Base::head();
-        const size_type tail = Base::tail();
-
-        const size_type used = static_cast<size_type>(head - tail);
-        if (RB_UNLIKELY(used > cap)) {
-            return {};
-        }
-
-        size_type total = static_cast<size_type>(cap - used);
+        size_type total = static_cast<size_type>(Base::free());
         if (max_count < total) {
             total = max_count;
         }
@@ -500,16 +518,17 @@ public:
             return {};
         }
 
-        const size_type mask = Base::mask();
-        const size_type wi = static_cast<size_type>(head & mask);
+        const size_type wi = static_cast<size_type>(Base::write_index());
         const size_type w2e = static_cast<size_type>(cap - wi);
         const size_type first_n = (w2e < total) ? w2e : total;
 
         write_regions r{};
         r.first.raw = reinterpret_cast<std::byte *>(storage_ + wi);
         r.first.count = first_n;
-        r.second.raw = reinterpret_cast<std::byte *>(storage_);
+
         r.second.count = static_cast<size_type>(total - first_n);
+        r.second.raw = (r.second.count != 0u) ? reinterpret_cast<std::byte *>(storage_) : nullptr;
+
         r.total = total;
         return r;
     }
@@ -522,13 +541,9 @@ public:
         }
 
         const size_type cap = Base::capacity();
-        const size_type head = Base::head();
-        const size_type tail = Base::tail();
+        const size_type tail = static_cast<size_type>(Base::tail());
 
-        size_type total = static_cast<size_type>(head - tail);
-        if (RB_UNLIKELY(total > cap)) {
-            return {};
-        }
+        size_type total = safe_used_from_tail_(tail);
         if (max_count < total) {
             total = max_count;
         }
@@ -542,21 +557,11 @@ public:
         const size_type first_n = (r2e < total) ? r2e : total;
 
         read_regions r{};
-
-        // We cannot use slot_ptr() here easily because it returns T* but regions
-        // expect T* const*. However, for read regions (pointers to objects), we can
-        // launder the pointers individually if needed, but since we return pointers
-        // TO pointers (the ring slots), we don't launder the ring slots themselves.
-        // The consumer will dereference these slots to get the object pointer.
-        // To be strictly correct, if the ring slots themselves were
-        // placement-new'd, we might need laundering, but here the ring stores
-        // simple pointers. The OBJECTS pointed to need laundering.
-
-        r.first.ptr = data() + ri;
+        r.first.ptr = slot_ptr(ri);
         r.first.count = first_n;
 
         if (total > first_n) {
-            r.second.ptr = data();
+            r.second.ptr = slot_ptr(0u);
             r.second.count = static_cast<size_type>(total - first_n);
         } else {
             r.second.ptr = nullptr;
@@ -1079,6 +1084,31 @@ public:
     [[nodiscard]] read_guard scoped_read() noexcept { return read_guard(*this); }
 
 private:
+    [[nodiscard]] RB_FORCEINLINE size_type safe_used_from_tail_(const size_type tail) const noexcept {
+        const size_type cap = Base::capacity();
+        if constexpr (kDynamic) {
+            if (RB_UNLIKELY(cap == 0u)) {
+                return 0u;
+            }
+        }
+
+        size_type head = static_cast<size_type>(Base::head());
+        size_type used = static_cast<size_type>(head - tail);
+
+        // Under atomic backends, head and tail are loaded separately and can form
+        // a transiently impossible snapshot (used > cap). Retry once and if it
+        // is still impossible, fall back to 0 to avoid over-reading.
+        if (RB_UNLIKELY(used > cap)) {
+            head = static_cast<size_type>(Base::head());
+            used = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(used > cap)) {
+                used = 0u;
+            }
+        }
+
+        return used;
+    }
+
     void allocate_static_() noexcept(kNoexceptAllocate) {
         if constexpr (!kDynamic) {
             allocator_type alloc{};

@@ -9,6 +9,7 @@
 #include "src/pool_view_test.h"
 #include "src/latest_test.h"
 #include "src/queue_test.h"
+#include "src/typed_pool_test.h"
 
 
 MainWindow::MainWindow(QWidget *parent)
@@ -34,6 +35,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     qDebug() << "\n" << "queue test";
     run_tst_queue_api_paranoid(-1, nullptr);
+
+    qDebug() << "\n" << "typed_pool test";
+    run_tst_typed_pool_api_paranoid(-1, nullptr);
+
 
     //run_fifo_bench();
 }

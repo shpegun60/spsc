@@ -149,26 +149,6 @@ private:
         return static_cast<reg>(cap - 1u);
     }
 
-    [[nodiscard]] RB_FORCEINLINE reg rb_used_snapshot_(const reg cap) const noexcept {
-        // Load tail first to reduce underflow risk on weak/relaxed snapshots.
-        reg t = _tail.load();
-        reg h = _head.load();
-        reg used = static_cast<reg>(h - t);
-
-        if constexpr (kAtomicBackend) {
-            // Atomic tearing can yield an impossible snapshot (used > cap).
-            // Retry once; if still impossible, clamp conservatively.
-            if (RB_UNLIKELY(used > cap)) {
-                t = _tail.load();
-                h = _head.load();
-                used = static_cast<reg>(h - t);
-                if (RB_UNLIKELY(used > cap)) {
-                    used = cap;
-                }
-            }
-        }
-        return used;
-    }
 
 public:
     using Base::capacity;
@@ -353,7 +333,30 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::size() const noexcept {
         }
     }
 
-    return rb_used_snapshot_(cap);
+    if constexpr (!kAtomicBackend) {
+        const reg t = _tail.load();
+        const reg h = _head.load();
+        return static_cast<reg>(h - t);
+    } else {
+        // Consumer-safe size:
+        // - Retry once on impossible snapshots (used > cap).
+        // - If still impossible, report empty (0) to avoid any over-read of typed storage.
+        reg t = _tail.load();
+        reg h = _head.load();
+        reg used = static_cast<reg>(h - t);
+
+        if (RB_UNLIKELY(used > cap)) {
+            t = _tail.load();
+            h = _head.load();
+            used = static_cast<reg>(h - t);
+
+            if (RB_UNLIKELY(used > cap)) {
+                return 0u;
+            }
+        }
+
+        return used;
+    }
 }
 
 template<reg C, typename PolicyT>
@@ -441,7 +444,31 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::free() const noexcept {
         }
     }
 
-    return static_cast<reg>(cap - rb_used_snapshot_(cap));
+    if constexpr (!kAtomicBackend) {
+        const reg t = _tail.load();
+        const reg h = _head.load();
+        const reg used = static_cast<reg>(h - t);
+        return (used >= cap) ? 0u : static_cast<reg>(cap - used);
+    } else {
+        // Producer-safe free space:
+        // - Retry once on impossible snapshots (used > cap).
+        // - If still impossible, report no space (0) to prevent overwrite.
+        reg t = _tail.load();
+        reg h = _head.load();
+        reg used = static_cast<reg>(h - t);
+
+        if (RB_UNLIKELY(used > cap)) {
+            t = _tail.load();
+            h = _head.load();
+            used = static_cast<reg>(h - t);
+
+            if (RB_UNLIKELY(used > cap)) {
+                return 0u;
+            }
+        }
+
+        return (used >= cap) ? 0u : static_cast<reg>(cap - used);
+    }
 }
 
 template<reg C, typename PolicyT>

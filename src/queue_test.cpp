@@ -775,6 +775,115 @@ static void run_threaded_suite(const char* name) {
     QVERIFY2(q.empty(), name);
 }
 
+template <class Policy>
+static void run_threaded_snapshot_suite(const char* name) {
+    using Q = spsc::queue<Blob, 0, Policy>;
+
+    Q q;
+    QVERIFY2(q.resize(kBigCap), name);
+    QVERIFY2(q.is_valid(), name);
+
+    std::atomic<bool> abort{false};
+    std::atomic<bool> prod_done{false};
+    std::atomic<int> fail{0};
+
+    auto should_abort = [&]() -> bool {
+        return abort.load(std::memory_order_relaxed);
+    };
+
+    std::thread prod([&]() {
+        for (int i = 1; i <= kThreadIters && !should_abort(); ++i) {
+            Blob b{static_cast<std::uint32_t>(i), 0x5A5A5A5Au};
+            while (!q.try_push(b)) {
+                if (should_abort()) {
+                    return;
+                }
+                std::this_thread::yield();
+            }
+        }
+        prod_done.store(true, std::memory_order_release);
+    });
+
+    std::thread cons([&]() {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(kThreadTimeoutMs);
+        std::uint32_t expected = 1u;
+
+        while (expected <= static_cast<std::uint32_t>(kThreadIters) && !should_abort()) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                fail.store(1, std::memory_order_relaxed);
+                abort.store(true, std::memory_order_relaxed);
+                return;
+            }
+
+            auto snap = q.make_snapshot();
+            const reg sz = snap.size();
+
+            if (sz == 0u) {
+                // If size() is 0, iterators must also be equal. Otherwise we'd
+                // risk an infinite loop in snapshot iteration under concurrency.
+                if (!(snap.begin() == snap.end())) {
+                    fail.store(2, std::memory_order_relaxed);
+                    abort.store(true, std::memory_order_relaxed);
+                    return;
+                }
+
+                if (prod_done.load(std::memory_order_acquire) && q.empty() &&
+                    expected <= static_cast<std::uint32_t>(kThreadIters)) {
+                    // Producer finished and queue is empty, but we still expect more.
+                    fail.store(3, std::memory_order_relaxed);
+                    abort.store(true, std::memory_order_relaxed);
+                    return;
+                }
+
+                std::this_thread::yield();
+                continue;
+            }
+
+            const reg cap = q.capacity();
+            reg cnt = 0u;
+            std::uint32_t cur = expected;
+
+            for (auto it = snap.begin(); it != snap.end(); ++it) {
+                if (cnt > cap) {
+                    // Corruption / impossible snapshot: would otherwise hang.
+                    fail.store(4, std::memory_order_relaxed);
+                    abort.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                if (it->seq != cur) {
+                    fail.store(5, std::memory_order_relaxed);
+                    abort.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                ++cur;
+                ++cnt;
+            }
+
+            if (cnt != sz) {
+                fail.store(6, std::memory_order_relaxed);
+                abort.store(true, std::memory_order_relaxed);
+                return;
+            }
+
+            if (!q.try_consume(snap)) {
+                fail.store(7, std::memory_order_relaxed);
+                abort.store(true, std::memory_order_relaxed);
+                return;
+            }
+
+            expected += static_cast<std::uint32_t>(cnt);
+        }
+    });
+
+    prod.join();
+    cons.join();
+
+    QVERIFY2(fail.load(std::memory_order_relaxed) == 0, name);
+    QVERIFY2(!abort.load(std::memory_order_relaxed), name);
+    QVERIFY2(q.empty(), name);
+}
+
 // A small deterministic interleaving test that catches common lifetime bugs.
 // This is single-threaded but tries to mimic typical producer/consumer steps.
 
@@ -1808,6 +1917,9 @@ private slots:
 
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>("threaded_queue_atomic"); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>("threaded_queue_cached"); }
+
+    void threaded_snapshot_atomic_A()  { run_threaded_snapshot_suite<spsc::policy::A<>>("threaded_snapshot_atomic"); }
+    void threaded_snapshot_cached_CA() { run_threaded_snapshot_suite<spsc::policy::CA<>>("threaded_snapshot_cached"); }
 
     void allocator_accounting() {
         using Q = spsc::queue<Tracked, 0, spsc::policy::P, CountingAlignedAlloc<std::byte, alignof(Tracked)>>;

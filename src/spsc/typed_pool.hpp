@@ -294,10 +294,9 @@ public:
             std::swap(this->isAllocated_, other.isAllocated_);
 
             // Capacity is fixed for both instances.
-            Base::set_head(b_head);
-            Base::set_tail(b_tail);
-            other.Base::set_head(a_head);
-            other.Base::set_tail(a_tail);
+            [[maybe_unused]] const bool ok1 = Base::init(b_head, b_tail);
+            [[maybe_unused]] const bool ok2 = other.Base::init(a_head, a_tail);
+            SPSC_ASSERT(ok1 && ok2);
         }
     }
 
@@ -433,22 +432,34 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
-        const auto t = Base::tail();
-        const auto h = Base::head();
-        const auto m = Base::mask();
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges
+        // under atomic backends.
+        const size_type t = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h = static_cast<size_type>(t + used);
+
+        const size_type m = Base::mask();
         return snapshot(it(data(), m, t), it(data(), m, h));
     }
+
 
     [[nodiscard]] const_snapshot make_snapshot() const noexcept {
         using it = const_snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
             return const_snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
-        const auto t = Base::tail();
-        const auto h = Base::head();
-        const auto m = Base::mask();
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges
+        // under atomic backends.
+        const size_type t = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h = static_cast<size_type>(t + used);
+
+        const size_type m = Base::mask();
         return const_snapshot(it(data(), m, t), it(data(), m, h));
     }
+
 
     template <class Snap> void consume(const Snap &s) noexcept {
         SPSC_ASSERT(is_valid());
@@ -894,8 +905,8 @@ public:
                 // Object becomes visible to the consumer.
                 p_->publish();
             } else if (constructed_) {
-                // Constructed but not published: must destroy to avoid UB.
-                ::spsc::detail::destroy_at(ptr_);
+                // Constructed but not published: destroy safely.
+                ::spsc::detail::destroy_at(std::launder(ptr_));
             }
         }
 
@@ -909,7 +920,10 @@ public:
                 std::is_constructible_v<T, Args &&...>,
                 "[typed_pool::write_guard]: T must be constructible from Args...");
             SPSC_ASSERT(p_ && ptr_);
-            ::new (static_cast<void *>(ptr_)) T(std::forward<Args>(args)...);
+
+            // Use the placement-new return value as the fresh pointer.
+            ptr_ = ::new (static_cast<void *>(ptr_)) T(std::forward<Args>(args)...);
+
             constructed_ = true;
             publish_on_destroy_ = true;
             return ptr_;
@@ -924,7 +938,7 @@ public:
         }
 
         void commit() noexcept {
-            if (p_ && ptr_) {
+            if (p_ && ptr_ && constructed_) {
                 p_->publish();
             }
             // After publish, consumer owns destruction.
@@ -937,7 +951,7 @@ public:
         void cancel() noexcept {
             // Cancel means: do NOT publish, and if constructed -> destroy.
             if (p_ && ptr_ && constructed_) {
-                ::spsc::detail::destroy_at(ptr_);
+                ::spsc::detail::destroy_at(std::launder(ptr_));
             }
             publish_on_destroy_ = false;
             constructed_ = false;
@@ -1314,6 +1328,7 @@ private:
         tmp.Base::clear();
         tmp.Base::set_tail(0u);
         tmp.Base::set_head(sz);
+        tmp.Base::sync_cache();
 
         swap(tmp);
         return true;
@@ -1340,6 +1355,7 @@ private:
 
             Base::set_head(other.Base::head());
             Base::set_tail(other.Base::tail());
+            Base::sync_cache();
 
             other.slots_.fill(nullptr);
             other.isAllocated_ = false;
