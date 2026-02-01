@@ -389,7 +389,14 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return iterator(nullptr, 0u, 0u);
         }
-        return iterator(data(), Base::mask(), Base::head());
+
+        // Build end() from a validated used snapshot to avoid impossible
+        // head<tail ranges under atomic backends.
+        const size_type t = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h = static_cast<size_type>(t + used);
+
+        return iterator(data(), Base::mask(), h);
     }
 
     const_iterator begin() const noexcept { return cbegin(); }
@@ -406,7 +413,14 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return const_iterator(nullptr, 0u, 0u);
         }
-        return const_iterator(data(), Base::mask(), Base::head());
+
+        // Build cend() from a validated used snapshot to avoid impossible
+        // head<tail ranges under atomic backends.
+        const size_type t = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h = static_cast<size_type>(t + used);
+
+        return const_iterator(data(), Base::mask(), h);
     }
 
     reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
@@ -460,16 +474,21 @@ public:
         return const_snapshot(it(data(), m, t), it(data(), m, h));
     }
 
-
-    template <class Snap> void consume(const Snap &s) noexcept {
+    template <class Snap>
+    void consume(const Snap& s) noexcept {
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(s.begin().data() == data());
         SPSC_ASSERT(s.begin().mask() == Base::mask());
-        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == Base::tail());
+
+        const size_type cur_tail = static_cast<size_type>(Base::tail());
+        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
 
         const size_type new_tail = static_cast<size_type>(s.head_index());
-        pop(static_cast<size_type>(new_tail - Base::tail()));
+        SPSC_ASSERT(new_tail >= cur_tail); // Guards against impossible snapshots
+
+        pop(static_cast<size_type>(new_tail - cur_tail));
     }
+
 
     template <class Snap> [[nodiscard]] bool try_consume(const Snap &s) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
@@ -482,7 +501,6 @@ public:
         const size_type snap_head = static_cast<size_type>(s.head_index());
 
         const size_type cur_tail = Base::tail();
-        const size_type cur_head = Base::head();
 
         // Snapshot must be from the same storage (cheap identity check)
         const auto *my_data = data();
@@ -505,19 +523,31 @@ public:
             return false;
         }
 
-        // Ensure snap_head is not "ahead" of current head in modulo sense.
-        const size_type head_delta = static_cast<size_type>(cur_head - snap_head);
-        if (RB_UNLIKELY(head_delta > cap)) {
-            return false;
+        // Validate that the snapshot range is still available to read.
+        // can_read() is allowed to be conservative on transient/invalid observations;
+        // do one extra refresh attempt via a direct head reload to reduce spurious failures.
+        if (RB_UNLIKELY(!Base::can_read(snap_used))) {
+            const size_type h2  = static_cast<size_type>(Base::head());
+            const size_type av2 = static_cast<size_type>(h2 - cur_tail);
+            if (RB_UNLIKELY(av2 < snap_used) || RB_UNLIKELY(av2 > cap)) {
+                return false;
+            }
         }
 
         pop(snap_used);
         return true;
     }
-
     void consume_all() noexcept {
-        while (!empty()) {
-            pop();
+        if (RB_UNLIKELY(!is_valid())) {
+            return;
+        }
+
+        if constexpr (!std::is_trivially_destructible_v<object_type>) {
+            while (!empty()) {
+                pop();
+            }
+        } else {
+            Base::sync_tail_to_head();
         }
     }
 
@@ -533,15 +563,8 @@ public:
         }
 
         const size_type cap = Base::capacity();
-        const size_type head = Base::head();
-        const size_type tail = Base::tail();
 
-        const size_type used = static_cast<size_type>(head - tail);
-        if (RB_UNLIKELY(used > cap)) {
-            return {};
-        } // corruption guard
-
-        size_type total = static_cast<size_type>(cap - used);
+        size_type total = static_cast<size_type>(Base::free());
         if (max_count < total) {
             total = max_count;
         }
@@ -549,16 +572,17 @@ public:
             return {};
         }
 
-        const size_type mask = Base::mask();
-        const size_type wi = static_cast<size_type>(head & mask);
+        const size_type wi = static_cast<size_type>(Base::write_index()); // masked
         const size_type w2e = static_cast<size_type>(cap - wi);
         const size_type first_n = (w2e < total) ? w2e : total;
 
         regions r{};
         r.first.slts = data() + wi;
         r.first.count = first_n;
-        r.second.slts = data();
+
         r.second.count = static_cast<size_type>(total - first_n);
+        r.second.slts = (r.second.count != 0u) ? data() : nullptr;
+
         r.total = total;
         return r;
     }
@@ -571,14 +595,8 @@ public:
         }
 
         const size_type cap = Base::capacity();
-        const size_type head = Base::head();
-        const size_type tail = Base::tail();
 
-        size_type total = static_cast<size_type>(head - tail);
-        if (RB_UNLIKELY(total > cap)) {
-            return {};
-        } // corruption guard
-
+        size_type total = static_cast<size_type>(Base::size());
         if (max_count < total) {
             total = max_count;
         }
@@ -586,36 +604,21 @@ public:
             return {};
         }
 
-        const size_type mask = Base::mask();
-        const size_type ri = static_cast<size_type>(tail & mask);
+        const size_type ri = static_cast<size_type>(Base::read_index()); // masked
         const size_type r2e = static_cast<size_type>(cap - ri);
         const size_type first_n = (r2e < total) ? r2e : total;
 
         regions r{};
-
-        // We cannot use slot_ptr() here easily because it returns T* but regions
-        // expect T* const*. However, for read regions (pointers to objects), we can
-        // launder the pointers individually if needed, but since we return pointers
-        // TO pointers (the ring slts), we don't launder the ring slts themselves.
-        // The consumer will dereference these slts to get the object pointer.
-        // To be strictly correct, if the ring slts themselves were
-        // placement-new'd, we might need laundering, but here the ring stores
-        // simple pointers. The OBJECTS pointed to need laundering.
-
         r.first.slts = data() + ri;
         r.first.count = first_n;
 
-        if (total > first_n) {
-            r.second.slts = data();
-            r.second.count = static_cast<size_type>(total - first_n);
-        } else {
-            r.second.slts = nullptr;
-            r.second.count = 0u;
-        }
+        r.second.count = static_cast<size_type>(total - first_n);
+        r.second.slts = (r.second.count != 0u) ? data() : nullptr;
 
         r.total = total;
         return r;
     }
+
 
     // ------------------------------------------------------------------------------------------
     // Producer Operations
@@ -895,13 +898,12 @@ public:
         }
 
         write_guard &operator=(write_guard &&) = delete;
-
         ~write_guard() noexcept {
             if (!p_ || !ptr_) {
                 return;
             }
 
-            if (publish_on_destroy_) {
+            if (publish_on_destroy_ && constructed_) {
                 // Object becomes visible to the consumer.
                 p_->publish();
             } else if (constructed_) {
@@ -921,33 +923,65 @@ public:
                 "[typed_pool::write_guard]: T must be constructible from Args...");
             SPSC_ASSERT(p_ && ptr_);
 
-            // Use the placement-new return value as the fresh pointer.
+            // Placement-new returns a fresh pointer to the newly created object.
+            // Reusing an old T* may require std::launder per the standard rules.
             ptr_ = ::new (static_cast<void *>(ptr_)) T(std::forward<Args>(args)...);
+            ptr_ = std::launder(ptr_);
 
             constructed_ = true;
             publish_on_destroy_ = true;
             return ptr_;
         }
 
-        // Manual path: user constructs via placement-new on get(), then arms
-        // publish.
+        // Manual path: call this AFTER placement-new to mark the slot as containing
+        // a live object.
+        void mark_constructed() noexcept {
+            SPSC_ASSERT(p_ && ptr_);
+            SPSC_ASSERT(!constructed_);
+            ptr_ = std::launder(ptr_);
+            constructed_ = true;
+        }
+
+        // Arm publishing on scope exit.
+        void arm_publish() noexcept {
+            SPSC_ASSERT(p_ && ptr_);
+            SPSC_ASSERT(constructed_); // Must have a live object before publishing.
+            publish_on_destroy_ = true;
+        }
+
+        // // Manual path: user constructs via placement-new on get(), then arms
+        // // publish.
+        // // Manual path: user constructs via placement-new on get(), then calls this
+        // // to publish on scope exit.
+        // void publish_on_destroy() noexcept {
+        //     SPSC_ASSERT(p_ && ptr_);
+        //     if (!constructed_) {
+        //         ptr_ = std::launder(ptr_);
+        //         constructed_ = true;
+        //     }
+        //     publish_on_destroy_ = true;
+        // }
+
         void publish_on_destroy() noexcept {
             SPSC_ASSERT(p_ && ptr_);
-            constructed_ = true;
+            SPSC_ASSERT(constructed_ && "publish_on_destroy() requires a constructed object; call mark_constructed() after placement-new");
             publish_on_destroy_ = true;
         }
 
         void commit() noexcept {
-            if (p_ && ptr_ && constructed_) {
-                p_->publish();
+            if (p_ && ptr_) {
+                SPSC_ASSERT(constructed_ && "write_guard::commit() publishing an unconstructed slot");
+                if (constructed_) {
+                    p_->publish();
+                }
             }
+
             // After publish, consumer owns destruction.
             publish_on_destroy_ = false;
             constructed_ = false;
             p_ = nullptr;
             ptr_ = nullptr;
         }
-
         void cancel() noexcept {
             // Cancel means: do NOT publish, and if constructed -> destroy.
             if (p_ && ptr_ && constructed_) {

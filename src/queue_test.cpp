@@ -135,6 +135,9 @@ static void sigabrt_handler_(int) noexcept {
     if (std::strcmp(mode, "pop_empty") == 0) {
         Q q;
         q.pop(); // Must assert: pop on empty.
+    } else if (std::strcmp(mode, "front_empty") == 0) {
+        Q q;
+        (void)q.front(); // Must assert: front on empty.
     } else if (std::strcmp(mode, "publish_full") == 0) {
         Q q;
         for (std::uint32_t i = 0; i < 16u; ++i) {
@@ -144,15 +147,24 @@ static void sigabrt_handler_(int) noexcept {
             }
         }
         q.publish(); // Must assert: publish while full.
-    } else if (std::strcmp(mode, "guard_commit_without_construct") == 0) {
+    } else if (std::strcmp(mode, "claim_full") == 0) {
         Q q;
-        auto g = q.scoped_write();
-        g.commit(); // Must assert: commit without constructed value.
+        for (std::uint32_t i = 0; i < 16u; ++i) {
+            const bool ok = q.try_push(i);
+            if (!ok) {
+                std::_Exit(0xEE);
+            }
+        }
+        (void)q.claim(); // Must assert: claim while full.
     } else if (std::strcmp(mode, "double_emplace") == 0) {
         Q q;
         auto g = q.scoped_write();
         (void)g.emplace(1u);
         (void)g.emplace(2u); // Must assert: double construction.
+    } else if (std::strcmp(mode, "commit_unconstructed") == 0) {
+        Q q;
+        auto g = q.scoped_write();
+        g.commit(); // Must assert: publishing an unconstructed slot.
     } else {
         std::_Exit(0xEF);
     }
@@ -814,6 +826,19 @@ static void run_threaded_snapshot_suite(const char* name) {
                 fail.store(1, std::memory_order_relaxed);
                 abort.store(true, std::memory_order_relaxed);
                 return;
+            }
+
+            // Container iterators must always terminate even under concurrent producer activity.
+            {
+                reg steps = 0u;
+                for (const auto& v : q) {
+                    (void)v;
+                    if (++steps > q.capacity()) {
+                        fail.store(8, std::memory_order_relaxed);
+                        abort.store(true, std::memory_order_relaxed);
+                        return;
+                    }
+                }
             }
 
             auto snap = q.make_snapshot();
@@ -2367,13 +2392,15 @@ private slots:
             }
 
             const int code = p.exitCode();
-            QVERIFY2(code != 0, "Expected non-zero exit code from death child.");
+            QVERIFY2(code == spsc_queue_death_detail::kDeathExitCode, "Expected assertion death (SIGABRT -> kDeathExitCode)." );
         };
 
         expect_death("pop_empty");
+        expect_death("front_empty");
         expect_death("publish_full");
-        expect_death("guard_commit_without_construct");
+        expect_death("claim_full");
         expect_death("double_emplace");
+        expect_death("commit_unconstructed");
 #else
         QSKIP("Death tests are debug-only (assertions disabled)." );
 #endif

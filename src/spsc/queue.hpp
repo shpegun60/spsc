@@ -99,14 +99,14 @@ public:
     using alloc_size_type = typename alloc_traits::size_type;
 
     // Iterator types
-    using iterator = ::spsc::detail::ring_iterator<value_type, size_type, false>;
+    using iterator = ::spsc::detail::ring_iterator<std::add_const_t<value_type>, size_type, false>;
     using const_iterator =
-        ::spsc::detail::ring_iterator<value_type, size_type, true>;
+        ::spsc::detail::ring_iterator<std::add_const_t<value_type>, size_type, true>;
     using reverse_iterator = std::reverse_iterator<iterator>;
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
     // Snapshot types
-    using snapshot_traits = ::spsc::snapshot_traits<value_type, size_type>;
+    using snapshot_traits = ::spsc::snapshot_traits<std::add_const_t<value_type>, size_type>;
     using snapshot = typename snapshot_traits::snapshot;
     using const_snapshot = typename snapshot_traits::const_snapshot;
     using snapshot_iterator = typename snapshot_traits::iterator;
@@ -340,51 +340,42 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return iterator(nullptr, 0u, 0u);
         }
-
-        const size_type tail = static_cast<size_type>(Base::tail());
-        const size_type used = safe_used_from_tail_(tail);
-        (void)used; // begin() only needs a stable tail; end() uses the same logic.
-
-        return iterator(storage_, Base::mask(), tail);
+        return iterator(data(), Base::mask(), Base::tail());
     }
-
     iterator end() noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return iterator(nullptr, 0u, 0u);
         }
 
-        const size_type tail = static_cast<size_type>(Base::tail());
-        const size_type used = safe_used_from_tail_(tail);
-        const size_type head = static_cast<size_type>(tail + used);
+        // Build end() from a validated used snapshot to avoid impossible
+        // head<tail ranges under atomic backends.
+        const size_type t = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h = static_cast<size_type>(t + used);
 
-        return iterator(storage_, Base::mask(), head);
+        return iterator(data(), Base::mask(), h);
     }
 
     const_iterator begin() const noexcept { return cbegin(); }
     const_iterator end() const noexcept { return cend(); }
-
     const_iterator cbegin() const noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return const_iterator(nullptr, 0u, 0u);
         }
-
-        const size_type tail = static_cast<size_type>(Base::tail());
-        const size_type used = safe_used_from_tail_(tail);
-        (void)used;
-
-        return const_iterator(storage_, Base::mask(), tail);
+        return const_iterator(data(), Base::mask(), Base::tail());
     }
-
     const_iterator cend() const noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return const_iterator(nullptr, 0u, 0u);
         }
 
-        const size_type tail = static_cast<size_type>(Base::tail());
-        const size_type used = safe_used_from_tail_(tail);
-        const size_type head = static_cast<size_type>(tail + used);
+        // Build cend() from a validated used snapshot to avoid impossible
+        // head<tail ranges under atomic backends.
+        const size_type t = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h = static_cast<size_type>(t + used);
 
-        return const_iterator(storage_, Base::mask(), head);
+        return const_iterator(data(), Base::mask(), h);
     }
 
     reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
@@ -405,38 +396,43 @@ public:
             return snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
 
-        const size_type tail = static_cast<size_type>(Base::tail());
-        const size_type used = safe_used_from_tail_(tail);
-        const size_type head = static_cast<size_type>(tail + used);
-        const size_type mask = static_cast<size_type>(Base::mask());
+        // Use a validated used snapshot to avoid impossible head<tail ranges
+        // under atomic backends.
+        const size_type t = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h = static_cast<size_type>(t + used);
 
-        return snapshot(it(data(), mask, tail), it(data(), mask, head));
+        const size_type m = static_cast<size_type>(Base::mask());
+        return snapshot(it(data(), m, t), it(data(), m, h));
     }
-
     [[nodiscard]] const_snapshot make_snapshot() const noexcept {
         using it = const_snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
             return const_snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
 
-        const size_type tail = static_cast<size_type>(Base::tail());
-        const size_type used = safe_used_from_tail_(tail);
-        const size_type head = static_cast<size_type>(tail + used);
-        const size_type mask = static_cast<size_type>(Base::mask());
+        // Use a validated used snapshot to avoid impossible head<tail ranges
+        // under atomic backends.
+        const size_type t = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h = static_cast<size_type>(t + used);
 
-        return const_snapshot(it(data(), mask, tail), it(data(), mask, head));
+        const size_type m = static_cast<size_type>(Base::mask());
+        return const_snapshot(it(data(), m, t), it(data(), m, h));
     }
-
-    template <class Snap> void consume(const Snap &s) noexcept {
+    template <class Snap>
+    void consume(const Snap &s) noexcept {
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(s.begin().data() == data());
         SPSC_ASSERT(s.begin().mask() == Base::mask());
-        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == Base::tail());
-        const size_type snap_used = static_cast<size_type>(s.size());
-        if (snap_used == 0u) {
-            return;
-        }
-        pop(snap_used);
+
+        const size_type cur_tail = static_cast<size_type>(Base::tail());
+        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
+
+        const size_type new_tail = static_cast<size_type>(s.head_index());
+        SPSC_ASSERT(new_tail >= cur_tail); // Guards against impossible snapshots
+
+        pop(static_cast<size_type>(new_tail - cur_tail));
     }
 
     template <class Snap> [[nodiscard]] bool try_consume(const Snap &s) noexcept {
@@ -450,9 +446,8 @@ public:
         const size_type snap_head = static_cast<size_type>(s.head_index());
 
         const size_type cur_tail = Base::tail();
-        const size_type cur_head = Base::head();
 
-        // Snapshot must be from the same buffer (cheap identity check)
+        // Snapshot must be from the same storage (cheap identity check)
         const auto *my_data = data();
         const size_type my_mask = Base::mask();
         if (RB_UNLIKELY(s.begin().data() != my_data)) {
@@ -473,15 +468,21 @@ public:
             return false;
         }
 
-        // Ensure snap_head is not "ahead" of current head in modulo sense.
-        const size_type head_delta = static_cast<size_type>(cur_head - snap_head);
-        if (RB_UNLIKELY(head_delta > cap)) {
-            return false;
+        // Validate that the snapshot range is still available to read.
+        // can_read() is allowed to be conservative on transient/invalid observations;
+        // do one extra refresh attempt via a direct head reload to reduce spurious failures.
+        if (RB_UNLIKELY(!Base::can_read(snap_used))) {
+            const size_type h2  = static_cast<size_type>(Base::head());
+            const size_type av2 = static_cast<size_type>(h2 - cur_tail);
+            if (RB_UNLIKELY(av2 < snap_used) || RB_UNLIKELY(av2 > cap)) {
+                return false;
+            }
         }
 
-        consume(s);
+        pop(snap_used);
         return true;
     }
+
 
     void consume_all() noexcept {
         if (RB_UNLIKELY(!is_valid())) {
@@ -543,7 +544,7 @@ public:
         const size_type cap = Base::capacity();
         const size_type tail = static_cast<size_type>(Base::tail());
 
-        size_type total = safe_used_from_tail_(tail);
+        size_type total = static_cast<size_type>(Base::size());
         if (max_count < total) {
             total = max_count;
         }
@@ -599,7 +600,8 @@ public:
     RB_FORCEINLINE reference emplace(Args &&...args) {
         SPSC_ASSERT(!full());
         pointer slot = &storage_[Base::write_index()];
-        new (slot) value_type(std::forward<Args>(args)...);
+        slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
+        slot = std::launder(slot);
         Base::increment_head();
         return *slot;
     }
@@ -611,7 +613,8 @@ public:
             return nullptr;
         }
         pointer slot = &storage_[Base::write_index()];
-        new (slot) value_type(std::forward<Args>(args)...);
+        slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
+        slot = std::launder(slot);
         Base::increment_head();
         return slot;
     }
@@ -916,7 +919,7 @@ public:
             if constexpr (!std::is_trivially_destructible_v<value_type>) {
                 // Destroy all live objects in old ring (they are moved-from but valid).
                 for (size_type i = 0; i < old_size; ++i) {
-                    detail::destroy_at(&storage_[(old_tail + i) & old_mask]);
+                    detail::destroy_at(slot_ptr((old_tail + i) & old_mask));
                 }
             }
             alloc_traits::deallocate(alloc, storage_, old_cap);
@@ -967,13 +970,13 @@ public:
             // Constructed but not published: destroy to avoid leaking a live object
             // in an unclaimed slot.
             if (constructed_) {
-                detail::destroy_at(ptr_);
+                detail::destroy_at(std::launder(ptr_));
             }
         }
 
         // Raw storage pointer (UNINITIALIZED until you construct T in-place).
         [[nodiscard]] pointer get() const noexcept { return ptr_; }
-        explicit operator bool() const noexcept { return ptr_ != nullptr; }
+        explicit operator bool() const noexcept { return (q_ != nullptr) && (ptr_ != nullptr); }
 
         // Safe path: construct and arm publishing.
         template <class... Args>
@@ -981,7 +984,8 @@ public:
             std::is_nothrow_constructible_v<value_type, Args &&...>) {
             SPSC_ASSERT(ptr_ != nullptr);
             SPSC_ASSERT(!constructed_);
-            new (ptr_) value_type(std::forward<Args>(args)...);
+            ptr_ = ::new (static_cast<void *>(ptr_)) value_type(std::forward<Args>(args)...);
+            ptr_ = std::launder(ptr_);
             constructed_ = true;
             publish_on_destroy_ = true;
             return ptr_;
@@ -992,6 +996,7 @@ public:
         void mark_constructed() noexcept {
             SPSC_ASSERT(ptr_ != nullptr);
             SPSC_ASSERT(!constructed_);
+            ptr_ = std::launder(ptr_);
             constructed_ = true;
         }
 
@@ -1001,25 +1006,47 @@ public:
             publish_on_destroy_ = true;
         }
 
-        void commit() noexcept {
-            if (q_ && ptr_) {
-                SPSC_ASSERT(constructed_); // Prevent publishing uninitialized storage.
-                q_->publish();
-            }
-            q_ = nullptr;
-            ptr_ = nullptr;
-            constructed_ = false;
-            publish_on_destroy_ = false;
+        // // Compatibility helper: mirrors typed_pool::write_guard::publish_on_destroy().
+        // // Manual path: user constructs via placement-new on get(), then calls this
+        // // to publish on scope exit.
+        // void publish_on_destroy() noexcept {
+        //     SPSC_ASSERT(q_ && ptr_);
+        //     if (!constructed_) {
+        //         ptr_ = std::launder(ptr_);
+        //         constructed_ = true;
+        //     }
+        //     publish_on_destroy_ = true;
+        // }
+        void publish_on_destroy() noexcept {
+            SPSC_ASSERT(q_ && ptr_);
+            SPSC_ASSERT(constructed_ && "publish_on_destroy() requires a constructed object; call mark_constructed() after placement-new");
+            publish_on_destroy_ = true;
         }
 
-        void cancel() noexcept {
-            if (ptr_ && constructed_) {
-                detail::destroy_at(ptr_);
+
+        void commit() noexcept {
+            if (q_ && ptr_) {
+                SPSC_ASSERT(constructed_ && "write_guard::commit() publishing an unconstructed slot");
+                if (constructed_) {
+                    q_->publish();
+                }
             }
+
+            // After publish, consumer owns destruction.
+            publish_on_destroy_ = false;
+            constructed_ = false;
             q_ = nullptr;
             ptr_ = nullptr;
-            constructed_ = false;
+        }
+        void cancel() noexcept {
+            if (q_ && ptr_ && constructed_) {
+                detail::destroy_at(std::launder(ptr_));
+            }
+
             publish_on_destroy_ = false;
+            constructed_ = false;
+            q_ = nullptr;
+            ptr_ = nullptr;
         }
 
     private:
@@ -1062,15 +1089,18 @@ public:
         [[nodiscard]] reference operator*() const noexcept { return ref(); }
         [[nodiscard]] pointer operator->() const noexcept { return ptr_; }
         explicit operator bool() const noexcept { return active_; }
-
         void commit() noexcept {
             if (active_ && q_) {
                 q_->pop();
-                active_ = false;
             }
+            cancel();
         }
 
-        void cancel() noexcept { active_ = false; }
+        void cancel() noexcept {
+            active_ = false;
+            q_ = nullptr;
+            ptr_ = nullptr;
+        }
 
     private:
         queue *q_{nullptr};
@@ -1084,31 +1114,6 @@ public:
     [[nodiscard]] read_guard scoped_read() noexcept { return read_guard(*this); }
 
 private:
-    [[nodiscard]] RB_FORCEINLINE size_type safe_used_from_tail_(const size_type tail) const noexcept {
-        const size_type cap = Base::capacity();
-        if constexpr (kDynamic) {
-            if (RB_UNLIKELY(cap == 0u)) {
-                return 0u;
-            }
-        }
-
-        size_type head = static_cast<size_type>(Base::head());
-        size_type used = static_cast<size_type>(head - tail);
-
-        // Under atomic backends, head and tail are loaded separately and can form
-        // a transiently impossible snapshot (used > cap). Retry once and if it
-        // is still impossible, fall back to 0 to avoid over-reading.
-        if (RB_UNLIKELY(used > cap)) {
-            head = static_cast<size_type>(Base::head());
-            used = static_cast<size_type>(head - tail);
-            if (RB_UNLIKELY(used > cap)) {
-                used = 0u;
-            }
-        }
-
-        return used;
-    }
-
     void allocate_static_() noexcept(kNoexceptAllocate) {
         if constexpr (!kDynamic) {
             allocator_type alloc{};

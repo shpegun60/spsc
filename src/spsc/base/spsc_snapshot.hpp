@@ -17,6 +17,7 @@
 #include <cstddef>     // std::ptrdiff_t
 #include <type_traits> // std::conditional_t, std::enable_if_t, std::is_unsigned_v
 #include <memory>      // std::addressof
+#include <new>         // std::launder
 
 namespace spsc {
 
@@ -52,7 +53,7 @@ public:
     {}
 
     reference operator*() const noexcept {
-        return storage_[index_ & mask_];
+        return *std::launder(&storage_[index_ & mask_]);
     }
 
     pointer operator->() const noexcept {
