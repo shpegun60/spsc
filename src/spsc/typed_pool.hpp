@@ -1026,8 +1026,13 @@ public:
         }
 
         [[nodiscard]] pointer get() const noexcept { return ptr_; }
+        [[nodiscard]] object_reference ref() const noexcept {
+            SPSC_ASSERT(ptr_ != nullptr);
+            return *ptr_;
+        }
+        [[nodiscard]] object_reference operator*() const noexcept { return ref(); }
+        [[nodiscard]] pointer operator->() const noexcept { return ptr_; }
         explicit operator bool() const noexcept { return active_; }
-
         void commit() noexcept {
             if (active_ && p_) {
                 p_->pop();

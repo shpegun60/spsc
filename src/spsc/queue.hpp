@@ -387,6 +387,13 @@ public:
         return const_reverse_iterator(begin());
     }
 
+    const_reverse_iterator crbegin() const noexcept {
+        return const_reverse_iterator(cend());
+    }
+    const_reverse_iterator crend() const noexcept {
+        return const_reverse_iterator(cbegin());
+    }
+
     // ------------------------------------------------------------------------------------------
     // Snapshots
     // ------------------------------------------------------------------------------------------
@@ -982,7 +989,7 @@ public:
         template <class... Args>
         [[nodiscard]] pointer emplace(Args &&...args) noexcept(
             std::is_nothrow_constructible_v<value_type, Args &&...>) {
-            SPSC_ASSERT(ptr_ != nullptr);
+            SPSC_ASSERT(q_ && ptr_);
             SPSC_ASSERT(!constructed_);
             ptr_ = ::new (static_cast<void *>(ptr_)) value_type(std::forward<Args>(args)...);
             ptr_ = std::launder(ptr_);
@@ -994,14 +1001,14 @@ public:
         // Manual path: call this AFTER placement-new to arm publishing on scope
         // exit.
         void mark_constructed() noexcept {
-            SPSC_ASSERT(ptr_ != nullptr);
+            SPSC_ASSERT(q_ && ptr_);
             SPSC_ASSERT(!constructed_);
             ptr_ = std::launder(ptr_);
             constructed_ = true;
         }
 
         void arm_publish() noexcept {
-            SPSC_ASSERT(ptr_ != nullptr);
+            SPSC_ASSERT(q_ && ptr_);
             SPSC_ASSERT(constructed_); // Must have a live object before publishing.
             publish_on_destroy_ = true;
         }
@@ -1148,7 +1155,8 @@ private:
    */
     [[nodiscard]] RB_FORCEINLINE pointer
     slot_ptr(size_type index) const noexcept {
-        // &storage_[index] gives T*, std::launder creates a strict memory barrier
+        // &storage_[index] gives T*. std::launder is needed when storage is reused via placement-new;
+        // it does not provide synchronization or memory ordering.
         return std::launder(&storage_[index]);
     }
 
