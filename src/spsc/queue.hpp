@@ -1009,27 +1009,9 @@ public:
 
         void arm_publish() noexcept {
             SPSC_ASSERT(q_ && ptr_);
-            SPSC_ASSERT(constructed_); // Must have a live object before publishing.
+            SPSC_ASSERT(constructed_ && "arm_publish() requires a constructed object; call mark_constructed() after placement-new");
             publish_on_destroy_ = true;
         }
-
-        // // Compatibility helper: mirrors typed_pool::write_guard::publish_on_destroy().
-        // // Manual path: user constructs via placement-new on get(), then calls this
-        // // to publish on scope exit.
-        // void publish_on_destroy() noexcept {
-        //     SPSC_ASSERT(q_ && ptr_);
-        //     if (!constructed_) {
-        //         ptr_ = std::launder(ptr_);
-        //         constructed_ = true;
-        //     }
-        //     publish_on_destroy_ = true;
-        // }
-        void publish_on_destroy() noexcept {
-            SPSC_ASSERT(q_ && ptr_);
-            SPSC_ASSERT(constructed_ && "publish_on_destroy() requires a constructed object; call mark_constructed() after placement-new");
-            publish_on_destroy_ = true;
-        }
-
 
         void commit() noexcept {
             if (q_ && ptr_) {

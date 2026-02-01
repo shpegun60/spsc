@@ -922,6 +922,7 @@ public:
                 std::is_constructible_v<T, Args &&...>,
                 "[typed_pool::write_guard]: T must be constructible from Args...");
             SPSC_ASSERT(p_ && ptr_);
+            SPSC_ASSERT(!constructed_);
 
             // Placement-new returns a fresh pointer to the newly created object.
             // Reusing an old T* may require std::launder per the standard rules.
@@ -945,22 +946,9 @@ public:
         // Arm publishing on scope exit.
         void arm_publish() noexcept {
             SPSC_ASSERT(p_ && ptr_);
-            SPSC_ASSERT(constructed_); // Must have a live object before publishing.
+            SPSC_ASSERT(constructed_ && "arm_publish() requires a constructed object; call mark_constructed() after placement-new");
             publish_on_destroy_ = true;
         }
-
-        // // Manual path: user constructs via placement-new on get(), then arms
-        // // publish.
-        // // Manual path: user constructs via placement-new on get(), then calls this
-        // // to publish on scope exit.
-        // void publish_on_destroy() noexcept {
-        //     SPSC_ASSERT(p_ && ptr_);
-        //     if (!constructed_) {
-        //         ptr_ = std::launder(ptr_);
-        //         constructed_ = true;
-        //     }
-        //     publish_on_destroy_ = true;
-        // }
 
         void publish_on_destroy() noexcept {
             SPSC_ASSERT(p_ && ptr_);
