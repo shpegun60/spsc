@@ -13,6 +13,7 @@ HEADERS +=                                  \
     $$PWD/base/spsc_policy.hpp              \
     $$PWD/base/spsc_snapshot.hpp            \
     $$PWD/base/spsc_tools.hpp \
+    $$PWD/base/typed_pool_new.hpp \
     $$PWD/chunk.hpp \
     $$PWD/chunk_fifo.hpp \
     $$PWD/fifo.hpp \

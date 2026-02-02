@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 18.0.2, 2026-02-01T20:45:52. -->
+<!-- Written by QtCreator 18.0.2, 2026-02-02T22:49:05. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -72,6 +72,7 @@
    </valuemap>
    <value type="bool" key="AutoTest.ApplyFilter">false</value>
    <valuemap type="QVariantMap" key="AutoTest.CheckStates">
+    <value type="Qt::CheckState" key="1@:Qt Test">PartiallyChecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/latest_test.cpp:cleanupTestCase">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/latest_test.cpp:initTestCase">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_128">Unchecked</value>

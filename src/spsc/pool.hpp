@@ -345,10 +345,15 @@ public:
         if (RB_UNLIKELY(!is_valid())) { return iterator(nullptr, 0u, 0u); }
         return iterator(data(), Base::mask(), Base::tail());
     }
-
     iterator end() noexcept {
         if (RB_UNLIKELY(!is_valid())) { return iterator(nullptr, 0u, 0u); }
-        return iterator(data(), Base::mask(), Base::head());
+
+        // Build end() from a validated used snapshot to avoid impossible head<tail ranges under atomic backends.
+        const size_type t    = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h    = static_cast<size_type>(t + used);
+
+        return iterator(data(), Base::mask(), h);
     }
 
     const_iterator begin()  const noexcept { return cbegin(); }
@@ -358,10 +363,15 @@ public:
         if (RB_UNLIKELY(!is_valid())) { return const_iterator(nullptr, 0u, 0u); }
         return const_iterator(data(), Base::mask(), Base::tail());
     }
-
     const_iterator cend() const noexcept {
         if (RB_UNLIKELY(!is_valid())) { return const_iterator(nullptr, 0u, 0u); }
-        return const_iterator(data(), Base::mask(), Base::head());
+
+        // Build cend() from a validated used snapshot to avoid impossible head<tail ranges under atomic backends.
+        const size_type t    = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h    = static_cast<size_type>(t + used);
+
+        return const_iterator(data(), Base::mask(), h);
     }
 
     reverse_iterator rbegin()              noexcept { return reverse_iterator(end()); }
@@ -379,9 +389,13 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
-        const auto t = Base::tail();
-        const auto h = Base::head();
-        const auto m = Base::mask();
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
+        const size_type t    = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h    = static_cast<size_type>(t + used);
+
+        const size_type m = Base::mask();
         return snapshot(it(data(), m, t), it(data(), m, h));
     }
 
@@ -390,9 +404,13 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return const_snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
-        const auto t = Base::tail();
-        const auto h = Base::head();
-        const auto m = Base::mask();
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
+        const size_type t    = static_cast<size_type>(Base::tail());
+        const size_type used = static_cast<size_type>(Base::size());
+        const size_type h    = static_cast<size_type>(t + used);
+
+        const size_type m = Base::mask();
         return const_snapshot(it(data(), m, t), it(data(), m, h));
     }
 
@@ -401,8 +419,14 @@ public:
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(s.begin().data() == data());
         SPSC_ASSERT(s.begin().mask() == Base::mask());
-        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == Base::tail());
-        Base::set_tail(static_cast<size_type>(s.head_index()));
+
+        const size_type cur_tail = static_cast<size_type>(Base::tail());
+        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
+
+        const size_type new_tail = static_cast<size_type>(s.head_index());
+        SPSC_ASSERT(new_tail >= cur_tail); // Guards against impossible snapshots
+
+        pop(static_cast<size_type>(new_tail - cur_tail));
     }
 
     template<class Snap>
@@ -414,8 +438,7 @@ public:
         const size_type snap_tail = static_cast<size_type>(s.tail_index());
         const size_type snap_head = static_cast<size_type>(s.head_index());
 
-        const size_type cur_tail  = Base::tail();
-        const size_type cur_head  = Base::head();
+        const size_type cur_tail = Base::tail();
 
         // Snapshot must be from the same buffer (cheap identity check)
         const auto* my_data     = data();
@@ -430,72 +453,72 @@ public:
         const size_type snap_used = static_cast<size_type>(snap_head - snap_tail);
         if (RB_UNLIKELY(snap_used > cap)) { return false; }
 
-        // Ensure snap_head is not "ahead" of current head in modulo sense.
-        const size_type head_delta = static_cast<size_type>(cur_head - snap_head);
-        if (RB_UNLIKELY(head_delta > cap)) { return false; }
+        // Validate that the snapshot range is still available to read.
+        // can_read() is allowed to be conservative on transient/invalid observations;
+        // do one extra refresh attempt via a direct head reload to reduce spurious failures.
+        if (RB_UNLIKELY(!Base::can_read(snap_used))) {
+            const size_type h2  = static_cast<size_type>(Base::head());
+            const size_type av2 = static_cast<size_type>(h2 - cur_tail);
+            if (RB_UNLIKELY(av2 < snap_used) || RB_UNLIKELY(av2 > cap)) { return false; }
+        }
 
-        Base::set_tail(snap_head);
+        pop(snap_used);
         return true;
     }
 
-    void consume_all() noexcept { Base::sync_tail_to_head(); }
+    void consume_all() noexcept {
+        if (RB_UNLIKELY(!is_valid())) { return; }
+        Base::sync_tail_to_head();
+    }
 
     // ------------------------------------------------------------------------------------------
     // Bulk / Regions
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] regions claim_write(const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept {
+    [[nodiscard]] regions claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
         if (RB_UNLIKELY(!is_valid())) { return {}; }
 
-        const size_type cap  = Base::capacity();
-        const size_type head = Base::head();
-        const size_type tail = Base::tail();
+        const size_type cap = Base::capacity();
 
-        const size_type used = static_cast<size_type>(head - tail);
-        if (RB_UNLIKELY(used > cap)) { return {}; } // corruption guard (prevents underflow)
-
-        size_type total = static_cast<size_type>(cap - used);
-
+        size_type total = static_cast<size_type>(Base::free());
         if (max_count < total) { total = max_count; }
         if (RB_UNLIKELY(total == 0u)) { return {}; }
 
-        const size_type mask    = Base::mask();
-        const size_type wi      = static_cast<size_type>(head & mask);
+        const size_type wi      = static_cast<size_type>(Base::write_index()); // masked
         const size_type w2e     = static_cast<size_type>(cap - wi);
         const size_type first_n = (w2e < total) ? w2e : total;
 
         regions r{};
-        r.first.ptr  = data() + wi;
-        r.first.count  = first_n;
-        r.second.ptr = data();
+        r.first.ptr   = data() + wi;
+        r.first.count = first_n;
+
         r.second.count = static_cast<size_type>(total - first_n);
-        r.total        = total;
+        r.second.ptr   = (r.second.count != 0u) ? data() : nullptr;
+
+        r.total = total;
         return r;
     }
 
-    [[nodiscard]] regions claim_read(const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept {
+    [[nodiscard]] regions claim_read(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
         if (RB_UNLIKELY(!is_valid())) { return {}; }
 
-        const size_type cap  = Base::capacity();
-        const size_type head = Base::head();
-        const size_type tail = Base::tail();
+        const size_type cap = Base::capacity();
 
-        size_type total = static_cast<size_type>(head - tail);
-        if (RB_UNLIKELY(total > cap)) { return {}; } // corruption guard
-
+        size_type total = static_cast<size_type>(Base::size());
         if (max_count < total) { total = max_count; }
         if (RB_UNLIKELY(total == 0u)) { return {}; }
 
-        const size_type mask    = Base::mask();
-        const size_type ri      = static_cast<size_type>(tail & mask);
+        const size_type ri      = static_cast<size_type>(Base::read_index()); // masked
         const size_type r2e     = static_cast<size_type>(cap - ri);
         const size_type first_n = (r2e < total) ? r2e : total;
 
         regions r{};
-        r.first.ptr  = data() + ri;
-        r.first.count  = first_n;
-        r.second.ptr = data();
+        r.first.ptr   = data() + ri;
+        r.first.count = first_n;
+
         r.second.count = static_cast<size_type>(total - first_n);
-        r.total        = total;
+        r.second.ptr   = (r.second.count != 0u) ? data() : nullptr;
+
+        r.total = total;
         return r;
     }
 
