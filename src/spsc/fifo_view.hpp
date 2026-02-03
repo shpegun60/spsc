@@ -63,8 +63,10 @@ public:
     using difference_type          = std::ptrdiff_t;
 
     // Iterator types
-    using iterator                 = ::spsc::detail::ring_iterator<value_type, size_type, false>;
-    using const_iterator           = ::spsc::detail::ring_iterator<value_type, size_type, true>;
+    // Battle-mode: iterators are read-only (same as spsc::queue).
+    using iterator = ::spsc::detail::ring_iterator<std::add_const_t<value_type>, size_type, false>;
+    using const_iterator =
+        ::spsc::detail::ring_iterator<std::add_const_t<value_type>, size_type, true>;
     using reverse_iterator         = std::reverse_iterator<iterator>;
     using const_reverse_iterator   = std::reverse_iterator<const_iterator>;
 
@@ -87,7 +89,8 @@ public:
 
 
     // Snapshot types
-    using snapshot_traits         		= ::spsc::snapshot_traits<value_type, size_type>;
+    // Battle-mode: snapshots are read-only (same as spsc::queue).
+    using snapshot_traits         		= ::spsc::snapshot_traits<std::add_const_t<value_type>, size_type>;
     using snapshot                		= typename snapshot_traits::snapshot;
     using const_snapshot        		= typename snapshot_traits::const_snapshot;
     using snapshot_iterator    			= typename snapshot_traits::iterator;

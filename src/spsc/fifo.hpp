@@ -86,14 +86,17 @@ public:
     using alloc_pointer = typename alloc_traits::pointer;
 
     // Iterator types
-    using iterator = ::spsc::detail::ring_iterator<value_type, size_type, false>;
+    // Read-only iterators/snapshots (match queue.hpp) to reduce lifetime pitfalls:
+    // after pop/consume the slot may be reused by producer, so holding writable refs is a trap.
+    using iter_value_type = std::add_const_t<value_type>;
+    using iterator = ::spsc::detail::ring_iterator<iter_value_type, size_type, false>;
     using const_iterator =
-        ::spsc::detail::ring_iterator<value_type, size_type, true>;
+        ::spsc::detail::ring_iterator<iter_value_type, size_type, true>;
     using reverse_iterator = std::reverse_iterator<iterator>;
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
     // Snapshot types
-    using snapshot_traits = ::spsc::snapshot_traits<value_type, size_type>;
+    using snapshot_traits = ::spsc::snapshot_traits<iter_value_type, size_type>;
     using snapshot = typename snapshot_traits::snapshot;
     using const_snapshot = typename snapshot_traits::const_snapshot;
     using snapshot_iterator = typename snapshot_traits::iterator;
@@ -757,6 +760,22 @@ public:
         Base::advance_tail(n);
         return true;
     }
+
+    // Prevent accidental overload selection when passing a numeric lvalue:
+    //   std::uint32_t n = 3;
+    //   f.pop(n);   // would bind to pop(size_type) and pop 3 elements.
+    template <class U,
+             typename = std::enable_if_t<
+                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
+                 std::is_convertible_v<U, size_type>>>
+    void pop(U&) noexcept = delete;
+
+    // Same trap for try_pop(n).
+    template <class U,
+             typename = std::enable_if_t<
+                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
+                 std::is_convertible_v<U, size_type>>>
+    [[nodiscard]] bool try_pop(U&) noexcept = delete;
 
     [[nodiscard]] RB_FORCEINLINE const_reference
     operator[](const size_type i) const noexcept {
