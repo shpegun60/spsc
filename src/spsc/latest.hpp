@@ -394,10 +394,18 @@ public:
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
         SPSC_ASSERT(is_valid());
 
+        const size_type t = static_cast<size_type>(Base::tail());
+
         // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        SPSC_ASSERT(used != 0u);
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            SPSC_ASSERT(used2 != 0u);
+            SPSC_ASSERT(used2 <= depth());
+            used = used2;
+        }
 
         const size_type h = static_cast<size_type>(t + used);
         cons_head_snapshot_ = h;
@@ -410,9 +418,18 @@ public:
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
         SPSC_ASSERT(is_valid());
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        SPSC_ASSERT(used != 0u);
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            SPSC_ASSERT(used2 != 0u);
+            SPSC_ASSERT(used2 <= depth());
+            used = used2;
+        }
 
         const size_type h = static_cast<size_type>(t + used);
         cons_head_snapshot_ = h;
@@ -427,10 +444,16 @@ public:
             return nullptr;
         }
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        size_type used = static_cast<size_type>(Base::size());
         if (RB_UNLIKELY(used == 0u)) {
-            return nullptr;
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return nullptr;
+            }
+            used = used2;
         }
 
         const size_type h = static_cast<size_type>(t + used);
@@ -446,10 +469,16 @@ public:
             return nullptr;
         }
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        size_type used = static_cast<size_type>(Base::size());
         if (RB_UNLIKELY(used == 0u)) {
-            return nullptr;
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return nullptr;
+            }
+            used = used2;
         }
 
         const size_type h = static_cast<size_type>(t + used);
@@ -469,8 +498,14 @@ public:
         if (cons_has_snapshot_) {
             h = cons_head_snapshot_;
         } else {
-            const size_type used = static_cast<size_type>(Base::size());
-            SPSC_ASSERT(used != 0u);
+            size_type used = static_cast<size_type>(Base::size());
+            if (RB_UNLIKELY(used == 0u)) {
+                const size_type h2    = static_cast<size_type>(Base::head());
+                const size_type used2 = static_cast<size_type>(h2 - t);
+                SPSC_ASSERT(used2 != 0u);
+                SPSC_ASSERT(used2 <= depth());
+                used = used2;
+            }
             h = static_cast<size_type>(t + used);
         }
 
@@ -488,23 +523,33 @@ public:
             return false;
         }
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            return false;
-        }
+        const size_type t = static_cast<size_type>(Base::tail());
 
-        const size_type h = cons_has_snapshot_ ? cons_head_snapshot_ : static_cast<size_type>(t + used);
-        const size_type delta = static_cast<size_type>(h - t);
-        if (RB_UNLIKELY(delta == 0u)) {
+        if (cons_has_snapshot_) {
+            const size_type h = cons_head_snapshot_;
+            const size_type delta = static_cast<size_type>(h - t);
+            if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
+                cons_head_snapshot_ = 0u;
+                cons_has_snapshot_  = false;
+                return false;
+            }
+            Base::advance_tail(delta);
             cons_head_snapshot_ = 0u;
             cons_has_snapshot_  = false;
-            return false;
+            return true;
         }
 
-        SPSC_ASSERT(delta <= depth());
-        Base::advance_tail(delta);
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return false;
+            }
+            used = used2;
+        }
 
+        Base::advance_tail(used);
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
         return true;
@@ -916,11 +961,21 @@ public:
     // Consumer API
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
-        SPSC_ASSERT(!empty());
+        // "latest" is not FIFO: front() returns the newest published element.
+        SPSC_ASSERT(is_valid());
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        SPSC_ASSERT(used != 0u);
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            SPSC_ASSERT(used2 != 0u);
+            SPSC_ASSERT(used2 <= depth());
+            used = used2;
+        }
 
         const size_type h = static_cast<size_type>(t + used);
         cons_head_snapshot_ = h;
@@ -931,11 +986,21 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
-        SPSC_ASSERT(!empty());
+        // "latest" is not FIFO: front() returns the newest published element.
+        SPSC_ASSERT(is_valid());
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        SPSC_ASSERT(used != 0u);
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            SPSC_ASSERT(used2 != 0u);
+            SPSC_ASSERT(used2 <= depth());
+            used = used2;
+        }
 
         const size_type h = static_cast<size_type>(t + used);
         cons_head_snapshot_ = h;
@@ -950,10 +1015,16 @@ public:
             return nullptr;
         }
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        size_type used = static_cast<size_type>(Base::size());
         if (RB_UNLIKELY(used == 0u)) {
-            return nullptr;
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return nullptr;
+            }
+            used = used2;
         }
 
         const size_type h = static_cast<size_type>(t + used);
@@ -969,10 +1040,16 @@ public:
             return nullptr;
         }
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        size_type used = static_cast<size_type>(Base::size());
         if (RB_UNLIKELY(used == 0u)) {
-            return nullptr;
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return nullptr;
+            }
+            used = used2;
         }
 
         const size_type h = static_cast<size_type>(t + used);
@@ -984,7 +1061,7 @@ public:
     }
 
     RB_FORCEINLINE void pop() noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(is_valid());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -992,8 +1069,14 @@ public:
         if (cons_has_snapshot_) {
             h = cons_head_snapshot_;
         } else {
-            const size_type used = static_cast<size_type>(Base::size());
-            SPSC_ASSERT(used != 0u);
+            size_type used = static_cast<size_type>(Base::size());
+            if (RB_UNLIKELY(used == 0u)) {
+                const size_type h2    = static_cast<size_type>(Base::head());
+                const size_type used2 = static_cast<size_type>(h2 - t);
+                SPSC_ASSERT(used2 != 0u);
+                SPSC_ASSERT(used2 <= depth());
+                used = used2;
+            }
             h = static_cast<size_type>(t + used);
         }
 
@@ -1011,23 +1094,33 @@ public:
             return false;
         }
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            return false;
-        }
+        const size_type t = static_cast<size_type>(Base::tail());
 
-        const size_type h = cons_has_snapshot_ ? cons_head_snapshot_ : static_cast<size_type>(t + used);
-        const size_type delta = static_cast<size_type>(h - t);
-        if (RB_UNLIKELY(delta == 0u)) {
+        if (cons_has_snapshot_) {
+            const size_type h = cons_head_snapshot_;
+            const size_type delta = static_cast<size_type>(h - t);
+            if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
+                cons_head_snapshot_ = 0u;
+                cons_has_snapshot_  = false;
+                return false;
+            }
+            Base::advance_tail(delta);
             cons_head_snapshot_ = 0u;
             cons_has_snapshot_  = false;
-            return false;
+            return true;
         }
 
-        SPSC_ASSERT(delta <= depth());
-        Base::advance_tail(delta);
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return false;
+            }
+            used = used2;
+        }
 
+        Base::advance_tail(used);
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
         return true;
@@ -1344,11 +1437,21 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
-        SPSC_ASSERT(!empty());
+        // "latest" is not FIFO: front() returns the newest published element.
+        SPSC_ASSERT(is_valid());
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        SPSC_ASSERT(used != 0u);
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            SPSC_ASSERT(used2 != 0u);
+            SPSC_ASSERT(used2 <= depth());
+            used = used2;
+        }
 
         const size_type h = static_cast<size_type>(t + used);
         cons_head_snapshot_ = h;
@@ -1359,11 +1462,21 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
-        SPSC_ASSERT(!empty());
+        // "latest" is not FIFO: front() returns the newest published element.
+        SPSC_ASSERT(is_valid());
 
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        SPSC_ASSERT(used != 0u);
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            SPSC_ASSERT(used2 != 0u);
+            SPSC_ASSERT(used2 <= depth());
+            used = used2;
+        }
 
         const size_type h = static_cast<size_type>(t + used);
         cons_head_snapshot_ = h;
@@ -1374,10 +1487,16 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        size_type used = static_cast<size_type>(Base::size());
         if (RB_UNLIKELY(used == 0u)) {
-            return nullptr;
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return nullptr;
+            }
+            used = used2;
         }
 
         const size_type h = static_cast<size_type>(t + used);
@@ -1389,10 +1508,16 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        size_type used = static_cast<size_type>(Base::size());
         if (RB_UNLIKELY(used == 0u)) {
-            return nullptr;
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return nullptr;
+            }
+            used = used2;
         }
 
         const size_type h = static_cast<size_type>(t + used);
@@ -1404,7 +1529,7 @@ public:
     }
 
     RB_FORCEINLINE void pop() noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(is_valid());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1412,8 +1537,14 @@ public:
         if (cons_has_snapshot_) {
             h = cons_head_snapshot_;
         } else {
-            const size_type used = static_cast<size_type>(Base::size());
-            SPSC_ASSERT(used != 0u);
+            size_type used = static_cast<size_type>(Base::size());
+            if (RB_UNLIKELY(used == 0u)) {
+                const size_type h2    = static_cast<size_type>(Base::head());
+                const size_type used2 = static_cast<size_type>(h2 - t);
+                SPSC_ASSERT(used2 != 0u);
+                SPSC_ASSERT(used2 <= depth());
+                used = used2;
+            }
             h = static_cast<size_type>(t + used);
         }
 
@@ -1427,23 +1558,37 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        const size_type t    = static_cast<size_type>(Base::tail());
-        const size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
 
-        const size_type h = cons_has_snapshot_ ? cons_head_snapshot_ : static_cast<size_type>(t + used);
-        const size_type delta = static_cast<size_type>(h - t);
-        if (RB_UNLIKELY(delta == 0u)) {
+        const size_type t = static_cast<size_type>(Base::tail());
+
+        if (cons_has_snapshot_) {
+            const size_type h = cons_head_snapshot_;
+            const size_type delta = static_cast<size_type>(h - t);
+            if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
+                cons_head_snapshot_ = 0u;
+                cons_has_snapshot_  = false;
+                return false;
+            }
+            Base::advance_tail(delta);
             cons_head_snapshot_ = 0u;
             cons_has_snapshot_  = false;
-            return false;
+            return true;
         }
 
-        SPSC_ASSERT(delta <= depth());
-        Base::advance_tail(delta);
+        size_type used = static_cast<size_type>(Base::size());
+        if (RB_UNLIKELY(used == 0u)) {
+            const size_type h2    = static_cast<size_type>(Base::head());
+            const size_type used2 = static_cast<size_type>(h2 - t);
+            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
+                return false;
+            }
+            used = used2;
+        }
 
+        Base::advance_tail(used);
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
         return true;
