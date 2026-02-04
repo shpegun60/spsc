@@ -706,23 +706,6 @@ public:
         return true;
     }
 
-    // Prevent accidental overload selection when passing a numeric lvalue:
-    //   std::uint32_t n = 3;
-    //   p.pop(n);   // would bind to pop(size_type) and pop 3 buffers.
-    template<class U,
-             typename = std::enable_if_t<
-                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
-                 std::is_convertible_v<U, size_type>>>
-    void pop(U&) noexcept = delete;
-
-    // Same trap for try_pop(n).
-    template<class U,
-             typename = std::enable_if_t<
-                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
-                 std::is_convertible_v<U, size_type>>>
-    [[nodiscard]] bool try_pop(U&) noexcept = delete;
-
-
     [[nodiscard]] RB_FORCEINLINE pointer operator[](const size_type i) noexcept {
         SPSC_ASSERT(i < size());
         const size_type idx = static_cast<size_type>((Base::tail() + i) & Base::mask());
@@ -811,13 +794,24 @@ public:
         write_guard& operator=(write_guard&&) = delete;
 
         ~write_guard() noexcept {
-            // Publish ONLY if explicitly armed.
+            // Publish on scope-exit if armed.
+            // Note: get()/as<U>() arm automatically; peek() does not.
             if (p_ && ptr_ && publish_on_destroy_) {
                 p_->publish();
             }
         }
 
-        [[nodiscard]] pointer get() const noexcept { return ptr_; }
+        // Like fifo::write_guard: get() arms publish-on-destroy.
+        // Use peek() if you want a non-arming access.
+        [[nodiscard]] pointer get() const noexcept {
+            if (p_ && ptr_) {
+                publish_on_destroy_ = true;
+            }
+            return ptr_;
+        }
+
+        // Non-arming access (does not auto-publish on destruction).
+        [[nodiscard]] pointer peek() const noexcept { return ptr_; }
         explicit operator bool() const noexcept { return (p_ != nullptr) && (ptr_ != nullptr); }
 
         template<class U>
@@ -826,10 +820,12 @@ public:
             static_assert(std::is_trivially_copyable_v<U>, "[pool::guard]: U must be trivially copyable");
             if (RB_UNLIKELY(sizeof(U) > p_->buffer_size())) { return nullptr; }
             if (RB_UNLIKELY((reinterpret_cast<std::uintptr_t>(ptr_) % alignof(U)) != 0u)) { return nullptr; }
+            // If the typed view is usable, assume the caller intends to write.
+            publish_on_destroy_ = true;
             return static_cast<U*>(ptr_);
         }
 
-        // Manual path: user wrote bytes via get()/as<U>(), then arms publish on scope exit.
+        // Explicitly arm publishing on scope-exit (needed when using peek()).
         void publish_on_destroy() noexcept {
             SPSC_ASSERT(p_ && ptr_);
             publish_on_destroy_ = true;
@@ -853,7 +849,7 @@ public:
     private:
         pool* p_{nullptr};
         pointer ptr_{nullptr};
-        bool    publish_on_destroy_{false};
+        mutable bool publish_on_destroy_{false};
     };
 
     class read_guard {
