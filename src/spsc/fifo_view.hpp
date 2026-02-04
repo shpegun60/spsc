@@ -601,9 +601,11 @@ public:
         SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
 
         const size_type new_tail = static_cast<size_type>(s.head_index());
-        SPSC_ASSERT(new_tail >= cur_tail); // Guards against impossible snapshots
 
-        pop(static_cast<size_type>(new_tail - cur_tail));
+        const size_type n = static_cast<size_type>(new_tail - cur_tail); // wrap-safe
+        SPSC_ASSERT(n <= Base::capacity()); // Guards against impossible snapshots
+
+        pop(n);
     }
 
     // Try to consume s.size(), ensuring consumer hasn't moved since snapshot
