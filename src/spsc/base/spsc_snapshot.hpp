@@ -150,9 +150,13 @@ public:
 
     // Logical size (contract: end >= begin). Returns 0 if violated.
     [[nodiscard]] size_type size() const noexcept {
-        const size_type b = begin_.index();
-        const size_type e = end_.index();
-        return (e >= b) ? static_cast<size_type>(e - b) : size_type{0};
+        // Wrap-safe logical size; bounded by capacity derived from iterator mask.
+        // Fails closed (returns 0) if the snapshot is corrupted.
+        const size_type cap = static_cast<size_type>(begin_.mask() + 1u);
+        if (begin_.data() == nullptr || cap == 0u) { return size_type{0}; }
+
+        const size_type used = static_cast<size_type>(end_.index() - begin_.index()); // wrap-safe
+        return (used <= cap) ? used : size_type{0};
     }
 
     [[nodiscard]] size_type tail_index() const noexcept { return begin_.index(); }
@@ -204,9 +208,13 @@ public:
     const_iterator cend() const noexcept { return end_; }
 
     [[nodiscard]] size_type size() const noexcept {
-        const size_type b = begin_.index();
-        const size_type e = end_.index();
-        return (e >= b) ? static_cast<size_type>(e - b) : size_type{0};
+        // Wrap-safe logical size; bounded by capacity derived from iterator mask.
+        // Fails closed (returns 0) if the snapshot is corrupted.
+        const size_type cap = static_cast<size_type>(begin_.mask() + 1u);
+        if (begin_.data() == nullptr || cap == 0u) { return size_type{0}; }
+
+        const size_type used = static_cast<size_type>(end_.index() - begin_.index()); // wrap-safe
+        return (used <= cap) ? used : size_type{0};
     }
 
     [[nodiscard]] size_type tail_index() const noexcept { return begin_.index(); }

@@ -580,10 +580,12 @@ public:
         SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
 
         const size_type new_tail = static_cast<size_type>(s.head_index());
-        SPSC_ASSERT(new_tail >= cur_tail); // Guards against impossible snapshots
+        const size_type n = static_cast<size_type>(new_tail - cur_tail); // wrap-safe
+        SPSC_ASSERT(n <= Base::capacity()); // Guards against impossible snapshots
 
-        pop(static_cast<size_type>(new_tail - cur_tail));
+        pop(n);
     }
+
 
     template<class Snap>
     [[nodiscard]] bool try_consume(const Snap& s) noexcept {
@@ -709,12 +711,16 @@ public:
 
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
         SPSC_ASSERT(!full());
-        return slots_[Base::write_index()];
+        pointer p = slots_[Base::write_index()];
+        SPSC_ASSERT(p != nullptr);
+        return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
         if (RB_UNLIKELY(full())) { return nullptr; }
-        return slots_[Base::write_index()];
+        pointer p = slots_[Base::write_index()];
+        SPSC_ASSERT(p != nullptr);
+        return p;
     }
 
     RB_FORCEINLINE void publish() noexcept {
@@ -744,22 +750,30 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
         SPSC_ASSERT(!empty());
-        return slots_[Base::read_index()];
+        pointer p = slots_[Base::read_index()];
+        SPSC_ASSERT(p != nullptr);
+        return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
         SPSC_ASSERT(!empty());
-        return slots_[Base::read_index()];
+        const_pointer p = slots_[Base::read_index()];
+        SPSC_ASSERT(p != nullptr);
+        return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
         if (RB_UNLIKELY(empty())) { return nullptr; }
-        return slots_[Base::read_index()];
+        pointer p = slots_[Base::read_index()];
+        SPSC_ASSERT(p != nullptr);
+        return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
         if (RB_UNLIKELY(empty())) { return nullptr; }
-        return slots_[Base::read_index()];
+        const_pointer p = slots_[Base::read_index()];
+        SPSC_ASSERT(p != nullptr);
+        return p;
     }
 
     RB_FORCEINLINE void pop() noexcept {
