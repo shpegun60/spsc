@@ -424,9 +424,12 @@ public:
         SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
 
         const size_type new_tail = static_cast<size_type>(s.head_index());
-        SPSC_ASSERT(new_tail >= cur_tail); // Guards against impossible snapshots
 
-        pop(static_cast<size_type>(new_tail - cur_tail));
+        // Wrap-safe: allow unsigned wrap, but bound by capacity to reject impossible snapshots.
+        const size_type n = static_cast<size_type>(new_tail - cur_tail);
+        SPSC_ASSERT(n <= Base::capacity());
+
+        pop(n);
     }
 
     template<class Snap>
@@ -705,23 +708,6 @@ public:
         Base::advance_tail(n);
         return true;
     }
-
-    // Prevent accidental overload selection when passing a numeric lvalue:
-    //   std::uint32_t n = 3;
-    //   p.pop(n);   // would bind to pop(size_type) and pop 3 buffers.
-    template<class U,
-             typename = std::enable_if_t<
-                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
-                 std::is_convertible_v<U, size_type>>>
-    void pop(U&) noexcept = delete;
-
-    // Same trap for try_pop(n).
-    template<class U,
-             typename = std::enable_if_t<
-                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
-                 std::is_convertible_v<U, size_type>>>
-    [[nodiscard]] bool try_pop(U&) noexcept = delete;
-
 
     [[nodiscard]] RB_FORCEINLINE pointer operator[](const size_type i) noexcept {
         SPSC_ASSERT(i < size());
