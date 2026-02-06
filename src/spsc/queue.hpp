@@ -437,9 +437,10 @@ public:
         SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
 
         const size_type new_tail = static_cast<size_type>(s.head_index());
-        SPSC_ASSERT(new_tail >= cur_tail); // Guards against impossible snapshots
+        const size_type n = static_cast<size_type>(new_tail - cur_tail); // wrap-safe
+        SPSC_ASSERT(n <= Base::capacity()); // Guards against impossible snapshots
 
-        pop(static_cast<size_type>(new_tail - cur_tail));
+        pop(n);
     }
 
     template <class Snap> [[nodiscard]] bool try_consume(const Snap &s) noexcept {
