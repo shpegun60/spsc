@@ -228,11 +228,10 @@ public:
                 (void)other.Base::init(b_cap, b_head, b_tail);
             }
         } else {
-            // Swap storage first, then swap base state (indices + cache).
-            // swap_base() is non-concurrent and keeps shadows coherent.
             std::swap(storage_, other.storage_);
             std::swap(this->isAllocated_, other.isAllocated_);
 
+            // Swap base state (indices + caches). Storage has been swapped above.
             this->Base::swap_base(static_cast<Base &>(other));
         }
     }
@@ -783,57 +782,92 @@ public:
         if (RB_UNLIKELY(!is_valid())) {
             return;
         }
-        if constexpr (!std::is_trivially_destructible_v<value_type>) {
-            const size_type cap = Base::capacity();
-            const size_type head = Base::head();
-            const size_type tail = Base::tail();
-            const size_type used = static_cast<size_type>(head - tail);
 
-            if (used <= cap) {
-                const size_type mask = Base::mask();
-                for (size_type i = 0; i < used; ++i) {
-                    detail::destroy_at(slot_ptr((tail + i) & mask));
+        if constexpr (std::is_trivially_destructible_v<value_type>) {
+            Base::clear();
+            return;
+        }
+
+        const size_type cap = Base::capacity();
+
+        size_type head = Base::head();
+        size_type tail = Base::tail();
+        size_type used = static_cast<size_type>(head - tail);
+
+        // Atomic backends can yield an inconsistent snapshot (used > cap).
+        if (RB_UNLIKELY(used > cap)) {
+            head = Base::head();
+            tail = Base::tail();
+            used = static_cast<size_type>(head - tail);
+
+            // If it is still inconsistent, treat state as corrupted.
+            if (RB_UNLIKELY(used > cap)) {
+                // Fail-closed: we cannot safely destroy or safely reuse storage.
+                // Intentionally abandon storage to avoid UB.
+                if constexpr (kDynamic) {
+                    storage_ = nullptr;
+                    (void)Base::init(0u);
+                } else {
+                    storage_ = nullptr;
+                    this->isAllocated_ = false;
+                    Base::clear();
                 }
+                return;
             }
         }
+
+        if (used != 0u) {
+            const size_type mask = Base::mask();
+            for (size_type i = 0; i < used; ++i) {
+                detail::destroy_at(slot_ptr((tail + i) & mask));
+            }
+        }
+
         Base::clear();
     }
 
-    void destroy() noexcept {
-        constexpr bool kTrivialDtor = std::is_trivially_destructible_v<value_type>;
 
+    void destroy() noexcept {
         if constexpr (kDynamic) {
             pointer p = storage_;
-            const size_type cap  = Base::capacity();
-            const size_type head = Base::head();
-            const size_type tail = Base::tail();
-
-            storage_ = nullptr;
-            (void)Base::init(0u);
+            const size_type cap = Base::capacity();
 
             if (p == nullptr || cap == 0u) {
+                storage_ = nullptr;
+                (void)Base::init(0u);
                 return;
             }
 
-            const size_type used = static_cast<size_type>(head - tail);
-            const bool sane = (used <= cap);
+            size_type head = Base::head();
+            size_type tail = Base::tail();
+            size_type used = static_cast<size_type>(head - tail);
 
-            // Best-effort destroy live elements if state looks sane.
-            if constexpr (!kTrivialDtor) {
-                if (sane) {
-                    const size_type mask = cap - 1u;
-                    for (size_type i = 0; i < used; ++i) {
-                        detail::destroy_at(std::launder(&p[(tail + i) & mask]));
-                    }
+            // Atomic backends can yield an inconsistent snapshot (used > cap).
+            if (RB_UNLIKELY(used > cap)) {
+                head = Base::head();
+                tail = Base::tail();
+                used = static_cast<size_type>(head - tail);
+            }
+
+            // Detach first to avoid double-free in case of misuse.
+            storage_ = nullptr;
+            (void)Base::init(0u);
+
+            if constexpr (!std::is_trivially_destructible_v<value_type>) {
+                if (RB_UNLIKELY(used > cap)) {
+                    // Corrupted state: deallocating storage with potentially live objects is UB.
+                    // Fail-closed: leak the buffer.
+                    return;
+                }
+
+                const size_type mask = cap - 1u;
+                for (size_type i = 0; i < used; ++i) {
+                    detail::destroy_at(std::launder(&p[(tail + i) & mask]));
                 }
             }
 
-            // If the state is corrupted and T has a non-trivial destructor, deallocating storage
-            // could drop live objects on the floor (UB). Prefer leaking.
-            if (sane || kTrivialDtor) {
-                allocator_type alloc{};
-                alloc_traits::deallocate(alloc, p, cap);
-            }
+            allocator_type alloc{};
+            alloc_traits::deallocate(alloc, p, cap);
         } else {
             if (!this->isAllocated_ || storage_ == nullptr) {
                 this->isAllocated_ = false;
@@ -842,30 +876,48 @@ public:
                 return;
             }
 
-            const size_type cap  = Base::capacity();
-            const size_type head = Base::head();
-            const size_type tail = Base::tail();
+            if constexpr (!std::is_trivially_destructible_v<value_type>) {
+                const size_type cap = Base::capacity();
 
-            const size_type used = static_cast<size_type>(head - tail);
-            const bool sane = (cap != 0u) && (used <= cap);
+                size_type head = Base::head();
+                size_type tail = Base::tail();
+                size_type used = static_cast<size_type>(head - tail);
 
-            clear();
+                // Atomic backends can yield an inconsistent snapshot (used > cap).
+                if (RB_UNLIKELY(used > cap)) {
+                    head = Base::head();
+                    tail = Base::tail();
+                    used = static_cast<size_type>(head - tail);
 
-            // Same story as dynamic: corrupted + non-trivial dtor => leak to avoid UB.
-            if (sane || kTrivialDtor) {
-                allocator_type alloc{};
-                alloc_traits::deallocate(alloc, storage_, Capacity);
+                    if (RB_UNLIKELY(used > cap)) {
+                        // Corrupted state: deallocating storage with potentially live objects is UB.
+                        // Fail-closed: leak the buffer.
+                        storage_ = nullptr;
+                        this->isAllocated_ = false;
+                        Base::clear();
+                        return;
+                    }
+                }
+
+                if (used != 0u) {
+                    const size_type mask = Base::mask();
+                    for (size_type i = 0; i < used; ++i) {
+                        detail::destroy_at(slot_ptr((tail + i) & mask));
+                    }
+                }
             }
 
+            allocator_type alloc{};
+            alloc_traits::deallocate(alloc, storage_, Capacity);
             storage_ = nullptr;
             this->isAllocated_ = false;
             Base::clear();
         }
     }
 
+
     // ------------------------------------------------------------------------------------------
     // Dynamic-only API (Resize)
-
     // ------------------------------------------------------------------------------------------
     template <size_type C = Capacity, typename = std::enable_if_t<C == 0>>
     [[nodiscard]] bool reserve(size_type min_capacity) {
@@ -1316,10 +1368,8 @@ private:
         storage_ = other.storage_;
 
         if constexpr (kDynamic) {
-            const bool ok = Base::init(other.Base::capacity(), other.Base::head(),
-                                       other.Base::tail());
-            SPSC_ASSERT(ok);
-            (void)ok;
+            (void)Base::init(other.Base::capacity(), other.Base::head(),
+                              other.Base::tail());
             other.storage_ = nullptr;
             (void)other.Base::init(0u);
         } else {
