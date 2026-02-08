@@ -1,0 +1,144 @@
+/****************************************************************************
+** Meta object code from reading C++ file 'fifo_view_test.cpp'
+**
+** Created by: The Qt Meta Object Compiler version 69 (Qt 6.10.1)
+**
+** WARNING! All changes made in this file will be lost!
+*****************************************************************************/
+
+#include <QtCore/qmetatype.h>
+
+#include <QtCore/qtmochelpers.h>
+
+#include <memory>
+
+
+#include <QtCore/qxptype_traits.h>
+#if !defined(Q_MOC_OUTPUT_REVISION)
+#error "The header file 'fifo_view_test.cpp' doesn't include <QObject>."
+#elif Q_MOC_OUTPUT_REVISION != 69
+#error "This file was generated using the moc from 6.10.1. It"
+#error "cannot be used with the include files from this version of Qt."
+#error "(The moc has changed too much.)"
+#endif
+
+#ifndef Q_CONSTINIT
+#define Q_CONSTINIT
+#endif
+
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
+QT_WARNING_DISABLE_GCC("-Wuseless-cast")
+namespace {
+struct qt_meta_tag_ZN26tst_fifo_view_api_paranoidE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto tst_fifo_view_api_paranoid::qt_create_metaobjectdata<qt_meta_tag_ZN26tst_fifo_view_api_paranoidE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "tst_fifo_view_api_paranoid",
+        "static_plain_P",
+        "",
+        "static_volatile_V",
+        "static_atomic_A",
+        "static_cached_CA",
+        "dynamic_plain_P",
+        "dynamic_volatile_V",
+        "dynamic_atomic_A",
+        "dynamic_cached_CA",
+        "threaded_atomic_A",
+        "threaded_cached_CA"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Slot 'static_plain_P'
+        QtMocHelpers::SlotData<void()>(1, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'static_volatile_V'
+        QtMocHelpers::SlotData<void()>(3, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'static_atomic_A'
+        QtMocHelpers::SlotData<void()>(4, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'static_cached_CA'
+        QtMocHelpers::SlotData<void()>(5, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'dynamic_plain_P'
+        QtMocHelpers::SlotData<void()>(6, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'dynamic_volatile_V'
+        QtMocHelpers::SlotData<void()>(7, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'dynamic_atomic_A'
+        QtMocHelpers::SlotData<void()>(8, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'dynamic_cached_CA'
+        QtMocHelpers::SlotData<void()>(9, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'threaded_atomic_A'
+        QtMocHelpers::SlotData<void()>(10, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'threaded_cached_CA'
+        QtMocHelpers::SlotData<void()>(11, 2, QMC::AccessPrivate, QMetaType::Void),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<tst_fifo_view_api_paranoid, qt_meta_tag_ZN26tst_fifo_view_api_paranoidE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject tst_fifo_view_api_paranoid::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN26tst_fifo_view_api_paranoidE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN26tst_fifo_view_api_paranoidE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN26tst_fifo_view_api_paranoidE_t>.metaTypes,
+    nullptr
+} };
+
+void tst_fifo_view_api_paranoid::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<tst_fifo_view_api_paranoid *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->static_plain_P(); break;
+        case 1: _t->static_volatile_V(); break;
+        case 2: _t->static_atomic_A(); break;
+        case 3: _t->static_cached_CA(); break;
+        case 4: _t->dynamic_plain_P(); break;
+        case 5: _t->dynamic_volatile_V(); break;
+        case 6: _t->dynamic_atomic_A(); break;
+        case 7: _t->dynamic_cached_CA(); break;
+        case 8: _t->threaded_atomic_A(); break;
+        case 9: _t->threaded_cached_CA(); break;
+        default: ;
+        }
+    }
+    (void)_a;
+}
+
+const QMetaObject *tst_fifo_view_api_paranoid::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *tst_fifo_view_api_paranoid::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN26tst_fifo_view_api_paranoidE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int tst_fifo_view_api_paranoid::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 10)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 10;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 10)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 10;
+    }
+    return _id;
+}
+QT_WARNING_POP

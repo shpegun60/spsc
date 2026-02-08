@@ -11,6 +11,7 @@ HEADERS +=                                  \
     $$PWD/base/spsc_counter.hpp             \
     $$PWD/base/spsc_object.hpp              \
     $$PWD/base/spsc_policy.hpp              \
+    $$PWD/base/spsc_regions.hpp \
     $$PWD/base/spsc_snapshot.hpp            \
     $$PWD/base/spsc_tools.hpp \
     $$PWD/base/typed_pool_new.hpp \

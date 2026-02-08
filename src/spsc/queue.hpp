@@ -39,6 +39,7 @@
 #include "base/SPSCbase.hpp"      // ::spsc::SPSCbase<Capacity, Policy>
 #include "base/spsc_alloc.hpp"    // ::spsc::alloc::align_alloc
 #include "base/spsc_object.hpp"   // ::spsc::detail::destroy_at
+#include "base/spsc_regions.hpp"  // ::spsc::bulk::region/raw_region + regions
 #include "base/spsc_snapshot.hpp" // ::spsc::snapshot_view
 #include "base/spsc_tools.hpp"    // RB_FORCEINLINE, RB_UNLIKELY, macros
 
@@ -163,52 +164,13 @@ public:
     // ------------------------------------------------------------------------------------------
     // Bulk Region Types
     // ------------------------------------------------------------------------------------------
-    struct write_region {
-        std::byte *raw{nullptr};
-        size_type count{0u};
+    using write_region  = ::spsc::bulk::uninit_region<value_type, size_type>;
+    using write_regions = ::spsc::bulk::region_pair<write_region, size_type>;
 
-        [[nodiscard]] constexpr bool empty() const noexcept { return count == 0u; }
+    using read_region  = ::spsc::bulk::init_region<value_type, size_type>;
+    using read_regions = ::spsc::bulk::region_pair<read_region, size_type>;
 
-        // Explicitly named to discourage assignment without starting lifetime.
-        [[nodiscard]] pointer ptr_uninit() const noexcept {
-            return reinterpret_cast<pointer>(raw);
-        }
-#if SPSC_HAS_SPAN
-        // Raw bytes view (safe for uninitialized storage).
-        [[nodiscard]] std::span<std::byte> bytes() const noexcept {
-            return {raw, static_cast<size_t>(count) * sizeof(value_type)};
-        }
-#endif /* SPSC_HAS_SPAN */
-    };
-
-    struct write_regions {
-        write_region first{};
-        write_region second{};
-        size_type total{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return total == 0u; }
-    };
-
-    struct read_region {
-        pointer ptr{nullptr};
-        size_type count{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return count == 0u; }
-
-#if SPSC_HAS_SPAN
-        [[nodiscard]] std::span<value_type> span() const noexcept {
-            return {ptr, count};
-        }
-#endif /* SPSC_HAS_SPAN */
-    };
-
-    struct read_regions {
-        read_region first{};
-        read_region second{};
-        size_type total{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return total == 0u; }
-    };
+    static constexpr size_type npos = static_cast<size_type>(~size_type(0));
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Destructor
@@ -512,8 +474,8 @@ public:
     // WARNING: write regions are raw storage (UNINITIALIZED). You must
     // placement-new into them.
     [[nodiscard]] write_regions
-    claim_write(const size_type max_count =
-                static_cast<size_type>(~size_type(0))) noexcept {
+    claim_write(const ::spsc::unsafe_t, const size_type max_count =
+                                        static_cast<size_type>(~size_type(0))) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
@@ -543,8 +505,8 @@ public:
     }
 
     [[nodiscard]] read_regions
-    claim_read(const size_type max_count =
-               static_cast<size_type>(~size_type(0))) noexcept {
+    claim_read(const ::spsc::unsafe_t, const size_type max_count =
+                                       static_cast<size_type>(~size_type(0))) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
@@ -945,6 +907,182 @@ public:
     // ------------------------------------------------------------------------------------------
     // RAII Based API
     // ------------------------------------------------------------------------------------------
+
+    class bulk_write_guard {
+    public:
+        bulk_write_guard() noexcept = default;
+
+        explicit bulk_write_guard(queue &q,
+                                  const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept
+            : q_(&q), regs_(q.claim_write(::spsc::unsafe, max_count)) {
+            if (regs_.total == 0u) {
+                q_ = nullptr;
+            }
+        }
+
+        bulk_write_guard(const bulk_write_guard &) = delete;
+        bulk_write_guard &operator=(const bulk_write_guard &) = delete;
+
+        bulk_write_guard(bulk_write_guard &&other) noexcept
+            : q_(other.q_), regs_(other.regs_), constructed_(other.constructed_),
+            publish_on_destroy_(other.publish_on_destroy_) {
+            other.q_ = nullptr;
+            other.regs_ = {};
+            other.constructed_ = 0u;
+            other.publish_on_destroy_ = false;
+        }
+
+        bulk_write_guard &operator=(bulk_write_guard &&) = delete;
+
+        ~bulk_write_guard() noexcept {
+            if (q_ == nullptr || regs_.total == 0u) {
+                return;
+            }
+
+            if (constructed_ == 0u) {
+                return;
+            }
+
+            if (publish_on_destroy_) {
+                q_->publish(constructed_);
+                return;
+            }
+
+            destroy_constructed_();
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return (q_ != nullptr) && (regs_.total != 0u);
+        }
+
+        [[nodiscard]] size_type claimed() const noexcept { return regs_.total; }
+        [[nodiscard]] size_type constructed() const noexcept { return constructed_; }
+        [[nodiscard]] size_type remaining() const noexcept { return regs_.total - constructed_; }
+
+        template <class... Args>
+        [[nodiscard]] pointer emplace_next(Args &&...args) noexcept(
+            std::is_nothrow_constructible_v<value_type, Args &&...>) {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(constructed_ < regs_.total);
+
+            pointer p = slot_ptr_at_(constructed_);
+            p = ::new (static_cast<void *>(p)) value_type(std::forward<Args>(args)...);
+            p = std::launder(p);
+
+            ++constructed_;
+            publish_on_destroy_ = true;
+            return p;
+        }
+
+        void arm_publish() noexcept {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(constructed_ != 0u && "arm_publish() requires at least one constructed element");
+            publish_on_destroy_ = true;
+        }
+
+        void disarm_publish() noexcept { publish_on_destroy_ = false; }
+
+        void commit() noexcept {
+            if (q_ && constructed_ != 0u) {
+                q_->publish(constructed_);
+            }
+            // After publish, consumer owns destruction.
+            reset_();
+        }
+
+        void cancel() noexcept {
+            if (q_ && constructed_ != 0u) {
+                destroy_constructed_();
+            }
+            reset_();
+        }
+
+    private:
+        [[nodiscard]] pointer slot_ptr_at_(const size_type i) const noexcept {
+            SPSC_ASSERT(i < regs_.total);
+            if (i < regs_.first.count) {
+                return regs_.first.ptr_uninit() + i;
+            }
+            return regs_.second.ptr_uninit() + (i - regs_.first.count);
+        }
+
+        void destroy_constructed_() noexcept {
+            if constexpr (!std::is_trivially_destructible_v<value_type>) {
+                for (size_type i = 0; i < constructed_; ++i) {
+                    ::spsc::detail::destroy_at(std::launder(slot_ptr_at_(i)));
+                }
+            }
+        }
+
+        void reset_() noexcept {
+            q_ = nullptr;
+            regs_ = {};
+            constructed_ = 0u;
+            publish_on_destroy_ = false;
+        }
+
+        queue *q_{nullptr};
+        write_regions regs_{};
+        size_type constructed_{0u};
+        bool publish_on_destroy_{false};
+    };
+
+    class bulk_read_guard {
+    public:
+        bulk_read_guard() noexcept = default;
+
+        explicit bulk_read_guard(queue &q,
+                                 const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept
+            : q_(&q), regs_(q.claim_read(::spsc::unsafe, max_count)), active_(regs_.total != 0u) {
+            if (!active_) {
+                q_ = nullptr;
+            }
+        }
+
+        bulk_read_guard(const bulk_read_guard &) = delete;
+        bulk_read_guard &operator=(const bulk_read_guard &) = delete;
+
+        bulk_read_guard(bulk_read_guard &&other) noexcept
+            : q_(other.q_), regs_(other.regs_), active_(other.active_) {
+            other.q_ = nullptr;
+            other.regs_ = {};
+            other.active_ = false;
+        }
+
+        bulk_read_guard &operator=(bulk_read_guard &&) = delete;
+
+        ~bulk_read_guard() noexcept {
+            if (active_ && q_) {
+                q_->pop(regs_.total);
+            }
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept { return active_; }
+
+        [[nodiscard]] size_type count() const noexcept { return regs_.total; }
+        [[nodiscard]] const read_regions &regions() const noexcept { return regs_; }
+
+        void commit() noexcept {
+            if (active_ && q_) {
+                q_->pop(regs_.total);
+            }
+            active_ = false;
+            q_ = nullptr;
+            regs_ = {};
+        }
+
+        void cancel() noexcept {
+            active_ = false;
+            q_ = nullptr;
+            regs_ = {};
+        }
+
+    private:
+        queue *q_{nullptr};
+        read_regions regs_{};
+        bool active_{false};
+    };
+
     class write_guard {
     public:
         write_guard() noexcept = default;
@@ -1101,7 +1239,13 @@ public:
     [[nodiscard]] write_guard scoped_write() noexcept {
         return write_guard(*this);
     }
+    [[nodiscard]] bulk_write_guard scoped_write(const size_type max_count) noexcept {
+        return bulk_write_guard(*this, max_count);
+    }
     [[nodiscard]] read_guard scoped_read() noexcept { return read_guard(*this); }
+    [[nodiscard]] bulk_read_guard scoped_read(const size_type max_count) noexcept {
+        return bulk_read_guard(*this, max_count);
+    }
 
 private:
     void allocate_static_() noexcept(kNoexceptAllocate) {

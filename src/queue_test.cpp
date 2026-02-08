@@ -244,8 +244,8 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().pop(reg{1})), void>);
 
     // Bulk regions
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write()), typename Q::write_regions>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read()), typename Q::read_regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe)), typename Q::write_regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read(::spsc::unsafe)), typename Q::read_regions>);
 
     // Snapshots
     static_assert(std::is_same_v<decltype(std::declval<Q&>().make_snapshot()), typename Q::snapshot>);
@@ -433,7 +433,7 @@ static void check_fifo_exact(Q& q, std::uint32_t first, std::uint32_t count) {
 
 template <class Q>
 static void placement_write_region(Q& q, std::uint32_t& next_seq, reg max_count) {
-    auto wr = q.claim_write(max_count);
+    auto wr = q.claim_write(::spsc::unsafe, max_count);
     if (wr.empty()) {
         return;
     }
@@ -464,7 +464,7 @@ static void placement_write_region(Q& q, std::uint32_t& next_seq, reg max_count)
 
 template <class Q>
 static void check_read_regions(Q& q, std::uint32_t& expected_seq, reg max_count) {
-    auto rr = q.claim_read(max_count);
+    auto rr = q.claim_read(::spsc::unsafe, max_count);
     if (rr.empty()) {
         return;
     }
@@ -1081,7 +1081,7 @@ static void run_state_machine_fuzz(bool dynamic) {
                 break;
             }
             const reg maxn = static_cast<reg>(1 + (rng() % 7));
-            auto wr = q.claim_write(maxn);
+            auto wr = q.claim_write(::spsc::unsafe, maxn);
             if (wr.empty()) {
                 break;
             }
@@ -1463,7 +1463,7 @@ static void bulk_regions_max_count_suite(Q& q) {
 
     // Ask for a small max_count even when free is larger.
     const reg want = 7u;
-    auto wr = q.claim_write(want);
+    auto wr = q.claim_write(::spsc::unsafe, want);
     QVERIFY(!wr.empty());
     QCOMPARE(wr.total, want);
 
@@ -1495,7 +1495,7 @@ static void bulk_regions_max_count_suite(Q& q) {
     QCOMPARE(q.size(), want);
 
     // claim_read with smaller max_count must limit.
-    auto rr = q.claim_read(3u);
+    auto rr = q.claim_read(::spsc::unsafe, 3u);
     QVERIFY(!rr.empty());
     QCOMPARE(rr.total, reg{3});
 
@@ -1603,7 +1603,7 @@ static void bulk_read_max_count_suite(Q& q) {
 
     // claim_read with max_count must cap regions
     {
-        auto rr = q.claim_read(7);
+        auto rr = q.claim_read(::spsc::unsafe, 7);
         QCOMPARE(rr.total, reg{7});
         QVERIFY(rr.first.count > 0u);
         // Validate the claimed values without popping.
@@ -1818,7 +1818,7 @@ static void run_threaded_bulk_regions_suite(const char* name) {
 
         while (seq <= static_cast<std::uint32_t>(kThreadIters) && !abort.load(std::memory_order_relaxed)) {
             const reg want = static_cast<reg>((next_u32() % kMaxBatch) + 1u);
-            auto wr = q.claim_write(want);
+            auto wr = q.claim_write(::spsc::unsafe, want);
             if (wr.total == 0u) {
                 std::this_thread::yield();
                 continue;
@@ -1862,7 +1862,7 @@ static void run_threaded_bulk_regions_suite(const char* name) {
         auto t0 = std::chrono::steady_clock::now();
 
         while (expect <= static_cast<std::uint32_t>(kThreadIters) && !abort.load(std::memory_order_relaxed)) {
-            auto rr = q.claim_read(kMaxBatch);
+            auto rr = q.claim_read(::spsc::unsafe, kMaxBatch);
             if (rr.total == 0u) {
                 if (done.load(std::memory_order_acquire) && q.empty()) {
                     abort.store(true, std::memory_order_relaxed);
@@ -1986,8 +1986,8 @@ private slots:
         QVERIFY(q.full());
         QVERIFY(q.try_front() == nullptr);
         QVERIFY(!q.try_pop());
-        QVERIFY(q.claim_read().empty());
-        QVERIFY(q.claim_write().empty());
+        QVERIFY(q.claim_read(::spsc::unsafe).empty());
+        QVERIFY(q.claim_write(::spsc::unsafe).empty());
         q.clear();
         q.destroy();
         QVERIFY(!q.is_valid());
