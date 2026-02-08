@@ -37,6 +37,10 @@
 #include "base/spsc_alloc.hpp"
 #include "base/spsc_tools.hpp" // RB_FORCEINLINE, SPSC_ASSERT, macros
 
+#if SPSC_HAS_SPAN
+#include <span>
+#endif
+
 namespace spsc {
 
 /*
@@ -92,6 +96,8 @@ public:
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[spsc::chunk]: no-exceptions mode requires noexcept default constructor.");
+    static_assert(std::is_nothrow_move_assignable_v<T> || std::is_nothrow_copy_assignable_v<T>,
+                  "[spsc::chunk]: no-exceptions mode requires noexcept assignment.");
 #endif
 
 private:
@@ -128,11 +134,36 @@ public:
         return true;
     }
 
+    // Explicit name for clamping resize (same behavior as resize()).
+    [[nodiscard]] bool resize_clamp(const size_type n) noexcept { return resize(n); }
+
+    // Resize without clamping; does not modify size if n > capacity.
+    [[nodiscard]] bool try_resize(const size_type n) noexcept {
+        if (n > kCapacity) { return false; }
+        len_ = n;
+        return true;
+    }
+
+    // Accept externally-written size (e.g., DMA) without allocation.
+    void commit_size(const size_type n) noexcept {
+        SPSC_ASSERT(n <= kCapacity);
+        len_ = n;
+    }
+
     // --------------------------------------------------------------------------
     // Data Access
     // --------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer data() noexcept { return storage_.data(); }
     [[nodiscard]] RB_FORCEINLINE const_pointer data() const noexcept { return storage_.data(); }
+
+
+#if SPSC_HAS_SPAN
+    [[nodiscard]] std::span<value_type> used_span() noexcept { return { data(), size() }; }
+    [[nodiscard]] std::span<const value_type> used_span() const noexcept { return { data(), size() }; }
+
+    [[nodiscard]] std::span<value_type> cap_span() noexcept { return { data(), capacity() }; }
+    [[nodiscard]] std::span<const value_type> cap_span() const noexcept { return { data(), capacity() }; }
+#endif
 
     [[nodiscard]] RB_FORCEINLINE reference operator[](const size_type i) noexcept {
         SPSC_ASSERT(i < kCapacity);
@@ -149,15 +180,35 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference back() noexcept { SPSC_ASSERT(!empty()); return storage_[len_ - 1]; }
     [[nodiscard]] RB_FORCEINLINE const_reference back() const noexcept { SPSC_ASSERT(!empty()); return storage_[len_ - 1]; }
 
+    [[nodiscard]] pointer try_front() noexcept {
+        return empty() ? nullptr : &storage_[0];
+    }
+    [[nodiscard]] const_pointer try_front() const noexcept {
+        return empty() ? nullptr : &storage_[0];
+    }
+
     [[nodiscard]] pointer try_back() noexcept {
         return empty() ? nullptr : &storage_[len_ - 1];
     }
-
+    [[nodiscard]] const_pointer try_back() const noexcept {
+        return empty() ? nullptr : &storage_[len_ - 1];
+    }
     void pop_back() noexcept {
         SPSC_ASSERT(!empty());
         --len_;
     }
 
+
+    [[nodiscard]] bool try_pop_back() noexcept {
+        if (empty()) { return false; }
+        --len_;
+        return true;
+    }
+
+    void pop_back_n(size_type n) noexcept {
+        SPSC_ASSERT(n <= len_);
+        len_ = static_cast<size_type>(len_ - n);
+    }
     // --------------------------------------------------------------------------
     // Producer Interface
     // --------------------------------------------------------------------------
@@ -276,6 +327,8 @@ public:
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[spsc::chunk]: no-exceptions mode requires noexcept default constructor.");
+    static_assert(std::is_nothrow_move_assignable_v<T> || std::is_nothrow_copy_assignable_v<T>,
+                  "[spsc::chunk]: no-exceptions mode requires noexcept assignment.");
 #endif
 
     // --------------------------------------------------------------------------
@@ -339,10 +392,16 @@ public:
         pointer new_storage = alloc_traits::allocate(alloc, new_cap);
         if (RB_UNLIKELY(!new_storage)) { return false; }
 
-        // 1. Construct everything in new buffer
+        // 1. Construct everything in new buffer (exception-safe)
+        size_type constructed = 0;
         SPSC_TRY {
-            std::uninitialized_default_construct_n(new_storage, new_cap);
+            for (; constructed < new_cap; ++constructed) {
+                alloc_traits::construct(alloc, new_storage + constructed);
+            }
         } SPSC_CATCH_ALL {
+            if constexpr (!std::is_trivially_destructible_v<T>) {
+                std::destroy_n(new_storage, constructed);
+            }
             alloc_traits::deallocate(alloc, new_storage, new_cap);
             SPSC_RETHROW;
         }
@@ -390,11 +449,26 @@ public:
         return true;
     }
 
+
+    // Accept externally-written size without allocation (e.g., DMA into data()).
+    void commit_size(const size_type n) noexcept {
+        SPSC_ASSERT(n <= cap_);
+        len_ = n;
+    }
     // --------------------------------------------------------------------------
     // Data Access
     // --------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer data() noexcept { return storage_; }
     [[nodiscard]] RB_FORCEINLINE const_pointer data() const noexcept { return storage_; }
+
+
+#if SPSC_HAS_SPAN
+    [[nodiscard]] std::span<value_type> used_span() noexcept { return { data(), size() }; }
+    [[nodiscard]] std::span<const value_type> used_span() const noexcept { return { data(), size() }; }
+
+    [[nodiscard]] std::span<value_type> cap_span() noexcept { return { data(), capacity() }; }
+    [[nodiscard]] std::span<const value_type> cap_span() const noexcept { return { data(), capacity() }; }
+#endif
 
     [[nodiscard]] RB_FORCEINLINE reference operator[](const size_type i) noexcept {
         SPSC_ASSERT(i < cap_); // allow access up to capacity for raw writes
@@ -411,15 +485,35 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference back() noexcept { SPSC_ASSERT(!empty()); return storage_[len_ - 1]; }
     [[nodiscard]] RB_FORCEINLINE const_reference back() const noexcept { SPSC_ASSERT(!empty()); return storage_[len_ - 1]; }
 
+    [[nodiscard]] pointer try_front() noexcept {
+        return empty() ? nullptr : &storage_[0];
+    }
+    [[nodiscard]] const_pointer try_front() const noexcept {
+        return empty() ? nullptr : &storage_[0];
+    }
+
     [[nodiscard]] pointer try_back() noexcept {
         return empty() ? nullptr : &storage_[len_ - 1];
     }
-
+    [[nodiscard]] const_pointer try_back() const noexcept {
+        return empty() ? nullptr : &storage_[len_ - 1];
+    }
     void pop_back() noexcept {
         SPSC_ASSERT(!empty());
         --len_;
     }
 
+
+    [[nodiscard]] bool try_pop_back() noexcept {
+        if (empty()) { return false; }
+        --len_;
+        return true;
+    }
+
+    void pop_back_n(size_type n) noexcept {
+        SPSC_ASSERT(n <= len_);
+        len_ = static_cast<size_type>(len_ - n);
+    }
     // --------------------------------------------------------------------------
     // Producer Interface
     // --------------------------------------------------------------------------
