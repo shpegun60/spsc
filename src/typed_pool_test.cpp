@@ -157,8 +157,8 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish()), void>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(reg{1})), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(reg{1})), void>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write()), typename Q::regions>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(reg{1})), typename Q::regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe)), typename Q::regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe, reg{1})), typename Q::regions>);
 
     // Consumer
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_front()), obj_type*>);
@@ -169,8 +169,8 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().pop()), void>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_pop(reg{1})), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().pop(reg{1})), void>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read()), typename Q::regions>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read(reg{1})), typename Q::regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read(::spsc::unsafe)), typename Q::regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read(::spsc::unsafe, reg{1})), typename Q::regions>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().operator[](reg{0})), obj_type*>);
     static_assert(std::is_same_v<decltype(std::declval<const Q&>().operator[](reg{0})), const obj_type*>);
 
@@ -455,7 +455,7 @@ static void bulk_regions_wraparound_suite(Q& q) {
     const reg want = 12u;
     QVERIFY(q.free() >= want);
 
-    auto wr = q.claim_write(want);
+    auto wr = q.claim_write(::spsc::unsafe, want);
     QVERIFY(!wr.empty());
     QCOMPARE(wr.total, want);
     QVERIFY(wr.first.count > 0u);
@@ -463,11 +463,11 @@ static void bulk_regions_wraparound_suite(Q& q) {
 
     std::uint32_t seq = 100u;
     for (reg i = 0; i < wr.first.count; ++i) {
-        T* dst = wr.first.slts[i];
+        T* dst = wr.first.ptr[i];
         ::new (static_cast<void*>(dst)) T(seq++);
     }
     for (reg i = 0; i < wr.second.count; ++i) {
-        T* dst = wr.second.slts[i];
+        T* dst = wr.second.ptr[i];
         ::new (static_cast<void*>(dst)) T(seq++);
     }
     q.publish(wr.total);
@@ -499,31 +499,31 @@ static void bulk_regions_max_count_suite(Q& q) {
     const reg cap = q.capacity();
     const reg max_req = cap * 10u;
 
-    auto wr = q.claim_write(max_req);
+    auto wr = q.claim_write(::spsc::unsafe, max_req);
     QCOMPARE(wr.total, q.free());
 
     std::uint32_t seq = 1u;
     for (reg i = 0; i < wr.first.count; ++i) {
-        ::new (static_cast<void*>(wr.first.slts[i])) T(seq++);
+        ::new (static_cast<void*>(wr.first.ptr[i])) T(seq++);
     }
     for (reg i = 0; i < wr.second.count; ++i) {
-        ::new (static_cast<void*>(wr.second.slts[i])) T(seq++);
+        ::new (static_cast<void*>(wr.second.ptr[i])) T(seq++);
     }
     q.publish(wr.total);
 
     QVERIFY(q.full());
     QCOMPARE(q.size(), cap);
 
-    auto rd = q.claim_read(max_req);
+    auto rd = q.claim_read(::spsc::unsafe, max_req);
     QCOMPARE(rd.total, cap);
 
     reg seen = 0;
     for (reg i = 0; i < rd.first.count; ++i, ++seen) {
-        auto* p = std::launder(rd.first.slts[i]);
+        auto* p = std::launder(rd.first.ptr[i]);
         QCOMPARE(p->seq, static_cast<std::uint32_t>(1u + seen));
     }
     for (reg i = 0; i < rd.second.count; ++i, ++seen) {
-        auto* p = std::launder(rd.second.slts[i]);
+        auto* p = std::launder(rd.second.ptr[i]);
         QCOMPARE(p->seq, static_cast<std::uint32_t>(1u + seen));
     }
     q.pop(rd.total);
@@ -537,17 +537,17 @@ static void bulk_read_max_count_suite(Q& q) {
 
     fill_seq(q, 10u, 20u);
 
-    auto rd = q.claim_read(3u);
+    auto rd = q.claim_read(::spsc::unsafe, 3u);
     QCOMPARE(rd.total, reg{3});
     QCOMPARE(rd.first.count + rd.second.count, rd.total);
 
     reg idx = 0;
     for (reg i = 0; i < rd.first.count; ++i, ++idx) {
-        auto* p = std::launder(rd.first.slts[i]);
+        auto* p = std::launder(rd.first.ptr[i]);
         QCOMPARE(p->seq, static_cast<std::uint32_t>(10u + idx));
     }
     for (reg i = 0; i < rd.second.count; ++i, ++idx) {
-        auto* p = std::launder(rd.second.slts[i]);
+        auto* p = std::launder(rd.second.ptr[i]);
         QCOMPARE(p->seq, static_cast<std::uint32_t>(10u + idx));
     }
 
@@ -831,9 +831,9 @@ static void invalid_inputs_suite() {
     QVERIFY(q.try_front() == nullptr);
     QVERIFY(!q.try_pop());
 
-    auto wr = q.claim_write();
+    auto wr = q.claim_write(::spsc::unsafe);
     QVERIFY(wr.empty());
-    auto rd = q.claim_read();
+    auto rd = q.claim_read(::spsc::unsafe);
     QVERIFY(rd.empty());
 
     auto snap = q.make_snapshot();
@@ -1071,15 +1071,15 @@ static void state_machine_fuzz_sweep_suite() {
 
         case 2: {
             const reg max_req = static_cast<reg>((rng() % 8u) + 1u);
-            auto wr = q.claim_write(max_req);
+            auto wr = q.claim_write(::spsc::unsafe, max_req);
             if (!wr.empty()) {
                 reg filled = 0;
                 for (reg i = 0; i < wr.first.count; ++i, ++filled) {
-                    ::new (static_cast<void*>(wr.first.slts[i])) Blob(next);
+                    ::new (static_cast<void*>(wr.first.ptr[i])) Blob(next);
                     ref.push_back(next++);
                 }
                 for (reg i = 0; i < wr.second.count; ++i, ++filled) {
-                    ::new (static_cast<void*>(wr.second.slts[i])) Blob(next);
+                    ::new (static_cast<void*>(wr.second.ptr[i])) Blob(next);
                     ref.push_back(next++);
                 }
                 QCOMPARE(filled, wr.total);
@@ -1090,14 +1090,14 @@ static void state_machine_fuzz_sweep_suite() {
 
         case 3: {
             const reg max_req = static_cast<reg>((rng() % 8u) + 1u);
-            auto rd = q.claim_read(max_req);
+            auto rd = q.claim_read(::spsc::unsafe, max_req);
             if (!rd.empty()) {
                 reg got = 0;
                 for (reg i = 0; i < rd.first.count; ++i, ++got) {
-                    QCOMPARE(std::launder(rd.first.slts[i])->seq, ref[got]);
+                    QCOMPARE(std::launder(rd.first.ptr[i])->seq, ref[got]);
                 }
                 for (reg i = 0; i < rd.second.count; ++i, ++got) {
-                    QCOMPARE(std::launder(rd.second.slts[i])->seq, ref[got]);
+                    QCOMPARE(std::launder(rd.second.ptr[i])->seq, ref[got]);
                 }
                 q.pop(rd.total);
                 for (reg i = 0; i < rd.total; ++i) {
@@ -1263,7 +1263,7 @@ static void run_threaded_bulk_regions_suite(const char* /*name*/) {
         std::uint32_t seq = 1u;
         for (int it = 0; it < kThreadIters && !abort.load(); ++it) {
             const reg want = static_cast<reg>((seq % kMaxBatch) + 1u);
-            auto wr = q.claim_write(want);
+            auto wr = q.claim_write(::spsc::unsafe, want);
             if (wr.empty()) {
                 std::this_thread::yield();
                 continue;
@@ -1271,10 +1271,10 @@ static void run_threaded_bulk_regions_suite(const char* /*name*/) {
 
             std::uint32_t local = seq;
             for (reg i = 0; i < wr.first.count; ++i) {
-                ::new (static_cast<void*>(wr.first.slts[i])) Blob(local++);
+                ::new (static_cast<void*>(wr.first.ptr[i])) Blob(local++);
             }
             for (reg i = 0; i < wr.second.count; ++i) {
-                ::new (static_cast<void*>(wr.second.slts[i])) Blob(local++);
+                ::new (static_cast<void*>(wr.second.ptr[i])) Blob(local++);
             }
             q.publish(wr.total);
             seq = local;
@@ -1297,14 +1297,14 @@ static void run_threaded_bulk_regions_suite(const char* /*name*/) {
                 return;
             }
 
-            auto rd = q.claim_read(kMaxBatch);
+            auto rd = q.claim_read(::spsc::unsafe, kMaxBatch);
             if (rd.empty()) {
                 std::this_thread::yield();
                 continue;
             }
 
             for (reg i = 0; i < rd.first.count; ++i) {
-                auto* p = std::launder(rd.first.slts[i]);
+                auto* p = std::launder(rd.first.ptr[i]);
                 if (p->seq != expected) {
                     abort.store(true);
                     return;
@@ -1312,7 +1312,7 @@ static void run_threaded_bulk_regions_suite(const char* /*name*/) {
                 ++expected;
             }
             for (reg i = 0; i < rd.second.count; ++i) {
-                auto* p = std::launder(rd.second.slts[i]);
+                auto* p = std::launder(rd.second.ptr[i]);
                 if (p->seq != expected) {
                     abort.store(true);
                     return;
@@ -1508,13 +1508,13 @@ static void lifecycle_traced_suite() {
 // ==============================================================================================
 
 template <class Regions>
-static auto wr_ptr_at_(const Regions& wr, const reg pos) -> decltype(wr.first.slts[0])
+static auto wr_ptr_at_(const Regions& wr, const reg pos) -> decltype(wr.first.ptr[0])
 {
     // Order is always: first region, then second region.
     if (pos < wr.first.count) {
-        return wr.first.slts[pos];
+        return wr.first.ptr[pos];
     }
-    return wr.second.slts[pos - wr.first.count];
+    return wr.second.ptr[pos - wr.first.count];
 }
 
 template <class Q>
@@ -1580,16 +1580,16 @@ static void no_double_claim_without_publish_suite(Q& q)
         const reg want = 8u;
         QVERIFY(q.free() >= want);
 
-        auto wr1 = q.claim_write(want);
-        auto wr2 = q.claim_write(want);
+        auto wr1 = q.claim_write(::spsc::unsafe, want);
+        auto wr2 = q.claim_write(::spsc::unsafe, want);
         QCOMPARE(wr1.total, want);
         QCOMPARE(wr2.total, want);
 
         for (reg i = 0; i < wr1.first.count; ++i) {
-            QCOMPARE(wr1.first.slts[i], wr2.first.slts[i]);
+            QCOMPARE(wr1.first.ptr[i], wr2.first.ptr[i]);
         }
         for (reg i = 0; i < wr1.second.count; ++i) {
-            QCOMPARE(wr1.second.slts[i], wr2.second.slts[i]);
+            QCOMPARE(wr1.second.ptr[i], wr2.second.ptr[i]);
         }
 
         // Construct ONLY first k objects, publish(k).
@@ -1597,11 +1597,11 @@ static void no_double_claim_without_publish_suite(Q& q)
         reg done = 0u;
 
         for (reg i = 0; i < wr1.first.count && done < k; ++i) {
-            ::new (static_cast<void*>(wr1.first.slts[i])) T(static_cast<std::uint32_t>(1u + done));
+            ::new (static_cast<void*>(wr1.first.ptr[i])) T(static_cast<std::uint32_t>(1u + done));
             ++done;
         }
         for (reg i = 0; i < wr1.second.count && done < k; ++i) {
-            ::new (static_cast<void*>(wr1.second.slts[i])) T(static_cast<std::uint32_t>(1u + done));
+            ::new (static_cast<void*>(wr1.second.ptr[i])) T(static_cast<std::uint32_t>(1u + done));
             ++done;
         }
 
@@ -1647,7 +1647,7 @@ static void bulk_regions_partial_publish_suite(Q& q)
     const reg want = 12u;
     QVERIFY(q.free() >= want);
 
-    auto wr = q.claim_write(want);
+    auto wr = q.claim_write(::spsc::unsafe, want);
     QCOMPARE(wr.total, want);
     QVERIFY(wr.second.count > 0u);
 
@@ -1658,11 +1658,11 @@ static void bulk_regions_partial_publish_suite(Q& q)
     std::uint32_t seq = 100u;
     reg constructed = 0u;
     for (reg i = 0; i < wr.first.count && constructed < k; ++i) {
-        ::new (static_cast<void*>(wr.first.slts[i])) T(seq++);
+        ::new (static_cast<void*>(wr.first.ptr[i])) T(seq++);
         ++constructed;
     }
     for (reg i = 0; i < wr.second.count && constructed < k; ++i) {
-        ::new (static_cast<void*>(wr.second.slts[i])) T(seq++);
+        ::new (static_cast<void*>(wr.second.ptr[i])) T(seq++);
         ++constructed;
     }
     QCOMPARE(constructed, k);
@@ -1684,7 +1684,7 @@ static void bulk_regions_partial_publish_suite(Q& q)
     const reg remain = want - k;
     QVERIFY(q.free() >= remain);
 
-    auto wr2 = q.claim_write(remain);
+    auto wr2 = q.claim_write(::spsc::unsafe, remain);
     QCOMPARE(wr2.total, remain);
 
     for (reg i = 0; i < remain; ++i) {
@@ -1712,7 +1712,7 @@ static void bulk_regions_staggered_wrap_suite(Q& q)
     const reg want = 10u;
     QVERIFY(q.free() >= want);
 
-    auto wr = q.claim_write(want);
+    auto wr = q.claim_write(::spsc::unsafe, want);
     QCOMPARE(wr.total, want);
     QVERIFY(wr.second.count > 0u);
 
@@ -1725,22 +1725,22 @@ static void bulk_regions_staggered_wrap_suite(Q& q)
     // Publish exactly the first region (finish at end, wrap head to 0).
     std::uint32_t seq = 500u;
     for (reg i = 0; i < n1; ++i) {
-        ::new (static_cast<void*>(wr.first.slts[i])) T(seq++);
+        ::new (static_cast<void*>(wr.first.ptr[i])) T(seq++);
     }
     q.publish(n1);
 
     // Next claim should start at 0 and match the second region pointers.
-    auto wr2 = q.claim_write(n2);
+    auto wr2 = q.claim_write(::spsc::unsafe, n2);
     QCOMPARE(wr2.total, n2);
     QCOMPARE(wr2.second.count, reg{0});
     QCOMPARE(wr2.first.count, n2);
 
     for (reg i = 0; i < n2; ++i) {
-        QCOMPARE(wr2.first.slts[i], wr.second.slts[i]);
+        QCOMPARE(wr2.first.ptr[i], wr.second.ptr[i]);
     }
 
     for (reg i = 0; i < n2; ++i) {
-        ::new (static_cast<void*>(wr2.first.slts[i])) T(seq++);
+        ::new (static_cast<void*>(wr2.first.ptr[i])) T(seq++);
     }
     q.publish(n2);
 
@@ -1780,7 +1780,7 @@ static void bulk_regions_partial_publish_matrix_suite(Q& q)
         QCOMPARE(q.size(), reg{4});
 
         QVERIFY(q.free() >= want);
-        auto wr = q.claim_write(want);
+        auto wr = q.claim_write(::spsc::unsafe, want);
         QCOMPARE(wr.total, want);
         QVERIFY(wr.second.count > 0u);
 
@@ -1793,7 +1793,7 @@ static void bulk_regions_partial_publish_matrix_suite(Q& q)
             q.pop(cap - 6u);
 
             QVERIFY(q.free() >= want);
-            auto wrk = q.claim_write(want);
+            auto wrk = q.claim_write(::spsc::unsafe, want);
             QCOMPARE(wrk.total, want);
             QVERIFY(wrk.second.count > 0u);
             QVERIFY(k >= 1u && k < want);
@@ -1802,11 +1802,11 @@ static void bulk_regions_partial_publish_matrix_suite(Q& q)
             std::uint32_t seq = 1000u;
             reg done = 0u;
             for (reg i = 0; i < wrk.first.count && done < k; ++i) {
-                ::new (static_cast<void*>(wrk.first.slts[i])) T(seq++);
+                ::new (static_cast<void*>(wrk.first.ptr[i])) T(seq++);
                 ++done;
             }
             for (reg i = 0; i < wrk.second.count && done < k; ++i) {
-                ::new (static_cast<void*>(wrk.second.slts[i])) T(seq++);
+                ::new (static_cast<void*>(wrk.second.ptr[i])) T(seq++);
                 ++done;
             }
             QCOMPARE(done, k);
@@ -1949,15 +1949,15 @@ static void regression_matrix_suite(Q& q, const char* tag)
 
     auto do_bulk = [&](std::uint32_t base, reg n) {
         QVERIFY(q.free() >= n);
-        auto wr = q.claim_write(n);
+        auto wr = q.claim_write(::spsc::unsafe, n);
         QCOMPARE(wr.total, n);
 
         std::uint32_t seq = base;
         for (reg i = 0; i < wr.first.count; ++i) {
-            ::new (static_cast<void*>(wr.first.slts[i])) T(seq++);
+            ::new (static_cast<void*>(wr.first.ptr[i])) T(seq++);
         }
         for (reg i = 0; i < wr.second.count; ++i) {
-            ::new (static_cast<void*>(wr.second.slts[i])) T(seq++);
+            ::new (static_cast<void*>(wr.second.ptr[i])) T(seq++);
         }
         q.publish(n);
 
@@ -1970,17 +1970,17 @@ static void regression_matrix_suite(Q& q, const char* tag)
     auto do_bulk_partial = [&](std::uint32_t base, reg n, reg k) {
         QVERIFY(q.free() >= n);
         QVERIFY(k <= n);
-        auto wr = q.claim_write(n);
+        auto wr = q.claim_write(::spsc::unsafe, n);
         QCOMPARE(wr.total, n);
 
         std::uint32_t seq = base;
         reg done = 0u;
         for (reg i = 0; i < wr.first.count && done < k; ++i) {
-            ::new (static_cast<void*>(wr.first.slts[i])) T(seq++);
+            ::new (static_cast<void*>(wr.first.ptr[i])) T(seq++);
             ++done;
         }
         for (reg i = 0; i < wr.second.count && done < k; ++i) {
-            ::new (static_cast<void*>(wr.second.slts[i])) T(seq++);
+            ::new (static_cast<void*>(wr.second.ptr[i])) T(seq++);
             ++done;
         }
         QCOMPARE(done, k);
@@ -2061,7 +2061,7 @@ static void claim_read_consume_scenarios_suite(Q& q)
 
     // Scenario 0: empty => claim_read() must be empty.
     {
-        const auto r = q.claim_read();
+        const auto r = q.claim_read(::spsc::unsafe);
         QCOMPARE(r.total, reg{0});
         QVERIFY(r.first.empty());
         QVERIFY(r.second.empty());
@@ -2074,7 +2074,7 @@ static void claim_read_consume_scenarios_suite(Q& q)
         }
         QCOMPARE(q.size(), reg{6});
 
-        const auto r = q.claim_read(3u);
+        const auto r = q.claim_read(::spsc::unsafe, 3u);
         QCOMPARE(r.total, reg{3});
         QCOMPARE(r.first.count + r.second.count, r.total);
 
@@ -2082,12 +2082,12 @@ static void claim_read_consume_scenarios_suite(Q& q)
         std::vector<std::uint32_t> seen;
         seen.reserve(static_cast<std::size_t>(r.total));
         for (reg i = 0; i < static_cast<reg>(r.first.count); ++i) {
-            QVERIFY(r.first.slts[i] != nullptr);
-            seen.push_back(r.first.slts[i]->seq);
+            QVERIFY(r.first.ptr[i] != nullptr);
+            seen.push_back(r.first.ptr[i]->seq);
         }
         for (reg i = 0; i < static_cast<reg>(r.second.count); ++i) {
-            QVERIFY(r.second.slts[i] != nullptr);
-            seen.push_back(r.second.slts[i]->seq);
+            QVERIFY(r.second.ptr[i] != nullptr);
+            seen.push_back(r.second.ptr[i]->seq);
         }
         QCOMPARE(seen.size(), static_cast<std::size_t>(r.total));
         QCOMPARE(seen[0], std::uint32_t{1});
@@ -2120,7 +2120,7 @@ static void claim_read_consume_scenarios_suite(Q& q)
 
         QVERIFY(q.size() >= reg{6});
 
-        const auto r = q.claim_read();
+        const auto r = q.claim_read(::spsc::unsafe);
         QCOMPARE(r.total, q.size());
         QCOMPARE(r.first.count + r.second.count, r.total);
 
@@ -2128,10 +2128,10 @@ static void claim_read_consume_scenarios_suite(Q& q)
         std::vector<std::uint32_t> seqs;
         seqs.reserve(static_cast<std::size_t>(r.total));
         for (reg i = 0; i < static_cast<reg>(r.first.count); ++i) {
-            seqs.push_back(r.first.slts[i]->seq);
+            seqs.push_back(r.first.ptr[i]->seq);
         }
         for (reg i = 0; i < static_cast<reg>(r.second.count); ++i) {
-            seqs.push_back(r.second.slts[i]->seq);
+            seqs.push_back(r.second.ptr[i]->seq);
         }
 
         QCOMPARE(seqs.size(), static_cast<std::size_t>(r.total));
@@ -2149,7 +2149,7 @@ static void claim_read_consume_scenarios_suite(Q& q)
         q.emplace(42u);
         q.emplace(43u);
 
-        const auto r = q.claim_read(0u);
+        const auto r = q.claim_read(::spsc::unsafe, 0u);
         QCOMPARE(r.total, reg{0});
         QVERIFY(r.first.empty());
         QVERIFY(r.second.empty());
