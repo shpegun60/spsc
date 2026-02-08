@@ -481,7 +481,29 @@ public:
         }
 
         const size_type cap = Base::capacity();
-        size_type total = static_cast<size_type>(Base::free());
+        if (RB_UNLIKELY(cap == 0u)) {
+            return {};
+        }
+
+        size_type head = static_cast<size_type>(Base::head());
+        size_type tail = static_cast<size_type>(Base::tail());
+        size_type used = static_cast<size_type>(head - tail);
+
+        // Atomic backends can yield an inconsistent snapshot (used > cap).
+        if (RB_UNLIKELY(used > cap)) {
+            head = static_cast<size_type>(Base::head());
+            tail = static_cast<size_type>(Base::tail());
+            used = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(used > cap)) {
+                return {}; // conservative
+            }
+        }
+
+        if (RB_UNLIKELY(used >= cap)) {
+            return {};
+        }
+
+        size_type total = static_cast<size_type>(cap - used);
         if (max_count < total) {
             total = max_count;
         }
@@ -489,20 +511,24 @@ public:
             return {};
         }
 
-        const size_type wi = static_cast<size_type>(Base::write_index());
-        const size_type w2e = static_cast<size_type>(cap - wi);
-        const size_type first_n = (w2e < total) ? w2e : total;
+        const size_type mask  = Base::mask();
+        const size_type idx   = static_cast<size_type>(head & mask);
+        const size_type to_end = static_cast<size_type>(cap - idx);
+
+        const size_type first_n  = (to_end < total) ? to_end : total;
+        const size_type second_n = static_cast<size_type>(total - first_n);
 
         write_regions r{};
-        r.first.raw = reinterpret_cast<std::byte *>(storage_ + wi);
+        r.first.raw = reinterpret_cast<std::byte *>(storage_ + idx);
         r.first.count = first_n;
 
-        r.second.count = static_cast<size_type>(total - first_n);
-        r.second.raw = (r.second.count != 0u) ? reinterpret_cast<std::byte *>(storage_) : nullptr;
+        r.second.count = second_n;
+        r.second.raw = (second_n != 0u) ? reinterpret_cast<std::byte *>(storage_) : nullptr;
 
         r.total = total;
         return r;
     }
+
 
     [[nodiscard]] read_regions
     claim_read(const ::spsc::unsafe_t, const size_type max_count =
@@ -512,9 +538,29 @@ public:
         }
 
         const size_type cap = Base::capacity();
-        const size_type tail = static_cast<size_type>(Base::tail());
+        if (RB_UNLIKELY(cap == 0u)) {
+            return {};
+        }
 
-        size_type total = static_cast<size_type>(Base::size());
+        size_type tail = static_cast<size_type>(Base::tail());
+        size_type head = static_cast<size_type>(Base::head());
+        size_type av   = static_cast<size_type>(head - tail);
+
+        // Atomic backends can yield an inconsistent snapshot (av > cap).
+        if (RB_UNLIKELY(av > cap)) {
+            tail = static_cast<size_type>(Base::tail());
+            head = static_cast<size_type>(Base::head());
+            av   = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(av > cap)) {
+                return {}; // conservative
+            }
+        }
+
+        if (RB_UNLIKELY(av == 0u)) {
+            return {};
+        }
+
+        size_type total = av;
         if (max_count < total) {
             total = max_count;
         }
@@ -522,22 +568,19 @@ public:
             return {};
         }
 
-        const size_type mask = Base::mask();
-        const size_type ri = static_cast<size_type>(tail & mask);
-        const size_type r2e = static_cast<size_type>(cap - ri);
-        const size_type first_n = (r2e < total) ? r2e : total;
+        const size_type mask   = Base::mask();
+        const size_type idx    = static_cast<size_type>(tail & mask);
+        const size_type to_end = static_cast<size_type>(cap - idx);
+
+        const size_type first_n  = (to_end < total) ? to_end : total;
+        const size_type second_n = static_cast<size_type>(total - first_n);
 
         read_regions r{};
-        r.first.ptr = slot_ptr(ri);
+        r.first.ptr   = slot_ptr(idx);
         r.first.count = first_n;
 
-        if (total > first_n) {
-            r.second.ptr = slot_ptr(0u);
-            r.second.count = static_cast<size_type>(total - first_n);
-        } else {
-            r.second.ptr = nullptr;
-            r.second.count = 0u;
-        }
+        r.second.count = second_n;
+        r.second.ptr   = (second_n != 0u) ? slot_ptr(0u) : nullptr;
 
         r.total = total;
         return r;
