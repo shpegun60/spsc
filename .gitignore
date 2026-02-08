@@ -1,0 +1,75 @@
+# =========================
+# Qt / Qt Creator
+# =========================
+
+# Qt Creator user-specific files
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+*.qtc_clangd
+CMakeLists.txt.user
+
+# Qt Creator build directories (common patterns)
+build/
+build-*/
+cmake-build-*/
+out/
+out-*/
+
+# Qt generated (qmake/moc/rcc/ui)
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.moc
+
+# qmake / make artifacts
+Makefile*
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+*.pdb
+*.idb
+*.ilk
+*.exe
+*.app
+*.out
+
+# Qt resource cache / intermediate
+*.rcc
+*.qmlc
+*.jsc
+*.prl
+
+# =========================
+# CMake (if used)
+# =========================
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+*.cmake
+
+# =========================
+# General junk
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.log
+
+# IDE (optional)
+.vscode/
+.idea/
