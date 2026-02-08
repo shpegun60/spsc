@@ -790,48 +790,64 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_tail(const reg n) noexcept {
     _tail.add(n);
 }
 
-
-
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::swap_base(SPSCbase &other) noexcept {
     if (this == &other) {
         return;
     }
 
+    const reg a_head = head();
+    const reg a_tail = tail();
+    const reg b_head = other.head();
+    const reg b_tail = other.tail();
+
     if constexpr (C == 0) {
-        // Dynamic geometry: capacity is part of the base state, so reuse init().
-        // init() also refreshes shadows via sync_cache() on success.
-        const reg a_cap  = capacity();
-        const reg a_head = head();
-        const reg a_tail = tail();
+        const reg a_cap = capacity();
+        const reg b_cap = other.capacity();
 
-        const reg b_cap  = other.capacity();
-        const reg b_head = other.head();
-        const reg b_tail = other.tail();
+        // Non-concurrent contract: states must already be sane.
+        SPSC_ASSERT((a_cap == 0u) ? (a_head == 0u && a_tail == 0u)
+                                  : (static_cast<reg>(a_head - a_tail) <= a_cap));
+        SPSC_ASSERT((b_cap == 0u) ? (b_head == 0u && b_tail == 0u)
+                                  : (static_cast<reg>(b_head - b_tail) <= b_cap));
 
-        const bool ok0 = init(b_cap, b_head, b_tail);
-        const bool ok1 = other.init(a_cap, a_head, a_tail);
+        // Swap only geometry (capacity/mask) without touching head/tail.
+        auto &geo_a = static_cast<Base &>(*this);   // Base == CapacityCtrl<C, PolicyT>
+        auto &geo_b = static_cast<Base &>(other);
 
-        // swap_base() is non-concurrent. If this trips, someone called it in "live" mode
-        // or one of the bases was already invalid. Better explode in debug than silently clear.
-        SPSC_ASSERT(ok0 && ok1);
-        (void)ok0; (void)ok1;
-    } else {
-        // Static geometry: do NOT call init(). swap must be no-fail under the non-concurrent contract.
-        const reg a_head = head();
-        const reg a_tail = tail();
-        const reg b_head = other.head();
-        const reg b_tail = other.tail();
+        (void)geo_a.init(b_cap);
+        (void)geo_b.init(a_cap);
 
-        set_head(b_head);
-        set_tail(b_tail);
-        other.set_head(a_head);
-        other.set_tail(a_tail);
+        // Now swap indices.
+        if (RB_UNLIKELY(b_cap == 0u)) {
+            set_head(0u);
+            set_tail(0u);
+        } else {
+            set_head(b_head);
+            set_tail(b_tail);
+        }
 
-        // Keep shadow/cached values coherent (no correctness dependency on reading atomics twice).
+        if (RB_UNLIKELY(a_cap == 0u)) {
+            other.set_head(0u);
+            other.set_tail(0u);
+        } else {
+            other.set_head(a_head);
+            other.set_tail(a_tail);
+        }
+
         sync_cache();
         other.sync_cache();
+        return;
     }
+
+    // Static geometry: just swap indices, then keep caches coherent.
+    set_head(b_head);
+    set_tail(b_tail);
+    other.set_head(a_head);
+    other.set_tail(a_tail);
+
+    sync_cache();
+    other.sync_cache();
 }
 
 

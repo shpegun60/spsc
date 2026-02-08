@@ -228,21 +228,12 @@ public:
                 (void)other.Base::init(b_cap, b_head, b_tail);
             }
         } else {
+            // Swap storage first, then swap base state (indices + cache).
+            // swap_base() is non-concurrent and keeps shadows coherent.
             std::swap(storage_, other.storage_);
             std::swap(this->isAllocated_, other.isAllocated_);
 
-            const size_type a_head = Base::head();
-            const size_type a_tail = Base::tail();
-            const size_type b_head = other.Base::head();
-            const size_type b_tail = other.Base::tail();
-
-            Base::set_head(b_head);
-            Base::set_tail(b_tail);
-            Base::sync_cache();
-
-            other.Base::set_head(a_head);
-            other.Base::set_tail(a_tail);
-            other.Base::sync_cache();
+            this->Base::swap_base(static_cast<Base &>(other));
         }
     }
 
@@ -1304,8 +1295,10 @@ private:
         storage_ = other.storage_;
 
         if constexpr (kDynamic) {
-            (void)Base::init(other.Base::capacity(), other.Base::head(),
-                              other.Base::tail());
+            const bool ok = Base::init(other.Base::capacity(), other.Base::head(),
+                                       other.Base::tail());
+            SPSC_ASSERT(ok);
+            (void)ok;
             other.storage_ = nullptr;
             (void)other.Base::init(0u);
         } else {
