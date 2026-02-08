@@ -251,38 +251,20 @@ public:
             return;
         }
 
-        const size_type a_cap = Base::capacity();
-        const size_type a_head = Base::head();
-        const size_type a_tail = Base::tail();
-
-        const size_type b_cap = other.Base::capacity();
-        const size_type b_head = other.Base::head();
-        const size_type b_tail = other.Base::tail();
-
         if constexpr (kDynamic) {
-            SPSC_ASSERT((slots_ == nullptr) == (a_cap == 0u));
-            SPSC_ASSERT((other.slots_ == nullptr) == (b_cap == 0u));
+            SPSC_ASSERT((slots_ == nullptr) == (Base::capacity() == 0u));
+            SPSC_ASSERT((other.slots_ == nullptr) == (other.Base::capacity() == 0u));
 
             std::swap(slots_, other.slots_);
+            this->Base::swap_base(static_cast<Base&>(other));
 
-            const bool ok1 =
-                (b_cap != 0u) ? Base::init(b_cap, b_head, b_tail) : Base::init(0u);
-            const bool ok2 = (a_cap != 0u) ? other.Base::init(a_cap, a_head, a_tail)
-                                           : other.Base::init(0u);
-
-            if (RB_UNLIKELY(!ok1 || !ok2)) {
-                std::swap(slots_, other.slots_);
-                (void)Base::init(a_cap, a_head, a_tail);
-                (void)other.Base::init(b_cap, b_head, b_tail);
-            }
+            SPSC_ASSERT((slots_ == nullptr) == (Base::capacity() == 0u));
+            SPSC_ASSERT((other.slots_ == nullptr) == (other.Base::capacity() == 0u));
         } else {
             std::swap(slots_, other.slots_);
             std::swap(this->isAllocated_, other.isAllocated_);
 
-            // Capacity is fixed for both instances.
-            [[maybe_unused]] const bool ok1 = Base::init(b_head, b_tail);
-            [[maybe_unused]] const bool ok2 = other.Base::init(a_head, a_tail);
-            SPSC_ASSERT(ok1 && ok2);
+            this->Base::swap_base(static_cast<Base&>(other));
         }
     }
 
@@ -844,6 +826,8 @@ public:
     }
 
     void destroy() noexcept {
+        constexpr bool kTrivialDtor = std::is_trivially_destructible_v<T>;
+
         if constexpr (kDynamic) {
             pointer *ptr = slots_;
             const size_type cap = Base::capacity();
@@ -859,26 +843,30 @@ public:
                 return;
             }
 
-            // Best-effort: destroy live objects if state looks sane.
             const size_type used = static_cast<size_type>(head - tail);
-            if (used <= cap) {
+            const bool sane = (used <= cap);
+
+            // Best-effort: destroy live objects only if state looks sane.
+            if (sane) {
                 const size_type mask = cap - 1u;
                 for (size_type k = 0; k < used; ++k) {
-                    // Manual launder for destruction
                     pointer p = std::launder(ptr[(tail + k) & mask]);
                     detail::destroy_at(p);
                 }
             }
 
-            // Free all storages
-            object_allocator_type oa{};
-            for (size_type i = 0; i < cap; ++i) {
-                if (ptr[i]) {
-                    object_alloc_traits::deallocate(oa, ptr[i], 1);
+            // If the state is corrupted and T has a non-trivial destructor, deallocating per-slot
+            // storage could deallocate memory that still holds live objects (UB). Prefer leaking.
+            if (sane || kTrivialDtor) {
+                object_allocator_type oa{};
+                for (size_type i = 0; i < cap; ++i) {
+                    if (ptr[i]) {
+                        object_alloc_traits::deallocate(oa, ptr[i], 1);
+                    }
                 }
             }
 
-            // Free pointer ring
+            // Free pointer ring (always safe).
             slot_allocator_type sa{};
             slot_alloc_traits::deallocate(sa, ptr, cap);
         } else {
@@ -886,13 +874,15 @@ public:
                 return;
             }
 
-            // Destroy live objects if state looks sane.
             const size_type cap = Base::capacity();
             const size_type head = Base::head();
             const size_type tail = Base::tail();
 
             const size_type used = static_cast<size_type>(head - tail);
-            if (used <= cap && cap != 0u) {
+            const bool sane = (cap != 0u) && (used <= cap);
+
+            // Best-effort: destroy live objects only if state looks sane.
+            if (sane) {
                 const size_type mask = cap - 1u;
                 for (size_type k = 0; k < used; ++k) {
                     pointer p = std::launder(slots_[(tail + k) & mask]);
@@ -900,10 +890,17 @@ public:
                 }
             }
 
-            object_allocator_type oa{};
-            for (size_type i = 0; i < Capacity; ++i) {
-                if (slots_[i]) {
-                    object_alloc_traits::deallocate(oa, slots_[i], 1);
+            if (sane || kTrivialDtor) {
+                object_allocator_type oa{};
+                for (size_type i = 0; i < Capacity; ++i) {
+                    if (slots_[i]) {
+                        object_alloc_traits::deallocate(oa, slots_[i], 1);
+                        slots_[i] = nullptr;
+                    }
+                }
+            } else {
+                // Corrupted state with non-trivial T: leak storages to avoid UB, but invalidate pointers.
+                for (size_type i = 0; i < Capacity; ++i) {
                     slots_[i] = nullptr;
                 }
             }
