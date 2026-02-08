@@ -799,6 +799,8 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::swap_base(SPSCbase &other) noexcept {
     }
 
     if constexpr (C == 0) {
+        // Dynamic geometry: capacity is part of the base state, so reuse init().
+        // init() also refreshes shadows via sync_cache() on success.
         const reg a_cap  = capacity();
         const reg a_head = head();
         const reg a_tail = tail();
@@ -807,20 +809,31 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::swap_base(SPSCbase &other) noexcept {
         const reg b_head = other.head();
         const reg b_tail = other.tail();
 
-        // Both init() paths call sync_cache(), so shadows stay coherent.
-        (void)init(b_cap, b_head, b_tail);
-        (void)other.init(a_cap, a_head, a_tail);
+        const bool ok0 = init(b_cap, b_head, b_tail);
+        const bool ok1 = other.init(a_cap, a_head, a_tail);
+
+        // swap_base() is non-concurrent. If this trips, someone called it in "live" mode
+        // or one of the bases was already invalid. Better explode in debug than silently clear.
+        SPSC_ASSERT(ok0 && ok1);
+        (void)ok0; (void)ok1;
     } else {
+        // Static geometry: do NOT call init(). swap must be no-fail under the non-concurrent contract.
         const reg a_head = head();
         const reg a_tail = tail();
         const reg b_head = other.head();
         const reg b_tail = other.tail();
 
-        // Both init() paths call sync_cache(), so shadows stay coherent.
-        (void)init(b_head, b_tail);
-        (void)other.init(a_head, a_tail);
+        set_head(b_head);
+        set_tail(b_tail);
+        other.set_head(a_head);
+        other.set_tail(a_tail);
+
+        // Keep shadow/cached values coherent (no correctness dependency on reading atomics twice).
+        sync_cache();
+        other.sync_cache();
     }
 }
+
 
 } // namespace spsc
 
