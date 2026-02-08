@@ -38,6 +38,7 @@
 #include "base/SPSCbase.hpp"      // ::spsc::SPSCbase<Capacity, Policy>, reg
 #include "base/spsc_alloc.hpp"    // ::spsc::alloc::default_alloc
 #include "base/spsc_snapshot.hpp" // ::spsc::snapshot_view, ::spsc::snapshot_traits
+#include "base/spsc_regions.hpp"  // ::spsc::bulk::region, ::spsc::bulk::regions
 #include "base/spsc_tools.hpp"    // RB_FORCEINLINE, RB_UNLIKELY, macros
 
 namespace spsc {
@@ -170,27 +171,10 @@ public:
                   "[spsc::fifo]: static Capacity exceeds RB_MAX_UNAMBIGUOUS.");
 
     // ------------------------------------------------------------------------------------------
-    // Region Structs (Bulk Operations)
+    // Region Types (Bulk Operations)
     // ------------------------------------------------------------------------------------------
-    struct region {
-        pointer ptr{nullptr};
-        size_type count{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return count == 0u; }
-#if SPSC_HAS_SPAN
-        [[nodiscard]] std::span<value_type> span() const noexcept {
-            return {ptr, count};
-        }
-#endif /* SPSC_HAS_SPAN */
-    };
-
-    struct regions {
-        region first{};
-        region second{};
-        size_type total{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return total == 0u; }
-    };
+    using region = ::spsc::bulk::region<pointer, size_type>;
+    using regions = ::spsc::bulk::regions<pointer, size_type>;
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Destructor
@@ -549,15 +533,36 @@ public:
     // Bulk / Regions
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] regions
-    claim_write(const size_type max_count =
-                std::numeric_limits<size_type>::max()) noexcept {
+    claim_write(const ::spsc::unsafe_t, const size_type max_count =
+                                        std::numeric_limits<size_type>::max()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
 
         const size_type cap = Base::capacity();
+        if (RB_UNLIKELY(cap == 0u)) {
+            return {};
+        }
 
-        size_type total = static_cast<size_type>(Base::free());
+        size_type head = static_cast<size_type>(Base::head());
+        size_type tail = static_cast<size_type>(Base::tail());
+        size_type used = static_cast<size_type>(head - tail);
+
+        // Atomic backends can yield an inconsistent snapshot (used > cap).
+        if (RB_UNLIKELY(used > cap)) {
+            head = static_cast<size_type>(Base::head());
+            tail = static_cast<size_type>(Base::tail());
+            used = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(used > cap)) {
+                return {}; // conservative
+            }
+        }
+
+        if (RB_UNLIKELY(used >= cap)) {
+            return {};
+        }
+
+        size_type total = static_cast<size_type>(cap - used);
         if (max_count < total) {
             total = max_count;
         }
@@ -565,32 +570,57 @@ public:
             return {};
         }
 
-        const size_type wi = static_cast<size_type>(Base::write_index()); // masked
-        const size_type w2e = static_cast<size_type>(cap - wi);
-        const size_type first_n = (w2e < total) ? w2e : total;
+        const size_type mask  = Base::mask();
+        const size_type idx   = static_cast<size_type>(head & mask);
+        const size_type to_end = static_cast<size_type>(cap - idx);
+
+        const size_type first_n  = (to_end < total) ? to_end : total;
+        const size_type second_n = static_cast<size_type>(total - first_n);
 
         regions r{};
         auto *const buf = data();
-        r.first.ptr = buf + wi;
+
+        r.first.ptr = buf + idx;
         r.first.count = first_n;
 
-        r.second.count = static_cast<size_type>(total - first_n);
-        r.second.ptr = (r.second.count != 0u) ? buf : nullptr;
+        r.second.count = second_n;
+        r.second.ptr = (second_n != 0u) ? buf : nullptr;
 
         r.total = total;
         return r;
     }
 
     [[nodiscard]] regions
-    claim_read(const size_type max_count =
-               std::numeric_limits<size_type>::max()) noexcept {
+    claim_read(const ::spsc::unsafe_t, const size_type max_count =
+                                       std::numeric_limits<size_type>::max()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
 
         const size_type cap = Base::capacity();
+        if (RB_UNLIKELY(cap == 0u)) {
+            return {};
+        }
 
-        size_type total = static_cast<size_type>(Base::size());
+        size_type tail = static_cast<size_type>(Base::tail());
+        size_type head = static_cast<size_type>(Base::head());
+        size_type av   = static_cast<size_type>(head - tail);
+
+        // Atomic backends can yield an inconsistent snapshot (av > cap).
+        if (RB_UNLIKELY(av > cap)) {
+            tail = static_cast<size_type>(Base::tail());
+            head = static_cast<size_type>(Base::head());
+            av   = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(av > cap)) {
+                return {}; // conservative
+            }
+        }
+
+        if (RB_UNLIKELY(av == 0u)) {
+            return {};
+        }
+
+        size_type total = av;
         if (max_count < total) {
             total = max_count;
         }
@@ -598,17 +628,21 @@ public:
             return {};
         }
 
-        const size_type ri = static_cast<size_type>(Base::read_index()); // masked
-        const size_type r2e = static_cast<size_type>(cap - ri);
-        const size_type first_n = (r2e < total) ? r2e : total;
+        const size_type mask  = Base::mask();
+        const size_type idx   = static_cast<size_type>(tail & mask);
+        const size_type to_end = static_cast<size_type>(cap - idx);
+
+        const size_type first_n  = (to_end < total) ? to_end : total;
+        const size_type second_n = static_cast<size_type>(total - first_n);
 
         regions r{};
         auto *const buf = data();
-        r.first.ptr = buf + ri;
+
+        r.first.ptr = buf + idx;
         r.first.count = first_n;
 
-        r.second.count = static_cast<size_type>(total - first_n);
-        r.second.ptr = (r.second.count != 0u) ? buf : nullptr;
+        r.second.count = second_n;
+        r.second.ptr = (second_n != 0u) ? buf : nullptr;
 
         r.total = total;
         return r;

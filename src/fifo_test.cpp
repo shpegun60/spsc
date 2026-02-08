@@ -190,10 +190,10 @@ static void api_compile_smoke() {
 
         decltype(std::declval<Q&>()[size_type{0u}]),
 
-        decltype(std::declval<Q&>().claim_write()),
-        decltype(std::declval<Q&>().claim_write(size_type{1u})),
-        decltype(std::declval<Q&>().claim_read()),
-        decltype(std::declval<Q&>().claim_read(size_type{1u})),
+        decltype(std::declval<Q&>().claim_write(::spsc::unsafe)),
+        decltype(std::declval<Q&>().claim_write(::spsc::unsafe, size_type{1u})),
+        decltype(std::declval<Q&>().claim_read(::spsc::unsafe)),
+        decltype(std::declval<Q&>().claim_read(::spsc::unsafe, size_type{1u})),
 
         decltype(std::declval<Q&>().make_snapshot()),
         decltype(std::declval<const Q&>().make_snapshot()),
@@ -622,7 +622,7 @@ static void test_claim_publish(Q& q) {
         const reg n = reg{4u};
         QVERIFY(q.free() >= n);
 
-        auto wr = q.claim_write(n);
+        auto wr = q.claim_write(::spsc::unsafe, n);
         QCOMPARE(wr.total, n);
 
         int v = 1000;
@@ -632,7 +632,7 @@ static void test_claim_publish(Q& q) {
         QVERIFY(q.try_publish(wr.total));
         QCOMPARE(q.size(), n);
 
-        auto rr = q.claim_read(reg{10u});
+        auto rr = q.claim_read(::spsc::unsafe, reg{10u});
         QCOMPARE(rr.total, n);
         q.pop(rr.total);
         QVERIFY(q.empty());
@@ -650,7 +650,7 @@ static void test_claim_publish(Q& q) {
     QVERIFY(!q.try_push(Traced{999}));
     QCOMPARE(q.try_claim(), nullptr);
     QVERIFY(!q.try_publish());
-    auto wr = q.claim_write();
+    auto wr = q.claim_write(::spsc::unsafe);
     QVERIFY(wr.empty());
 
     // drain
@@ -728,30 +728,30 @@ static void test_bulk_regions(Q& q) {
 
     // empty read regions
     {
-        auto rr = q.claim_read();
+        auto rr = q.claim_read(::spsc::unsafe);
         QVERIFY(rr.empty());
-        rr = q.claim_read(reg{10u});
+        rr = q.claim_read(::spsc::unsafe, reg{10u});
         QVERIFY(rr.empty());
     }
 
     // max_count == 0 must always yield empty regions
     {
-        auto wr0 = q.claim_write(reg{0u});
+        auto wr0 = q.claim_write(::spsc::unsafe, reg{0u});
         QVERIFY(wr0.empty());
 
-        auto rr0 = q.claim_read(reg{0u});
+        auto rr0 = q.claim_read(::spsc::unsafe, reg{0u});
         QVERIFY(rr0.empty());
     }
 
     // want > available should clamp to what exists
     {
-        auto rr = q.claim_read(reg{999u});
+        auto rr = q.claim_read(::spsc::unsafe, reg{999u});
         QVERIFY(rr.empty());
     }
 
     // write region on empty
     {
-        auto wr = q.claim_write(reg{5u});
+        auto wr = q.claim_write(::spsc::unsafe, reg{5u});
         QVERIFY(wr.total <= q.free());
         QVERIFY(wr.total > 0u);
         QVERIFY(wr.first.ptr != nullptr);
@@ -768,7 +768,7 @@ static void test_bulk_regions(Q& q) {
 
     // read region should match what we wrote
     {
-        auto rr = q.claim_read();
+        auto rr = q.claim_read(::spsc::unsafe);
         QVERIFY(rr.total > 0u);
         std::vector<int> got;
         got.reserve(rr.total);
@@ -786,7 +786,7 @@ static void test_bulk_regions(Q& q) {
     // want > free should clamp to free
     {
         q.clear();
-        auto wr = q.claim_write(q.capacity() * 2u);
+        auto wr = q.claim_write(::spsc::unsafe, q.capacity() * 2u);
         QVERIFY(!wr.empty());
         QCOMPARE(wr.total, q.free());
         QCOMPARE(wr.first.count + wr.second.count, wr.total);
@@ -795,7 +795,7 @@ static void test_bulk_regions(Q& q) {
     // claim_write() default max_count should return up to free() (possibly split).
     {
         q.clear();
-        auto wr = q.claim_write();
+        auto wr = q.claim_write(::spsc::unsafe);
         QVERIFY(!wr.empty());
         QCOMPARE(wr.total, q.free());
         QCOMPARE(wr.first.count + wr.second.count, wr.total);
@@ -809,7 +809,7 @@ static void test_bulk_regions(Q& q) {
         const reg K = reg{3u};
         QVERIFY(q.free() >= N);
 
-        auto wr = q.claim_write(N);
+        auto wr = q.claim_write(::spsc::unsafe, N);
         QCOMPARE(wr.total, N);
 
         int v = 500;
@@ -823,7 +823,7 @@ static void test_bulk_regions(Q& q) {
         q.publish(K);
         QCOMPARE(q.size(), K);
 
-        auto rr = q.claim_read(reg{10u});
+        auto rr = q.claim_read(::spsc::unsafe, reg{10u});
         QCOMPARE(rr.total, K);
 
         // must see only first K values [500..502]
@@ -847,7 +847,7 @@ static void test_bulk_regions(Q& q) {
         const reg K = reg{3u};
         QVERIFY(q.free() >= N);
 
-        auto wr = q.claim_write(N);
+        auto wr = q.claim_write(::spsc::unsafe, N);
         QCOMPARE(wr.total, N);
 
         int v = 700;
@@ -856,7 +856,7 @@ static void test_bulk_regions(Q& q) {
         q.publish(N);
         QCOMPARE(q.size(), N);
 
-        auto rr = q.claim_read(N);
+        auto rr = q.claim_read(::spsc::unsafe, N);
         QCOMPARE(rr.total, N);
 
         q.pop(K);
@@ -882,7 +882,7 @@ static void test_bulk_regions(Q& q) {
         for (reg i = 0; i < fill; ++i) QVERIFY(q.try_push(Traced{100 + static_cast<int>(i)}));
         q.pop(); // tail_phys becomes 1
 
-        auto wr = q.claim_write();
+        auto wr = q.claim_write(::spsc::unsafe);
         QVERIFY(wr.total > 0u);
         QVERIFY(wr.first.count > 0u);
         QVERIFY(wr.second.count > 0u);
@@ -906,7 +906,7 @@ static void test_bulk_regions(Q& q) {
         QVERIFY(q.try_push(Traced{2002}));
         QVERIFY(q.try_push(Traced{2003}));
 
-        auto rr = q.claim_read();
+        auto rr = q.claim_read(::spsc::unsafe);
         QCOMPARE(rr.total, reg{6u});
         // read_size() should match the contiguous first region.
         QCOMPARE(q.read_size(), rr.first.count);
@@ -1123,7 +1123,7 @@ static void paranoid_random_fuzz(Q& q, int seed, int iters) {
 
         case 2: { // bulk write
             const reg want = static_cast<reg>((rng() % 8u) + 1u);
-            auto wr = q.claim_write(want);
+            auto wr = q.claim_write(::spsc::unsafe, want);
             if (wr.total == 0u) {
                 QVERIFY(q.full() || !q.is_valid());
                 break;
@@ -1139,7 +1139,7 @@ static void paranoid_random_fuzz(Q& q, int seed, int iters) {
 
         case 3: { // bulk read
             const reg want = static_cast<reg>((rng() % 8u) + 1u);
-            auto rr = q.claim_read(want);
+            auto rr = q.claim_read(::spsc::unsafe, want);
             if (rr.total == 0u) {
                 QVERIFY(model.empty());
                 QVERIFY(q.empty());
@@ -1263,14 +1263,14 @@ static void test_invalid_queue_behavior(Q& q) {
 
     // Bulk API should return empty regions.
     {
-        auto rr = q.claim_read();
+        auto rr = q.claim_read(::spsc::unsafe);
         QVERIFY(rr.empty());
-        rr = q.claim_read(reg{8u});
+        rr = q.claim_read(::spsc::unsafe, reg{8u});
         QVERIFY(rr.empty());
 
-        auto wr = q.claim_write();
+        auto wr = q.claim_write(::spsc::unsafe);
         QVERIFY(wr.empty());
-        wr = q.claim_write(reg{8u});
+        wr = q.claim_write(::spsc::unsafe, reg{8u});
         QVERIFY(wr.empty());
     }
 
@@ -1877,7 +1877,7 @@ static void regression_matrix_one_policy() {
 
             // Now claim almost full to likely split.
             const reg want = cap - 1u;
-            auto wr = q.claim_write(want);
+            auto wr = q.claim_write(::spsc::unsafe, want);
             QCOMPARE(wr.first.count + wr.second.count, wr.total);
             QCOMPARE(wr.total, want);
 
@@ -1893,7 +1893,7 @@ static void regression_matrix_one_policy() {
             QCOMPARE(q.size(), cap);
             QVERIFY(q.full());
 
-            auto rd = q.claim_read();
+            auto rd = q.claim_read(::spsc::unsafe);
             QCOMPARE(rd.first.count + rd.second.count, rd.total);
             QCOMPARE(rd.total, cap);
 
@@ -1969,10 +1969,10 @@ static void api_compile_smoke_one() {
     static_assert(std::is_void_v<decltype(std::declval<Q&>().pop(size_type{1u}))>);
 
     // Bulk regions.
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write()), regions>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(size_type{1u})), regions>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read()), regions>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read(size_type{1u})), regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe)), regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe, size_type{1u})), regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read(::spsc::unsafe)), regions>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_read(::spsc::unsafe, size_type{1u})), regions>);
 
     using Snap = decltype(std::declval<Q&>().make_snapshot());
     static_assert(std::is_void_v<decltype(std::declval<Q&>().consume(std::declval<const Snap&>()))>);

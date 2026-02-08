@@ -154,7 +154,7 @@ static cell bench_st_bulk(Q& q) {
 
     scoped_timer tm;
     for (int r = 0; r < kRoundsBulk; ++r) {
-        auto wr = q.claim_write(kBulkChunk);
+        auto wr = q.claim_write(::spsc::unsafe, kBulkChunk);
         if (wr.total == 0u) continue;
 
         int v = r;
@@ -162,7 +162,7 @@ static cell bench_st_bulk(Q& q) {
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = v++;
         q.publish(wr.total);
 
-        auto rr = q.claim_read(wr.total);
+        auto rr = q.claim_read(::spsc::unsafe, wr.total);
         for (reg i = 0; i < rr.first.count; ++i) sink ^= rr.first.ptr[i];
         for (reg i = 0; i < rr.second.count; ++i) sink ^= rr.second.ptr[i];
         q.pop(rr.total);
@@ -421,7 +421,7 @@ static cell bench_mt_bulk(Q& q) {
         while (sent < static_cast<std::uint64_t>(kRoundsBulkMT) * static_cast<std::uint64_t>(kBulkChunk)) {
             if (stop.load(std::memory_order_relaxed)) break;
 
-            auto wr = q.claim_write(kBulkChunk);
+            auto wr = q.claim_write(::spsc::unsafe, kBulkChunk);
             if (wr.total == 0u) {
                 if (std::chrono::steady_clock::now() > deadline) {
                     stop.store(true, std::memory_order_relaxed);
@@ -452,7 +452,7 @@ static cell bench_mt_bulk(Q& q) {
         while (got < need) {
             if (stop.load(std::memory_order_relaxed)) break;
 
-            auto rr = q.claim_read(kBulkChunk);
+            auto rr = q.claim_read(::spsc::unsafe, kBulkChunk);
             if (rr.total == 0u) {
                 if (std::chrono::steady_clock::now() > deadline) {
                     stop.store(true, std::memory_order_relaxed);
