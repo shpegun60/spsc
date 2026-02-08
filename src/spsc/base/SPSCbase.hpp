@@ -233,6 +233,10 @@ protected:
         }
     }
 
+    // Non-concurrent swap of base state (indices + geometry for dynamic).
+    // Call this ONLY when both instances are not used concurrently.
+    RB_FORCEINLINE void swap_base(SPSCbase &other) noexcept;
+
 protected:
     // Core occupancy helpers.
     [[nodiscard]] RB_FORCEINLINE reg  size()  const noexcept;
@@ -784,6 +788,42 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::increment_tail() noexcept {
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_tail(const reg n) noexcept {
     _tail.add(n);
+}
+
+
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::swap_base(SPSCbase &other) noexcept {
+    if (this == &other) {
+        return;
+    }
+
+    if constexpr (C == 0) {
+        const reg a_cap  = capacity();
+        const reg a_head = head();
+        const reg a_tail = tail();
+
+        const reg b_cap  = other.capacity();
+        const reg b_head = other.head();
+        const reg b_tail = other.tail();
+
+        // Both init() paths call sync_cache(), so shadows stay coherent.
+        (void)init(b_cap, b_head, b_tail);
+        (void)other.init(a_cap, a_head, a_tail);
+    } else {
+        const reg a_head = head();
+        const reg a_tail = tail();
+        const reg b_head = other.head();
+        const reg b_tail = other.tail();
+
+        set_head(b_head);
+        set_tail(b_tail);
+        sync_cache();
+
+        other.set_head(a_head);
+        other.set_tail(a_tail);
+        other.sync_cache();
+    }
 }
 
 } // namespace spsc
