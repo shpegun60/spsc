@@ -1,0 +1,11 @@
+debug/main.o
+debug/mainwindow.o
+debug/latest_test.o
+debug/pool_view_test.o
+debug/fifo_bench.o
+debug/fifo_test.o
+debug/fifo_view_test.o
+debug/pool_test.o
+debug/queue_test.o
+debug/typed_pool_test.o
+debug/moc_mainwindow.o

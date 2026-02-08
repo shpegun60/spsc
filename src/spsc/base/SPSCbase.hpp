@@ -816,13 +816,9 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::swap_base(SPSCbase &other) noexcept {
         const reg b_head = other.head();
         const reg b_tail = other.tail();
 
-        set_head(b_head);
-        set_tail(b_tail);
-        sync_cache();
-
-        other.set_head(a_head);
-        other.set_tail(a_tail);
-        other.sync_cache();
+        // Both init() paths call sync_cache(), so shadows stay coherent.
+        (void)init(b_head, b_tail);
+        (void)other.init(a_head, a_tail);
     }
 }
 

@@ -1,0 +1,11 @@
+release/main.o
+release/mainwindow.o
+release/latest_test.o
+release/pool_view_test.o
+release/fifo_bench.o
+release/fifo_test.o
+release/fifo_view_test.o
+release/pool_test.o
+release/queue_test.o
+release/typed_pool_test.o
+release/moc_mainwindow.o
