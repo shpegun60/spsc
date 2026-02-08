@@ -800,11 +800,13 @@ public:
     }
 
     void destroy() noexcept {
+        constexpr bool kTrivialDtor = std::is_trivially_destructible_v<value_type>;
+
         if constexpr (kDynamic) {
             pointer p = storage_;
-            size_type cap = Base::capacity();
-            size_type head = Base::head();
-            size_type tail = Base::tail();
+            const size_type cap  = Base::capacity();
+            const size_type head = Base::head();
+            const size_type tail = Base::tail();
 
             storage_ = nullptr;
             (void)Base::init(0u);
@@ -813,10 +815,12 @@ public:
                 return;
             }
 
+            const size_type used = static_cast<size_type>(head - tail);
+            const bool sane = (used <= cap);
+
             // Best-effort destroy live elements if state looks sane.
-            if constexpr (!std::is_trivially_destructible_v<value_type>) {
-                const size_type used = static_cast<size_type>(head - tail);
-                if (used <= cap) {
+            if constexpr (!kTrivialDtor) {
+                if (sane) {
                     const size_type mask = cap - 1u;
                     for (size_type i = 0; i < used; ++i) {
                         detail::destroy_at(std::launder(&p[(tail + i) & mask]));
@@ -824,8 +828,12 @@ public:
                 }
             }
 
-            allocator_type alloc{};
-            alloc_traits::deallocate(alloc, p, cap);
+            // If the state is corrupted and T has a non-trivial destructor, deallocating storage
+            // could drop live objects on the floor (UB). Prefer leaking.
+            if (sane || kTrivialDtor) {
+                allocator_type alloc{};
+                alloc_traits::deallocate(alloc, p, cap);
+            }
         } else {
             if (!this->isAllocated_ || storage_ == nullptr) {
                 this->isAllocated_ = false;
@@ -834,9 +842,21 @@ public:
                 return;
             }
 
+            const size_type cap  = Base::capacity();
+            const size_type head = Base::head();
+            const size_type tail = Base::tail();
+
+            const size_type used = static_cast<size_type>(head - tail);
+            const bool sane = (cap != 0u) && (used <= cap);
+
             clear();
-            allocator_type alloc{};
-            alloc_traits::deallocate(alloc, storage_, Capacity);
+
+            // Same story as dynamic: corrupted + non-trivial dtor => leak to avoid UB.
+            if (sane || kTrivialDtor) {
+                allocator_type alloc{};
+                alloc_traits::deallocate(alloc, storage_, Capacity);
+            }
+
             storage_ = nullptr;
             this->isAllocated_ = false;
             Base::clear();
@@ -845,6 +865,7 @@ public:
 
     // ------------------------------------------------------------------------------------------
     // Dynamic-only API (Resize)
+
     // ------------------------------------------------------------------------------------------
     template <size_type C = Capacity, typename = std::enable_if_t<C == 0>>
     [[nodiscard]] bool reserve(size_type min_capacity) {
