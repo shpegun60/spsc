@@ -802,6 +802,7 @@ public:
 
             // If it is still inconsistent, treat state as corrupted.
             if (RB_UNLIKELY(used > cap)) {
+                SPSC_ASSERT(false && "queue::clear(): corrupted state; abandoning storage");
                 // Fail-closed: we cannot safely destroy or safely reuse storage.
                 // Intentionally abandon storage to avoid UB.
                 if constexpr (kDynamic) {
@@ -857,6 +858,7 @@ public:
                 if (RB_UNLIKELY(used > cap)) {
                     // Corrupted state: deallocating storage with potentially live objects is UB.
                     // Fail-closed: leak the buffer.
+                    SPSC_ASSERT(false && "queue::destroy(): corrupted state; leaking storage to avoid UB");
                     return;
                 }
 
@@ -892,6 +894,7 @@ public:
                     if (RB_UNLIKELY(used > cap)) {
                         // Corrupted state: deallocating storage with potentially live objects is UB.
                         // Fail-closed: leak the buffer.
+                        SPSC_ASSERT(false && "queue::destroy(): corrupted state; leaking storage to avoid UB");
                         storage_ = nullptr;
                         this->isAllocated_ = false;
                         Base::clear();
@@ -1368,8 +1371,10 @@ private:
         storage_ = other.storage_;
 
         if constexpr (kDynamic) {
-            (void)Base::init(other.Base::capacity(), other.Base::head(),
-                              other.Base::tail());
+            const bool ok = Base::init(other.Base::capacity(), other.Base::head(),
+                                       other.Base::tail());
+            SPSC_ASSERT(ok);
+            (void)ok;
             other.storage_ = nullptr;
             (void)other.Base::init(0u);
         } else {

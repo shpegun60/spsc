@@ -800,12 +800,48 @@ public:
     }
 
     void clear() noexcept {
-        if (RB_UNLIKELY(!is_valid())) {
+        if (!is_valid()) {
             return;
         }
-        consume_all();
-        Base::clear();
+
+        // NOTE: value_type is T* (the ring stores pointers). Destructor semantics depend on T.
+        constexpr bool kTrivialDtor = std::is_trivially_destructible_v<T>;
+
+        const size_type cap = Base::capacity();
+        if (cap == 0u) {
+            Base::clear();
+            return;
+        }
+
+        if constexpr (kTrivialDtor) {
+            // No destructor work needed. Just reset indices.
+            Base::clear();
+            return;
+        } else {
+            const size_type t0 = Base::tail();
+            size_type h0 = Base::head();
+            size_type used = static_cast<size_type>(h0 - t0);
+
+            if (RB_UNLIKELY(used > cap)) {
+                // One retry: refresh cached/atomic view.
+                Base::sync_cache();
+                h0 = Base::head();
+                used = static_cast<size_type>(h0 - t0);
+            }
+
+            if (RB_UNLIKELY(used > cap)) {
+                // Corrupted state: avoid overwriting potentially-live objects.
+                // destroy() is already "leak but safe" for non-trivial T.
+                destroy();
+                return;
+            }
+
+            // Sane: destroy exactly 'used' objects and reset indices.
+            pop(used);
+            Base::clear();
+        }
     }
+
 
     // ------------------------------------------------------------------------------------------
     // Resize / Destroy
