@@ -23,6 +23,7 @@
 
 // Base and utility includes
 #include "base/SPSCbase.hpp"        // ::spsc::SPSCbase<Capacity, Policy>, reg
+#include "base/spsc_regions.hpp"    // ::spsc::unsafe_t / ::spsc::unsafe
 #include "base/spsc_snapshot.hpp"   // ::spsc::snapshot_view, ::spsc::snapshot_traits
 #include "base/spsc_tools.hpp"      // RB_FORCEINLINE, RB_UNLIKELY, macros
 
@@ -140,25 +141,10 @@ public:
                   "[spsc::fifo_view]: counter_type::value_type must be at least as wide as reg.");
 
     // ------------------------------------------------------------------------------------------
-    // Region Structs (Bulk Operations)
+    // Region Types (Bulk Operations)
     // ------------------------------------------------------------------------------------------
-    struct region {
-        pointer   ptr{nullptr};
-        size_type count{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return count == 0u; }
-#if SPSC_HAS_SPAN
-        [[nodiscard]] std::span<value_type> span() const noexcept { return {ptr, count}; }
-#endif /* SPSC_HAS_SPAN */
-    };
-
-    struct regions {
-        region    first{};
-        region    second{};
-        size_type total{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return total == 0u; }
-    };
+    using region  = ::spsc::bulk::region<pointer, size_type>;
+    using regions = ::spsc::bulk::regions<pointer, size_type>;
 
 
     // ------------------------------------------------------------------------
@@ -654,56 +640,128 @@ public:
     // ------------------------------------------------------------------------------------------
     // Bulk / Regions
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] regions claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        if (RB_UNLIKELY(!is_valid())) { return {}; }
+    [[nodiscard]] regions
+    claim_write(const ::spsc::unsafe_t, const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        if (RB_UNLIKELY(!is_valid())) {
+            return {};
+        }
 
         const size_type cap = Base::capacity();
+        if (RB_UNLIKELY(cap == 0u)) {
+            return {};
+        }
 
-        size_type total = static_cast<size_type>(Base::free());
-        if (max_count < total) { total = max_count; }
-        if (RB_UNLIKELY(total == 0u)) { return {}; }
+        size_type head = static_cast<size_type>(Base::head());
+        size_type tail = static_cast<size_type>(Base::tail());
+        size_type used = static_cast<size_type>(head - tail);
 
-        const size_type wi      = static_cast<size_type>(Base::write_index()); // masked
-        const size_type w2e     = static_cast<size_type>(cap - wi);
-        const size_type first_n = (w2e < total) ? w2e : total;
+        // Atomic backends can yield an inconsistent snapshot (used > cap).
+        if (RB_UNLIKELY(used > cap)) {
+            head = static_cast<size_type>(Base::head());
+            tail = static_cast<size_type>(Base::tail());
+            used = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(used > cap)) {
+                return {}; // conservative
+            }
+        }
+
+        if (RB_UNLIKELY(used >= cap)) {
+            return {};
+        }
+
+        size_type total = static_cast<size_type>(cap - used);
+        if (max_count < total) {
+            total = max_count;
+        }
+        if (RB_UNLIKELY(total == 0u)) {
+            return {};
+        }
+
+        const size_type mask   = Base::mask();
+        const size_type idx    = static_cast<size_type>(head & mask);
+        const size_type to_end = static_cast<size_type>(cap - idx);
+
+        const size_type first_n  = (to_end < total) ? to_end : total;
+        const size_type second_n = static_cast<size_type>(total - first_n);
 
         regions r{};
-        auto* const buf = data();
+        auto *const buf = data();
 
-        r.first.ptr   = buf + wi;
+        r.first.ptr = buf + idx;
         r.first.count = first_n;
 
-        r.second.count = static_cast<size_type>(total - first_n);
-        r.second.ptr   = (r.second.count != 0u) ? buf : nullptr;
+        r.second.count = second_n;
+        r.second.ptr = (second_n != 0u) ? buf : nullptr;
 
         r.total = total;
         return r;
     }
 
-    [[nodiscard]] regions claim_read(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        if (RB_UNLIKELY(!is_valid())) { return {}; }
+    [[nodiscard]] regions
+    claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        return claim_write(::spsc::unsafe, max_count);
+    }
+
+    [[nodiscard]] regions
+    claim_read(const ::spsc::unsafe_t, const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        if (RB_UNLIKELY(!is_valid())) {
+            return {};
+        }
 
         const size_type cap = Base::capacity();
+        if (RB_UNLIKELY(cap == 0u)) {
+            return {};
+        }
 
-        size_type total = static_cast<size_type>(Base::size());
-        if (max_count < total) { total = max_count; }
-        if (RB_UNLIKELY(total == 0u)) { return {}; }
+        size_type tail = static_cast<size_type>(Base::tail());
+        size_type head = static_cast<size_type>(Base::head());
+        size_type av   = static_cast<size_type>(head - tail);
 
-        const size_type ri      = static_cast<size_type>(Base::read_index()); // masked
-        const size_type r2e     = static_cast<size_type>(cap - ri);
-        const size_type first_n = (r2e < total) ? r2e : total;
+        // Atomic backends can yield an inconsistent snapshot (av > cap).
+        if (RB_UNLIKELY(av > cap)) {
+            tail = static_cast<size_type>(Base::tail());
+            head = static_cast<size_type>(Base::head());
+            av   = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(av > cap)) {
+                return {}; // conservative
+            }
+        }
+
+        if (RB_UNLIKELY(av == 0u)) {
+            return {};
+        }
+
+        size_type total = av;
+        if (max_count < total) {
+            total = max_count;
+        }
+        if (RB_UNLIKELY(total == 0u)) {
+            return {};
+        }
+
+        const size_type mask   = Base::mask();
+        const size_type idx    = static_cast<size_type>(tail & mask);
+        const size_type to_end = static_cast<size_type>(cap - idx);
+
+        const size_type first_n  = (to_end < total) ? to_end : total;
+        const size_type second_n = static_cast<size_type>(total - first_n);
 
         regions r{};
-        auto* const buf = data();
+        auto *const buf = data();
 
-        r.first.ptr   = buf + ri;
+        r.first.ptr = buf + idx;
         r.first.count = first_n;
 
-        r.second.count = static_cast<size_type>(total - first_n);
-        r.second.ptr   = (r.second.count != 0u) ? buf : nullptr;
+        r.second.count = second_n;
+        r.second.ptr = (second_n != 0u) ? buf : nullptr;
 
         r.total = total;
         return r;
+    }
+
+    [[nodiscard]] regions
+    claim_read(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        return claim_read(::spsc::unsafe, max_count);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -837,6 +895,21 @@ public:
         return true;
     }
 
+    // Prevent accidental overload selection with numeric lvalues:
+    //   std::uint32_t n = 3;
+    //   fv.pop(n);   // would otherwise bind to pop(size_type).
+    template <class U,
+              typename = std::enable_if_t<
+                  !std::is_same_v<std::remove_cv_t<U>, size_type> &&
+                  std::is_convertible_v<U, size_type>>>
+    void pop(U&) noexcept = delete;
+
+    template <class U,
+              typename = std::enable_if_t<
+                  !std::is_same_v<std::remove_cv_t<U>, size_type> &&
+                  std::is_convertible_v<U, size_type>>>
+    [[nodiscard]] bool try_pop(U&) noexcept = delete;
+
     [[nodiscard]] RB_FORCEINLINE const_reference operator[](const size_type i) const noexcept {
         SPSC_ASSERT(i < size());
         const size_type idx = static_cast<size_type>((Base::tail() + i) & Base::mask());
@@ -861,6 +934,193 @@ public:
     // ------------------------------------------------------------------------------------------
     // RAII Based API
     // ------------------------------------------------------------------------------------------
+    class bulk_write_guard {
+    public:
+        bulk_write_guard() noexcept = default;
+
+        explicit bulk_write_guard(
+            fifo_view& q,
+            const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept
+            : q_(&q), regs_(q.claim_write(::spsc::unsafe, max_count)) {
+            if (regs_.total == 0u) {
+                q_ = nullptr;
+            }
+        }
+
+        bulk_write_guard(const bulk_write_guard&) = delete;
+        bulk_write_guard& operator=(const bulk_write_guard&) = delete;
+
+        bulk_write_guard(bulk_write_guard&& other) noexcept
+            : q_(other.q_), regs_(other.regs_), written_(other.written_),
+              publish_on_destroy_(other.publish_on_destroy_) {
+            other.q_ = nullptr;
+            other.regs_ = {};
+            other.written_ = 0u;
+            other.publish_on_destroy_ = false;
+        }
+
+        bulk_write_guard& operator=(bulk_write_guard&&) = delete;
+
+        ~bulk_write_guard() noexcept {
+            if (q_ != nullptr && written_ != 0u && publish_on_destroy_) {
+                q_->publish(written_);
+            }
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return (q_ != nullptr) && (regs_.total != 0u);
+        }
+
+        [[nodiscard]] size_type claimed() const noexcept { return regs_.total; }
+        [[nodiscard]] size_type constructed() const noexcept { return written_; }
+        [[nodiscard]] size_type remaining() const noexcept {
+            return static_cast<size_type>(regs_.total - written_);
+        }
+
+        [[nodiscard]] pointer peek_next() const noexcept {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ < regs_.total);
+            return slot_ptr_at_(written_);
+        }
+
+        [[nodiscard]] pointer get_next() noexcept {
+            pointer p = peek_next();
+            publish_on_destroy_ = true;
+            return p;
+        }
+
+        template <class... Args,
+                  typename = std::enable_if_t<
+                      std::is_constructible_v<value_type, Args &&...> &&
+                      std::is_assignable_v<reference, value_type>>>
+        [[nodiscard]] pointer emplace_next(Args &&...args) noexcept(
+            std::is_nothrow_constructible_v<value_type, Args &&...> &&
+            std::is_nothrow_assignable_v<reference, value_type>) {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ < regs_.total);
+            pointer p = slot_ptr_at_(written_);
+            *p = value_type(std::forward<Args>(args)...);
+            ++written_;
+            publish_on_destroy_ = true;
+            return p;
+        }
+
+        template <class U,
+                  typename = std::enable_if_t<std::is_assignable_v<reference, U &&>>>
+        [[nodiscard]] pointer write_next(U &&v) noexcept(
+            std::is_nothrow_assignable_v<reference, U &&>) {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ < regs_.total);
+            pointer p = slot_ptr_at_(written_);
+            *p = std::forward<U>(v);
+            ++written_;
+            publish_on_destroy_ = true;
+            return p;
+        }
+
+        void mark_written() noexcept {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ < regs_.total);
+            ++written_;
+        }
+
+        void arm_publish() noexcept {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ != 0u && "arm_publish() requires at least one written element");
+            publish_on_destroy_ = true;
+        }
+
+        void publish_on_destroy() noexcept { arm_publish(); }
+
+        void disarm_publish() noexcept { publish_on_destroy_ = false; }
+
+        void commit() noexcept {
+            if (q_ != nullptr && written_ != 0u) {
+                q_->publish(written_);
+            }
+            reset_();
+        }
+
+        void cancel() noexcept { reset_(); }
+
+    private:
+        [[nodiscard]] pointer slot_ptr_at_(const size_type i) const noexcept {
+            SPSC_ASSERT(i < regs_.total);
+            if (i < regs_.first.count) {
+                return regs_.first.ptr + i;
+            }
+            return regs_.second.ptr + (i - regs_.first.count);
+        }
+
+        void reset_() noexcept {
+            q_ = nullptr;
+            regs_ = {};
+            written_ = 0u;
+            publish_on_destroy_ = false;
+        }
+
+        fifo_view* q_{nullptr};
+        regions regs_{};
+        size_type written_{0u};
+        bool publish_on_destroy_{false};
+    };
+
+    class bulk_read_guard {
+    public:
+        bulk_read_guard() noexcept = default;
+
+        explicit bulk_read_guard(
+            fifo_view& q,
+            const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept
+            : q_(&q), regs_(q.claim_read(::spsc::unsafe, max_count)),
+              active_(regs_.total != 0u) {
+            if (!active_) {
+                q_ = nullptr;
+            }
+        }
+
+        bulk_read_guard(const bulk_read_guard&) = delete;
+        bulk_read_guard& operator=(const bulk_read_guard&) = delete;
+
+        bulk_read_guard(bulk_read_guard&& other) noexcept
+            : q_(other.q_), regs_(other.regs_), active_(other.active_) {
+            other.q_ = nullptr;
+            other.regs_ = {};
+            other.active_ = false;
+        }
+
+        bulk_read_guard& operator=(bulk_read_guard&&) = delete;
+
+        ~bulk_read_guard() noexcept {
+            if (active_ && q_) {
+                q_->pop(regs_.total);
+            }
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept { return active_; }
+
+        [[nodiscard]] size_type count() const noexcept { return regs_.total; }
+        [[nodiscard]] const regions& regions_view() const noexcept { return regs_; }
+
+        void commit() noexcept {
+            if (active_ && q_) {
+                q_->pop(regs_.total);
+            }
+            cancel();
+        }
+
+        void cancel() noexcept {
+            active_ = false;
+            q_ = nullptr;
+            regs_ = {};
+        }
+
+    private:
+        fifo_view* q_{nullptr};
+        regions regs_{};
+        bool active_{false};
+    };
+
     class write_guard {
     public:
         write_guard() noexcept = default;
@@ -976,7 +1236,13 @@ public:
     };
 
     [[nodiscard]] write_guard scoped_write() noexcept { return write_guard(*this); }
+    [[nodiscard]] bulk_write_guard scoped_write(const size_type max_count) noexcept {
+        return bulk_write_guard(*this, max_count);
+    }
     [[nodiscard]] read_guard  scoped_read()  noexcept { return read_guard(*this); }
+    [[nodiscard]] bulk_read_guard scoped_read(const size_type max_count) noexcept {
+        return bulk_read_guard(*this, max_count);
+    }
 
 private:
     void move_from(fifo_view&& other) noexcept(kNoThrowMoveOps)
