@@ -165,6 +165,32 @@ static void sigabrt_handler_(int) noexcept {
         Q q;
         auto g = q.scoped_write();
         g.commit(); // Must assert: publishing an unconstructed slot.
+    } else if (std::strcmp(mode, "bulk_double_emplace_next") == 0) {
+        Q q;
+        auto g = q.scoped_write(1u);
+        (void)g.emplace_next(1u);
+        (void)g.emplace_next(2u); // Must assert: emplace beyond claimed().
+    } else if (std::strcmp(mode, "bulk_arm_publish_unconstructed") == 0) {
+        Q q;
+        auto g = q.scoped_write(2u);
+        g.arm_publish(); // Must assert: no constructed elements.
+    } else if (std::strcmp(mode, "consume_foreign_snapshot") == 0) {
+        Q q1;
+        Q q2;
+        if (!q1.try_push(1u)) {
+            std::_Exit(0xE1);
+        }
+        if (!q2.try_push(2u)) {
+            std::_Exit(0xE2);
+        }
+        const auto snap = q2.make_snapshot();
+        q1.consume(snap); // Must assert: foreign snapshot identity.
+    } else if (std::strcmp(mode, "pop_n_too_many") == 0) {
+        Q q;
+        if (!q.try_push(1u)) {
+            std::_Exit(0xE3);
+        }
+        q.pop(2u); // Must assert: can_read(2) is false.
     } else {
         std::_Exit(0xEF);
     }
@@ -220,6 +246,10 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().free()), reg>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().empty()), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().full()), bool>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().write_size()), reg>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().read_size()), reg>);
+    static_assert(std::is_same_v<decltype(std::declval<const Q&>().get_allocator()), typename Q::allocator_type>);
+    static_assert(std::is_same_v<decltype(std::declval<const Q&>().data()), typename Q::const_pointer>);
 
     // Producer
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_push(std::declval<value_type>())), bool>);
@@ -250,10 +280,13 @@ static void api_smoke_compile() {
     // Snapshots
     static_assert(std::is_same_v<decltype(std::declval<Q&>().make_snapshot()), typename Q::snapshot>);
     static_assert(std::is_same_v<decltype(std::declval<const Q&>().make_snapshot()), typename Q::const_snapshot>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().consume(std::declval<const typename Q::snapshot&>())), void>);
 
     // RAII
     static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_write()), typename Q::write_guard>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_read()), typename Q::read_guard>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_write(reg{1})), typename Q::bulk_write_guard>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_read(reg{1})), typename Q::bulk_read_guard>);
 }
 
 // -------------------------
@@ -605,6 +638,153 @@ static void basic_suite(Q& q) {
     QCOMPARE(iter_seq, 510u);
     q.clear();
     QVERIFY(q.empty());
+}
+
+template <class Q>
+static void size_windows_allocator_suite(Q& q) {
+    using alloc_type = typename Q::allocator_type;
+    static_assert(std::is_same_v<decltype(std::declval<const Q&>().get_allocator()), alloc_type>);
+
+    auto alloc = q.get_allocator();
+    (void)alloc;
+
+    q.clear();
+    QCOMPARE(q.size(), reg{0});
+    QCOMPARE(q.read_size(), reg{0});
+    QVERIFY(q.write_size() <= q.free());
+
+    fill_seq(q, 1u, 10u);
+    QVERIFY(q.read_size() > 0u);
+    QVERIFY(q.read_size() <= q.size());
+    QVERIFY(q.write_size() <= q.free());
+
+    // Force a wrapped geometry and validate contiguous windows contracts.
+    q.pop(7u);
+    fill_seq(q, 1000u, 6u);
+    QVERIFY(q.read_size() <= q.size());
+    QVERIFY(q.write_size() <= q.free());
+
+    const reg ws = q.write_size();
+    const auto wr = q.claim_write(::spsc::unsafe, ws);
+    QCOMPARE(wr.total, ws);
+    QCOMPARE(wr.second.count, reg{0});
+
+    const reg rs = q.read_size();
+    const auto rr = q.claim_read(::spsc::unsafe, rs);
+    QCOMPARE(rr.total, rs);
+    QCOMPARE(rr.second.count, reg{0});
+
+    q.clear();
+    QCOMPARE(q.read_size(), reg{0});
+    QVERIFY(q.write_size() <= q.free());
+}
+
+template <class Q>
+static void bulk_raii_overloads_suite(Q& q) {
+    using T = typename Q::value_type;
+    static_assert(std::is_same_v<T, Blob>, "bulk_raii_overloads_suite expects queue<Blob, ...>.");
+
+    q.clear();
+
+    // bulk_write_guard: construct then disarm => no publish.
+    {
+        auto bw = q.scoped_write(5u);
+        QVERIFY(bw);
+        QCOMPARE(bw.claimed(), reg{5});
+        QCOMPARE(bw.constructed(), reg{0});
+        QCOMPARE(bw.remaining(), reg{5});
+
+        static_cast<void>(bw.emplace_next(Blob{1u, 0xA5A5A5A5u}));
+        static_cast<void>(bw.emplace_next(Blob{2u, 0xA5A5A5A5u}));
+        QCOMPARE(bw.constructed(), reg{2});
+        QCOMPARE(bw.remaining(), reg{3});
+
+        bw.disarm_publish();
+    }
+    QVERIFY(q.empty());
+
+    // bulk_write_guard: explicit commit publishes exactly constructed().
+    {
+        auto bw = q.scoped_write(4u);
+        QVERIFY(bw);
+        for (std::uint32_t seq = 10u; seq < 14u; ++seq) {
+            auto* p = bw.emplace_next(Blob{seq, 0xA5A5A5A5u});
+            QVERIFY(p != nullptr);
+        }
+        bw.commit();
+        QVERIFY(!bw);
+    }
+    QCOMPARE(q.size(), reg{4});
+
+    // bulk_write_guard move semantics + destructor publish.
+    {
+        auto bw1 = q.scoped_write(2u);
+        QVERIFY(bw1);
+        auto bw2 = std::move(bw1);
+        QVERIFY(!bw1);
+        QVERIFY(bw2);
+        static_cast<void>(bw2.emplace_next(Blob{14u, 0xA5A5A5A5u}));
+        static_cast<void>(bw2.emplace_next(Blob{15u, 0xA5A5A5A5u}));
+        bw2.arm_publish();
+    }
+    QCOMPARE(q.size(), reg{6});
+
+    // bulk_read_guard: inspect regions, then cancel (must not pop).
+    {
+        auto br = q.scoped_read(3u);
+        QVERIFY(br);
+        QCOMPARE(br.count(), reg{3});
+
+        const auto& regs = br.regions();
+        std::vector<std::uint32_t> seqs;
+        seqs.reserve(static_cast<std::size_t>(regs.total));
+        for (reg i = 0; i < regs.first.count; ++i) {
+            seqs.push_back(regs.first.ptr[i].seq);
+        }
+        for (reg i = 0; i < regs.second.count; ++i) {
+            seqs.push_back(regs.second.ptr[i].seq);
+        }
+        QCOMPARE(seqs.size(), std::size_t{3});
+        QCOMPARE(seqs[0], 10u);
+        QCOMPARE(seqs[1], 11u);
+        QCOMPARE(seqs[2], 12u);
+
+        br.cancel();
+        QVERIFY(!br);
+    }
+    QCOMPARE(q.size(), reg{6});
+
+    // bulk_read_guard: explicit commit pops exactly count().
+    {
+        auto br = q.scoped_read(4u);
+        QVERIFY(br);
+        QCOMPARE(br.count(), reg{4});
+        br.commit();
+        QVERIFY(!br);
+    }
+    QCOMPARE(q.size(), reg{2});
+    QCOMPARE(q.front().seq, std::uint32_t{14});
+
+    // bulk_read_guard move semantics + destructor pop.
+    {
+        auto br1 = q.scoped_read(2u);
+        QVERIFY(br1);
+        auto br2 = std::move(br1);
+        QVERIFY(!br1);
+        QVERIFY(br2);
+        QCOMPARE(br2.count(), reg{2});
+    }
+    QVERIFY(q.empty());
+
+    // max_count=0 must produce inactive guards.
+    {
+        auto bw = q.scoped_write(0u);
+        QVERIFY(!bw);
+    }
+    {
+        auto br = q.scoped_read(0u);
+        QVERIFY(!br);
+    }
 }
 
 template <class Policy>
@@ -1270,6 +1450,21 @@ static void check_iterators_and_indexing(Q& q, std::uint32_t first, std::uint32_
             ++n;
         }
         QCOMPARE(n, q.size());
+        QCOMPARE(exp, first);
+    }
+
+    // Const reverse iterators
+    {
+        const Q& cq = q;
+        std::uint32_t exp = first + count;
+        reg n = 0;
+        for (auto it = cq.crbegin(); it != cq.crend(); ++it) {
+            const auto& v = *it;
+            --exp;
+            QCOMPARE(v.seq, exp);
+            ++n;
+        }
+        QCOMPARE(n, cq.size());
         QCOMPARE(exp, first);
     }
 }
@@ -1982,8 +2177,11 @@ private slots:
         Q q;
         QVERIFY(!q.is_valid());
         QCOMPARE(q.capacity(), reg{0});
+        QCOMPARE(q.write_size(), reg{0});
+        QCOMPARE(q.read_size(), reg{0});
         QVERIFY(q.empty());
         QVERIFY(q.full());
+        [[maybe_unused]] auto alloc = q.get_allocator();
         QVERIFY(q.try_front() == nullptr);
         QVERIFY(!q.try_pop());
         QVERIFY(q.claim_read(::spsc::unsafe).empty());
@@ -2154,6 +2352,34 @@ private slots:
         spsc::queue<Blob, 64, spsc::policy::P> q;
         QVERIFY(q.is_valid());
         iterators_wraparound_suite(q);
+        q.destroy();
+    }
+
+    void size_windows_allocator_static() {
+        spsc::queue<Blob, 64, spsc::policy::P> q;
+        QVERIFY(q.is_valid());
+        size_windows_allocator_suite(q);
+        q.destroy();
+    }
+
+    void size_windows_allocator_dynamic() {
+        spsc::queue<Blob, 0, spsc::policy::P> q;
+        QVERIFY(q.resize(64));
+        size_windows_allocator_suite(q);
+        q.destroy();
+    }
+
+    void bulk_raii_overloads_static() {
+        spsc::queue<Blob, 64, spsc::policy::P> q;
+        QVERIFY(q.is_valid());
+        bulk_raii_overloads_suite(q);
+        q.destroy();
+    }
+
+    void bulk_raii_overloads_dynamic() {
+        spsc::queue<Blob, 0, spsc::policy::P> q;
+        QVERIFY(q.resize(64));
+        bulk_raii_overloads_suite(q);
         q.destroy();
     }
 
@@ -2401,6 +2627,10 @@ private slots:
         expect_death("claim_full");
         expect_death("double_emplace");
         expect_death("commit_unconstructed");
+        expect_death("bulk_double_emplace_next");
+        expect_death("bulk_arm_publish_unconstructed");
+        expect_death("consume_foreign_snapshot");
+        expect_death("pop_n_too_many");
 #else
         QSKIP("Death tests are debug-only (assertions disabled)." );
 #endif

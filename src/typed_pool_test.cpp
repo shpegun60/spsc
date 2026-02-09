@@ -79,6 +79,41 @@ static void sigabrt_handler_(int) noexcept {
             }
         }
         (void)q.claim(); // Must assert: claim while full.
+    } else if (std::strcmp(mode, "double_emplace") == 0) {
+        Q q;
+        auto g = q.scoped_write();
+        (void)g.emplace(1u);
+        (void)g.emplace(2u); // Must assert: double construction.
+    } else if (std::strcmp(mode, "commit_unconstructed") == 0) {
+        Q q;
+        auto g = q.scoped_write();
+        g.commit(); // Must assert: publishing an unconstructed slot.
+    } else if (std::strcmp(mode, "bulk_double_emplace_next") == 0) {
+        Q q;
+        auto g = q.scoped_write(1u);
+        (void)g.emplace_next(1u);
+        (void)g.emplace_next(2u); // Must assert: emplace beyond claimed().
+    } else if (std::strcmp(mode, "bulk_arm_publish_unconstructed") == 0) {
+        Q q;
+        auto g = q.scoped_write(2u);
+        g.arm_publish(); // Must assert: no constructed elements.
+    } else if (std::strcmp(mode, "consume_foreign_snapshot") == 0) {
+        Q q1;
+        Q q2;
+        if (!q1.try_emplace(1u)) {
+            std::_Exit(0xE1);
+        }
+        if (!q2.try_emplace(2u)) {
+            std::_Exit(0xE2);
+        }
+        const auto snap = q2.make_snapshot();
+        q1.consume(snap); // Must assert: foreign snapshot identity.
+    } else if (std::strcmp(mode, "pop_n_too_many") == 0) {
+        Q q;
+        if (!q.try_emplace(1u)) {
+            std::_Exit(0xE3);
+        }
+        q.pop(2u); // Must assert: can_read(2) is false.
     } else {
         std::_Exit(0xF1);
     }
@@ -142,6 +177,7 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().can_read(reg{1})), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().buffer_size()), reg>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().buffer_align()), reg>);
+    static_assert(std::is_same_v<decltype(std::declval<const Q&>().get_allocator()), typename Q::base_allocator_type>);
 
     static_assert(std::is_pointer_v<value_type>);
     static_assert(std::is_same_v<std::remove_pointer_t<value_type>, obj_type>);
@@ -177,11 +213,14 @@ static void api_smoke_compile() {
     // Snapshots
     static_assert(std::is_same_v<decltype(std::declval<Q&>().make_snapshot()), typename Q::snapshot>);
     static_assert(std::is_same_v<decltype(std::declval<const Q&>().make_snapshot()), typename Q::const_snapshot>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().consume(std::declval<const typename Q::snapshot&>())), void>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_consume(std::declval<const typename Q::snapshot&>())), bool>);
 
     // RAII
     static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_write()), typename Q::write_guard>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_read()), typename Q::read_guard>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_write(reg{1})), typename Q::bulk_write_guard>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_read(reg{1})), typename Q::bulk_read_guard>);
 
     // Const API should compile.
     (void)sizeof(decltype(std::declval<const Q&>().data()));
@@ -408,6 +447,37 @@ static void check_iterators_and_indexing(Q& q, std::uint32_t base, reg count) {
         QCOMPARE(p->seq, base + static_cast<std::uint32_t>(i));
     }
     QCOMPARE(i, count);
+
+    // reverse iterators
+    {
+        reg n = 0u;
+        std::uint32_t exp = base + static_cast<std::uint32_t>(count);
+        for (auto it = q.rbegin(); it != q.rend(); ++it) {
+            auto* p = std::launder(*it);
+            QVERIFY(p != nullptr);
+            --exp;
+            QCOMPARE(p->seq, exp);
+            ++n;
+        }
+        QCOMPARE(n, count);
+        QCOMPARE(exp, base);
+    }
+
+    // const reverse iterators
+    {
+        const Q& cq = q;
+        reg n = 0u;
+        std::uint32_t exp = base + static_cast<std::uint32_t>(count);
+        for (auto it = cq.crbegin(); it != cq.crend(); ++it) {
+            const auto* p = std::launder(*it);
+            QVERIFY(p != nullptr);
+            --exp;
+            QCOMPARE(p->seq, exp);
+            ++n;
+        }
+        QCOMPARE(n, count);
+        QCOMPARE(exp, base);
+    }
 }
 
 template <class Q>
@@ -603,7 +673,12 @@ static void snapshot_consume_suite(Q& q) {
 
     fill_seq(q, 1u, 20u);
     auto snap = q.make_snapshot();
-    QVERIFY(q.try_consume(snap));
+    q.consume(snap);
+    QVERIFY(q.empty());
+
+    fill_seq(q, 100u, 7u);
+    auto snap2 = q.make_snapshot();
+    QVERIFY(q.try_consume(snap2));
     QVERIFY(q.empty());
 }
 
@@ -684,6 +759,130 @@ static void guard_move_semantics_suite(Q& q) {
     QCOMPARE(q.front()->seq, std::uint32_t{101});
     q.pop();
     QVERIFY(q.empty());
+}
+
+template <class Q>
+static void allocator_and_bulk_raii_overloads_suite(Q& q) {
+    using T = typename Q::object_type;
+    static_assert(std::is_same_v<T, Blob>,
+                  "allocator_and_bulk_raii_overloads_suite expects typed_pool<Blob, ...>.");
+
+    [[maybe_unused]] auto alloc = q.get_allocator();
+
+    q.clear();
+
+    // bulk_write_guard: construct then disarm => no publish.
+    {
+        auto bw = q.scoped_write(5u);
+        QVERIFY(bw);
+        QCOMPARE(bw.claimed(), reg{5});
+        QCOMPARE(bw.constructed(), reg{0});
+        QCOMPARE(bw.remaining(), reg{5});
+
+        static_cast<void>(bw.emplace_next(1u, 0xA5A5A5A5u));
+        static_cast<void>(bw.emplace_next(2u, 0xA5A5A5A5u));
+        QCOMPARE(bw.constructed(), reg{2});
+        QCOMPARE(bw.remaining(), reg{3});
+
+        bw.disarm_publish();
+    }
+    QVERIFY(q.empty());
+
+    // bulk_write_guard: commit publishes exactly constructed().
+    {
+        auto bw = q.scoped_write(4u);
+        QVERIFY(bw);
+        for (std::uint32_t seq = 10u; seq < 14u; ++seq) {
+            auto* p = bw.emplace_next(seq, 0xA5A5A5A5u);
+            QVERIFY(p != nullptr);
+        }
+        bw.commit();
+        QVERIFY(!bw);
+    }
+    QCOMPARE(q.size(), reg{4});
+
+    // bulk_write_guard move semantics + destructor publish.
+    {
+        auto bw1 = q.scoped_write(2u);
+        QVERIFY(bw1);
+        auto bw2 = std::move(bw1);
+        QVERIFY(!bw1);
+        QVERIFY(bw2);
+        static_cast<void>(bw2.emplace_next(14u, 0xA5A5A5A5u));
+        static_cast<void>(bw2.emplace_next(15u, 0xA5A5A5A5u));
+        bw2.arm_publish();
+    }
+    QCOMPARE(q.size(), reg{6});
+
+    // bulk_read_guard: inspect first()/second(), then cancel (must not pop).
+    {
+        auto br = q.scoped_read(3u);
+        QVERIFY(br);
+        QCOMPARE(br.count(), reg{3});
+
+        auto f = br.first();
+        auto s = br.second();
+#if SPSC_HAS_SPAN
+        const auto f_raw = f.raw_span();
+        const auto s_raw = s.raw_span();
+        QCOMPARE(f_raw.size(), static_cast<std::size_t>(f.size()));
+        QCOMPARE(s_raw.size(), static_cast<std::size_t>(s.size()));
+#endif
+
+        std::vector<std::uint32_t> seqs;
+        seqs.reserve(static_cast<std::size_t>(br.count()));
+        for (reg i = 0; i < f.size(); ++i) {
+            auto* p = f.ptr(i);
+            QVERIFY(p != nullptr);
+            seqs.push_back(p->seq);
+        }
+        for (reg i = 0; i < s.size(); ++i) {
+            auto* p = s.ptr(i);
+            QVERIFY(p != nullptr);
+            seqs.push_back(p->seq);
+        }
+
+        QCOMPARE(seqs.size(), std::size_t{3});
+        QCOMPARE(seqs[0], 10u);
+        QCOMPARE(seqs[1], 11u);
+        QCOMPARE(seqs[2], 12u);
+
+        br.cancel();
+        QVERIFY(!br);
+    }
+    QCOMPARE(q.size(), reg{6});
+
+    // bulk_read_guard: commit pops exactly count().
+    {
+        auto br = q.scoped_read(4u);
+        QVERIFY(br);
+        QCOMPARE(br.count(), reg{4});
+        br.commit();
+        QVERIFY(!br);
+    }
+    QCOMPARE(q.size(), reg{2});
+    QCOMPARE(q.front()->seq, std::uint32_t{14});
+
+    // bulk_read_guard move semantics + destructor pop.
+    {
+        auto br1 = q.scoped_read(2u);
+        QVERIFY(br1);
+        auto br2 = std::move(br1);
+        QVERIFY(!br1);
+        QVERIFY(br2);
+        QCOMPARE(br2.count(), reg{2});
+    }
+    QVERIFY(q.empty());
+
+    // max_count=0 must produce inactive guards.
+    {
+        auto bw = q.scoped_write(0u);
+        QVERIFY(!bw);
+    }
+    {
+        auto br = q.scoped_read(0u);
+        QVERIFY(!br);
+    }
 }
 
 template <class Policy>
@@ -1469,6 +1668,12 @@ static void death_tests_debug_only_suite() {
     expect_death("front_empty");
     expect_death("publish_full");
     expect_death("claim_full");
+    expect_death("double_emplace");
+    expect_death("commit_unconstructed");
+    expect_death("bulk_double_emplace_next");
+    expect_death("bulk_arm_publish_unconstructed");
+    expect_death("consume_foreign_snapshot");
+    expect_death("pop_n_too_many");
 #else
     QSKIP("Death tests are debug-only (assertions disabled)." );
 #endif
@@ -2578,6 +2783,20 @@ private slots:
         QCOMPARE(q[0]->seq, std::uint32_t{61});
         QCOMPARE(q[1]->seq, std::uint32_t{62});
         QCOMPARE(q[2]->seq, std::uint32_t{1000});
+        q.destroy();
+    }
+
+    void allocator_and_bulk_raii_overloads_static() {
+        spsc::typed_pool<Blob, 64u, spsc::policy::P> q;
+        QVERIFY(q.is_valid());
+        allocator_and_bulk_raii_overloads_suite(q);
+        q.destroy();
+    }
+
+    void allocator_and_bulk_raii_overloads_dynamic() {
+        spsc::typed_pool<Blob, 0u, spsc::policy::P> q;
+        QVERIFY(q.resize(64u));
+        allocator_and_bulk_raii_overloads_suite(q);
         q.destroy();
     }
 
