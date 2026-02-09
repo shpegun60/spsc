@@ -251,9 +251,35 @@ public:
             return;
         }
 
+        const size_type a_cap = Base::capacity();
+        const size_type a_head = Base::head();
+        const size_type a_tail = Base::tail();
+
+        const size_type b_cap = other.Base::capacity();
+        const size_type b_head = other.Base::head();
+        const size_type b_tail = other.Base::tail();
+
+        const bool a_sane = (a_cap == 0u)
+                                ? (a_head == 0u && a_tail == 0u)
+                                : (static_cast<size_type>(a_head - a_tail) <= a_cap);
+        const bool b_sane = (b_cap == 0u)
+                                ? (b_head == 0u && b_tail == 0u)
+                                : (static_cast<size_type>(b_head - b_tail) <= b_cap);
+        if (RB_UNLIKELY(!a_sane || !b_sane)) {
+            SPSC_ASSERT(false && "typed_pool::swap(): corrupted base state; refusing swap");
+            return;
+        }
+
         if constexpr (kDynamic) {
-            SPSC_ASSERT((slots_ == nullptr) == (Base::capacity() == 0u));
-            SPSC_ASSERT((other.slots_ == nullptr) == (other.Base::capacity() == 0u));
+            const bool a_slots_ok = ((slots_ == nullptr) == (a_cap == 0u));
+            const bool b_slots_ok = ((other.slots_ == nullptr) == (b_cap == 0u));
+            if (RB_UNLIKELY(!a_slots_ok || !b_slots_ok)) {
+                SPSC_ASSERT(false && "typed_pool::swap(): slots/capacity invariant broken");
+                return;
+            }
+
+            SPSC_ASSERT(a_slots_ok);
+            SPSC_ASSERT(b_slots_ok);
 
             std::swap(slots_, other.slots_);
             this->Base::swap_base(static_cast<Base&>(other));
@@ -771,6 +797,14 @@ public:
         Base::advance_tail(n);
     }
 
+    // Guard against accidental overload selection when passing a value variable
+    // that is implicitly convertible to size_type.
+    template <class U,
+             typename = std::enable_if_t<
+                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
+                 std::is_convertible_v<U, size_type>>>
+    void pop(U&) noexcept = delete;
+
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!can_read(n))) {
             return false;
@@ -783,6 +817,14 @@ public:
         Base::advance_tail(n);
         return true;
     }
+
+    // Same trap as pop(U&): prevent tp.try_pop(out) from accidentally binding
+    // to try_pop(size_type n) when 'out' is a numeric lvalue.
+    template <class U,
+             typename = std::enable_if_t<
+                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
+                 std::is_convertible_v<U, size_type>>>
+    [[nodiscard]] bool try_pop(U&) noexcept = delete;
 
     [[nodiscard]] RB_FORCEINLINE pointer operator[](const size_type i) noexcept {
         SPSC_ASSERT(i < size());
@@ -800,7 +842,7 @@ public:
     }
 
     void clear() noexcept {
-        if (!is_valid()) {
+        if (RB_UNLIKELY(!is_valid())) {
             return;
         }
 
@@ -818,20 +860,22 @@ public:
             Base::clear();
             return;
         } else {
-            const size_type t0 = Base::tail();
-            size_type h0 = Base::head();
-            size_type used = static_cast<size_type>(h0 - t0);
+            size_type head = Base::head();
+            size_type tail = Base::tail();
+            size_type used = static_cast<size_type>(head - tail);
 
             if (RB_UNLIKELY(used > cap)) {
-                // One retry: refresh cached/atomic view.
-                Base::sync_cache();
-                h0 = Base::head();
-                used = static_cast<size_type>(h0 - t0);
+                // Atomic backends can yield an inconsistent snapshot (used > cap).
+                // Retry once before treating state as corrupted.
+                head = Base::head();
+                tail = Base::tail();
+                used = static_cast<size_type>(head - tail);
             }
 
             if (RB_UNLIKELY(used > cap)) {
                 // Corrupted state: avoid overwriting potentially-live objects.
                 // destroy() is already "leak but safe" for non-trivial T.
+                SPSC_ASSERT(false && "typed_pool::clear(): corrupted state; abandoning live-slot cleanup");
                 destroy();
                 return;
             }
@@ -867,27 +911,41 @@ public:
         if constexpr (kDynamic) {
             pointer *ptr = slots_;
             const size_type cap = Base::capacity();
-            const size_type head = Base::head();
-            const size_type tail = Base::tail();
-
             SPSC_ASSERT((ptr == nullptr) == (cap == 0u));
 
-            slots_ = nullptr;
-            (void)Base::init(0u);
-
             if (!ptr || cap == 0u) {
+                slots_ = nullptr;
+                (void)Base::init(0u);
                 return;
             }
 
-            const size_type used = static_cast<size_type>(head - tail);
+            size_type head = Base::head();
+            size_type tail = Base::tail();
+            size_type used = static_cast<size_type>(head - tail);
+
+            // Atomic backends can yield an inconsistent snapshot (used > cap).
+            if (RB_UNLIKELY(used > cap)) {
+                head = Base::head();
+                tail = Base::tail();
+                used = static_cast<size_type>(head - tail);
+            }
+
             const bool sane = (used <= cap);
 
+            // Detach first to avoid double-free in case of misuse.
+            slots_ = nullptr;
+            (void)Base::init(0u);
+
             // Best-effort: destroy live objects only if state looks sane.
-            if (sane) {
-                const size_type mask = cap - 1u;
-                for (size_type k = 0; k < used; ++k) {
-                    pointer p = std::launder(ptr[(tail + k) & mask]);
-                    detail::destroy_at(p);
+            if constexpr (!kTrivialDtor) {
+                if (RB_UNLIKELY(!sane)) {
+                    SPSC_ASSERT(false && "typed_pool::destroy(): corrupted state; leaking slot storage to avoid UB");
+                } else {
+                    const size_type mask = cap - 1u;
+                    for (size_type k = 0; k < used; ++k) {
+                        pointer p = std::launder(ptr[(tail + k) & mask]);
+                        detail::destroy_at(p);
+                    }
                 }
             }
 
@@ -911,18 +969,28 @@ public:
             }
 
             const size_type cap = Base::capacity();
-            const size_type head = Base::head();
-            const size_type tail = Base::tail();
+            size_type head = Base::head();
+            size_type tail = Base::tail();
 
-            const size_type used = static_cast<size_type>(head - tail);
+            size_type used = static_cast<size_type>(head - tail);
+            // Atomic backends can yield an inconsistent snapshot (used > cap).
+            if (RB_UNLIKELY(used > cap)) {
+                head = Base::head();
+                tail = Base::tail();
+                used = static_cast<size_type>(head - tail);
+            }
             const bool sane = (cap != 0u) && (used <= cap);
 
             // Best-effort: destroy live objects only if state looks sane.
-            if (sane) {
-                const size_type mask = cap - 1u;
-                for (size_type k = 0; k < used; ++k) {
-                    pointer p = std::launder(slots_[(tail + k) & mask]);
-                    detail::destroy_at(p);
+            if constexpr (!kTrivialDtor) {
+                if (RB_UNLIKELY(!sane)) {
+                    SPSC_ASSERT(false && "typed_pool::destroy(): corrupted state; leaking slot storage to avoid UB");
+                } else {
+                    const size_type mask = cap - 1u;
+                    for (size_type k = 0; k < used; ++k) {
+                        pointer p = std::launder(slots_[(tail + k) & mask]);
+                        detail::destroy_at(p);
+                    }
                 }
             }
 

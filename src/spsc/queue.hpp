@@ -206,27 +206,41 @@ public:
             return;
         }
 
-        if constexpr (kDynamic) {
-            const size_type a_cap = Base::capacity();
-            const size_type a_head = Base::head();
-            const size_type a_tail = Base::tail();
+        const size_type a_cap = Base::capacity();
+        const size_type a_head = Base::head();
+        const size_type a_tail = Base::tail();
 
-            const size_type b_cap = other.Base::capacity();
-            const size_type b_head = other.Base::head();
-            const size_type b_tail = other.Base::tail();
+        const size_type b_cap = other.Base::capacity();
+        const size_type b_head = other.Base::head();
+        const size_type b_tail = other.Base::tail();
+
+        const bool a_sane = (a_cap == 0u)
+                                ? (a_head == 0u && a_tail == 0u)
+                                : (static_cast<size_type>(a_head - a_tail) <= a_cap);
+        const bool b_sane = (b_cap == 0u)
+                                ? (b_head == 0u && b_tail == 0u)
+                                : (static_cast<size_type>(b_head - b_tail) <= b_cap);
+        if (RB_UNLIKELY(!a_sane || !b_sane)) {
+            SPSC_ASSERT(false && "queue::swap(): corrupted base state; refusing swap");
+            return;
+        }
+
+        if constexpr (kDynamic) {
+            const bool a_storage_ok = ((storage_ == nullptr) == (a_cap == 0u));
+            const bool b_storage_ok = ((other.storage_ == nullptr) == (b_cap == 0u));
+            if (RB_UNLIKELY(!a_storage_ok || !b_storage_ok)) {
+                SPSC_ASSERT(false && "queue::swap(): storage/capacity invariant broken");
+                return;
+            }
+
+            SPSC_ASSERT(a_storage_ok);
+            SPSC_ASSERT(b_storage_ok);
 
             std::swap(storage_, other.storage_);
+            this->Base::swap_base(static_cast<Base &>(other));
 
-            const bool ok1 =
-                (b_cap != 0u) ? Base::init(b_cap, b_head, b_tail) : Base::init(0u);
-            const bool ok2 = (a_cap != 0u) ? other.Base::init(a_cap, a_head, a_tail)
-                                           : other.Base::init(0u);
-
-            if (RB_UNLIKELY(!ok1 || !ok2)) {
-                std::swap(storage_, other.storage_);
-                (void)Base::init(a_cap, a_head, a_tail);
-                (void)other.Base::init(b_cap, b_head, b_tail);
-            }
+            SPSC_ASSERT((storage_ == nullptr) == (Base::capacity() == 0u));
+            SPSC_ASSERT((other.storage_ == nullptr) == (other.Base::capacity() == 0u));
         } else {
             std::swap(storage_, other.storage_);
             std::swap(this->isAllocated_, other.isAllocated_);
