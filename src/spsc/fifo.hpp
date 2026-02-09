@@ -1022,6 +1022,193 @@ public:
     // ------------------------------------------------------------------------------------------
     // RAII Based API
     // ------------------------------------------------------------------------------------------
+    class bulk_write_guard {
+    public:
+        bulk_write_guard() noexcept = default;
+
+        explicit bulk_write_guard(
+            fifo &q, const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept
+            : q_(&q), regs_(q.claim_write(::spsc::unsafe, max_count)) {
+            if (regs_.total == 0u) {
+                q_ = nullptr;
+            }
+        }
+
+        bulk_write_guard(const bulk_write_guard &) = delete;
+        bulk_write_guard &operator=(const bulk_write_guard &) = delete;
+
+        bulk_write_guard(bulk_write_guard &&other) noexcept
+            : q_(other.q_), regs_(other.regs_), written_(other.written_),
+            publish_on_destroy_(other.publish_on_destroy_) {
+            other.q_ = nullptr;
+            other.regs_ = {};
+            other.written_ = 0u;
+            other.publish_on_destroy_ = false;
+        }
+
+        bulk_write_guard &operator=(bulk_write_guard &&) = delete;
+
+        ~bulk_write_guard() noexcept {
+            if (q_ != nullptr && written_ != 0u && publish_on_destroy_) {
+                q_->publish(written_);
+            }
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return (q_ != nullptr) && (regs_.total != 0u);
+        }
+
+        [[nodiscard]] size_type claimed() const noexcept { return regs_.total; }
+        [[nodiscard]] size_type constructed() const noexcept { return written_; }
+        [[nodiscard]] size_type remaining() const noexcept {
+            return static_cast<size_type>(regs_.total - written_);
+        }
+
+        [[nodiscard]] pointer peek_next() const noexcept {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ < regs_.total);
+            return slot_ptr_at_(written_);
+        }
+
+        [[nodiscard]] pointer get_next() noexcept {
+            pointer p = peek_next();
+            publish_on_destroy_ = true;
+            return p;
+        }
+
+        template <class... Args,
+                  typename = std::enable_if_t<
+                      std::is_constructible_v<value_type, Args &&...> &&
+                      std::is_assignable_v<reference, value_type>>>
+        [[nodiscard]] pointer emplace_next(Args &&...args) noexcept(
+            std::is_nothrow_constructible_v<value_type, Args &&...> &&
+            std::is_nothrow_assignable_v<reference, value_type>) {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ < regs_.total);
+            pointer p = slot_ptr_at_(written_);
+            *p = value_type(std::forward<Args>(args)...);
+            ++written_;
+            publish_on_destroy_ = true;
+            return p;
+        }
+
+        template <class U,
+                  typename = std::enable_if_t<std::is_assignable_v<reference, U &&>>>
+        [[nodiscard]] pointer write_next(U &&v) noexcept(
+            std::is_nothrow_assignable_v<reference, U &&>) {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ < regs_.total);
+            pointer p = slot_ptr_at_(written_);
+            *p = std::forward<U>(v);
+            ++written_;
+            publish_on_destroy_ = true;
+            return p;
+        }
+
+        void mark_written() noexcept {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ < regs_.total);
+            ++written_;
+        }
+
+        void arm_publish() noexcept {
+            SPSC_ASSERT(q_ != nullptr);
+            SPSC_ASSERT(written_ != 0u && "arm_publish() requires at least one written element");
+            publish_on_destroy_ = true;
+        }
+
+        void publish_on_destroy() noexcept { arm_publish(); }
+
+        void disarm_publish() noexcept { publish_on_destroy_ = false; }
+
+        void commit() noexcept {
+            if (q_ != nullptr && written_ != 0u) {
+                q_->publish(written_);
+            }
+            reset_();
+        }
+
+        void cancel() noexcept { reset_(); }
+
+    private:
+        [[nodiscard]] pointer slot_ptr_at_(const size_type i) const noexcept {
+            SPSC_ASSERT(i < regs_.total);
+            if (i < regs_.first.count) {
+                return regs_.first.ptr + i;
+            }
+            return regs_.second.ptr + (i - regs_.first.count);
+        }
+
+        void reset_() noexcept {
+            q_ = nullptr;
+            regs_ = {};
+            written_ = 0u;
+            publish_on_destroy_ = false;
+        }
+
+        fifo *q_{nullptr};
+        regions regs_{};
+        size_type written_{0u};
+        bool publish_on_destroy_{false};
+    };
+
+    class bulk_read_guard {
+    public:
+        bulk_read_guard() noexcept = default;
+
+        explicit bulk_read_guard(
+            fifo &q, const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept
+            : q_(&q), regs_(q.claim_read(::spsc::unsafe, max_count)),
+            active_(regs_.total != 0u) {
+            if (!active_) {
+                q_ = nullptr;
+            }
+        }
+
+        bulk_read_guard(const bulk_read_guard &) = delete;
+        bulk_read_guard &operator=(const bulk_read_guard &) = delete;
+
+        bulk_read_guard(bulk_read_guard &&other) noexcept
+            : q_(other.q_), regs_(other.regs_), active_(other.active_) {
+            other.q_ = nullptr;
+            other.regs_ = {};
+            other.active_ = false;
+        }
+
+        bulk_read_guard &operator=(bulk_read_guard &&) = delete;
+
+        ~bulk_read_guard() noexcept {
+            if (active_ && q_) {
+                q_->pop(regs_.total);
+            }
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept { return active_; }
+
+        [[nodiscard]] size_type count() const noexcept { return regs_.total; }
+        [[nodiscard]] const regions &regions_view() const noexcept {
+            return regs_;
+        }
+
+        void commit() noexcept {
+            if (active_ && q_) {
+                q_->pop(regs_.total);
+            }
+            cancel();
+        }
+
+        void cancel() noexcept {
+            active_ = false;
+            q_ = nullptr;
+            regs_ = {};
+        }
+
+    private:
+        fifo *q_{nullptr};
+        regions regs_{};
+        bool active_{false};
+    };
+
     class write_guard {
     public:
         write_guard() noexcept = default;
@@ -1157,7 +1344,15 @@ public:
     [[nodiscard]] write_guard scoped_write() noexcept {
         return write_guard(*this);
     }
+    [[nodiscard]] bulk_write_guard
+    scoped_write(const size_type max_count) noexcept {
+        return bulk_write_guard(*this, max_count);
+    }
     [[nodiscard]] read_guard scoped_read() noexcept { return read_guard(*this); }
+    [[nodiscard]] bulk_read_guard
+    scoped_read(const size_type max_count) noexcept {
+        return bulk_read_guard(*this, max_count);
+    }
 
 private:
     void copy_from(const fifo &other) {

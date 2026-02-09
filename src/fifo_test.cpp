@@ -19,17 +19,116 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <thread>
+#include <csignal>
+#include <cstddef>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <new>
 #include <random>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include <QCoreApplication>
+#include <QProcess>
+#include <QProcessEnvironment>
+
 #include "fifo_test.h"
+
+#if !defined(SPSC_ASSERT) && !defined(NDEBUG)
+#  define SPSC_ASSERT(expr) do { if(!(expr)) { std::abort(); } } while(0)
+#endif
+
 #include "fifo.hpp"
+
+namespace spsc_fifo_death_detail {
+
+#if !defined(NDEBUG)
+
+static constexpr int kDeathExitCode = 0xAD;
+
+static void sigabrt_handler_(int) noexcept {
+    std::_Exit(kDeathExitCode);
+}
+
+[[noreturn]] static void run_case_(const char* mode) {
+    std::signal(SIGABRT, &sigabrt_handler_);
+
+    using Q = spsc::fifo<std::uint32_t, 16u, spsc::policy::P>;
+
+    if (std::strcmp(mode, "pop_empty") == 0) {
+        Q q;
+        q.pop(); // Must assert: pop on empty.
+    } else if (std::strcmp(mode, "front_empty") == 0) {
+        Q q;
+        (void)q.front(); // Must assert: front on empty.
+    } else if (std::strcmp(mode, "publish_full") == 0) {
+        Q q;
+        for (std::uint32_t i = 0; i < 16u; ++i) {
+            if (!q.try_push(i)) {
+                std::_Exit(0xE1);
+            }
+        }
+        q.publish(); // Must assert: publish while full.
+    } else if (std::strcmp(mode, "claim_full") == 0) {
+        Q q;
+        for (std::uint32_t i = 0; i < 16u; ++i) {
+            if (!q.try_push(i)) {
+                std::_Exit(0xE2);
+            }
+        }
+        (void)q.claim(); // Must assert: claim while full.
+    } else if (std::strcmp(mode, "bulk_double_emplace_next") == 0) {
+        Q q;
+        auto g = q.scoped_write(1u);
+        (void)g.emplace_next(1u);
+        (void)g.emplace_next(2u); // Must assert: writing past claimed.
+    } else if (std::strcmp(mode, "bulk_arm_publish_unwritten") == 0) {
+        Q q;
+        auto g = q.scoped_write(2u);
+        g.arm_publish(); // Must assert: no written elements.
+    } else if (std::strcmp(mode, "consume_foreign_snapshot") == 0) {
+        Q q1;
+        Q q2;
+        if (!q1.try_push(1u)) {
+            std::_Exit(0xE3);
+        }
+        if (!q2.try_push(2u)) {
+            std::_Exit(0xE4);
+        }
+        const auto snap = q2.make_snapshot();
+        q1.consume(snap); // Must assert: foreign snapshot identity.
+    } else if (std::strcmp(mode, "pop_n_too_many") == 0) {
+        Q q;
+        if (!q.try_push(1u)) {
+            std::_Exit(0xE5);
+        }
+        q.pop(2u); // Must assert: can_read(2) is false.
+    } else {
+        std::_Exit(0xEF);
+    }
+
+    std::_Exit(0xF0);
+}
+
+struct Runner_ {
+    Runner_() {
+        const char* mode = std::getenv("SPSC_FIFO_DEATH");
+        if (mode && *mode) {
+            run_case_(mode);
+        }
+    }
+};
+
+static const Runner_ g_runner_{};
+
+#endif // !defined(NDEBUG)
+
+} // namespace spsc_fifo_death_detail
 
 namespace {
 
@@ -37,8 +136,10 @@ namespace {
 // Scale fuzz to avoid painfully slow Debug runs.
 #if defined(NDEBUG)
 static constexpr int kFuzzIters = 55000;
+static constexpr int kSwapIters = 30000;
 #else
-static constexpr int kFuzzIters = 12;
+static constexpr int kFuzzIters = 6000;
+static constexpr int kSwapIters = 6000;
 #endif
 
 // Threaded stress is only valid for atomic backends (A/CA).
@@ -73,6 +174,149 @@ struct Traced final {
     }
 
     ~Traced() noexcept = default;
+};
+
+struct Tracked final {
+    std::uint32_t seq{0u};
+    std::uint32_t cookie{0u};
+
+    static inline std::atomic<int> live{0};
+    static inline std::atomic<int> ctor{0};
+    static inline std::atomic<int> dtor{0};
+    static inline std::atomic<int> copy{0};
+    static inline std::atomic<int> move{0};
+
+    Tracked() noexcept : seq(0u), cookie(0xA5A5A5A5u) {
+        ++live;
+        ++ctor;
+    }
+
+    explicit Tracked(const std::uint32_t s) noexcept
+        : seq(s), cookie(s ^ 0xA5A5A5A5u) {
+        ++live;
+        ++ctor;
+    }
+
+    Tracked(const Tracked& other) noexcept
+        : seq(other.seq), cookie(other.cookie) {
+        ++live;
+        ++ctor;
+        ++copy;
+    }
+
+    Tracked& operator=(const Tracked& other) noexcept {
+        if (this != &other) {
+            seq = other.seq;
+            cookie = other.cookie;
+        }
+        ++copy;
+        return *this;
+    }
+
+    Tracked(Tracked&& other) noexcept
+        : seq(other.seq), cookie(other.cookie) {
+        other.cookie = 0xDEADu;
+        ++live;
+        ++ctor;
+        ++move;
+    }
+
+    Tracked& operator=(Tracked&& other) noexcept {
+        if (this != &other) {
+            seq = other.seq;
+            cookie = other.cookie;
+            other.cookie = 0xDEADu;
+        }
+        ++move;
+        return *this;
+    }
+
+    ~Tracked() noexcept {
+        cookie = 0xBADC0DEu;
+        ++dtor;
+        --live;
+    }
+};
+
+static void tracked_reset() {
+    Tracked::live.store(0);
+    Tracked::ctor.store(0);
+    Tracked::dtor.store(0);
+    Tracked::copy.store(0);
+    Tracked::move.store(0);
+}
+
+struct AllocStats {
+    static inline std::atomic<std::size_t> allocs{0};
+    static inline std::atomic<std::size_t> deallocs{0};
+    static inline std::atomic<std::size_t> bytes_live{0};
+    static inline std::atomic<std::size_t> bytes_peak{0};
+
+    static void reset() {
+        allocs.store(0);
+        deallocs.store(0);
+        bytes_live.store(0);
+        bytes_peak.store(0);
+    }
+
+    static void on_alloc(const std::size_t bytes) {
+        allocs.fetch_add(1);
+        const auto live_now = bytes_live.fetch_add(bytes) + bytes;
+        auto peak = bytes_peak.load();
+        while (live_now > peak && !bytes_peak.compare_exchange_weak(peak, live_now)) {
+            // CAS loop
+        }
+    }
+
+    static void on_dealloc(const std::size_t bytes) {
+        deallocs.fetch_add(1);
+        bytes_live.fetch_sub(bytes);
+    }
+};
+
+template <class T, std::size_t Align>
+struct CountingAlignedAlloc {
+    using value_type = T;
+    using pointer = T*;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using is_always_equal = std::true_type;
+
+    CountingAlignedAlloc() = default;
+
+    template <class U>
+    CountingAlignedAlloc(const CountingAlignedAlloc<U, Align>&) noexcept {}
+
+    template <class U>
+    struct rebind { using other = CountingAlignedAlloc<U, Align>; };
+
+    [[nodiscard]] pointer allocate(const size_type n) noexcept {
+        if (n == 0u) {
+            return nullptr;
+        }
+        const std::size_t bytes = n * sizeof(T);
+        void* p = ::operator new(bytes, std::align_val_t(Align), std::nothrow);
+        if (!p) {
+            return nullptr;
+        }
+        AllocStats::on_alloc(bytes);
+        return static_cast<pointer>(p);
+    }
+
+    void deallocate(pointer p, const size_type n) noexcept {
+        if (!p || n == 0u) {
+            return;
+        }
+        const std::size_t bytes = n * sizeof(T);
+        AllocStats::on_dealloc(bytes);
+        ::operator delete(p, std::align_val_t(Align));
+    }
+
+    template <class U>
+    bool operator==(const CountingAlignedAlloc<U, Align>&) const noexcept { return true; }
+
+    template <class U>
+    bool operator!=(const CountingAlignedAlloc<U, Align>&) const noexcept { return false; }
 };
 
 static inline bool is_pow2(reg x) noexcept {
@@ -203,6 +447,8 @@ static void api_compile_smoke() {
 
         decltype(std::declval<Q&>().scoped_write()),
         decltype(std::declval<Q&>().scoped_read()),
+        decltype(std::declval<Q&>().scoped_write(size_type{1u})),
+        decltype(std::declval<Q&>().scoped_read(size_type{1u})),
 
 #if SPSC_HAS_SPAN
         decltype(std::declval<Q&>().span()),
@@ -255,6 +501,84 @@ static void fill_values(Q& q, std::initializer_list<int> vals) {
     for (int v : vals) {
         QVERIFY(q.try_push(Traced{v}));
     }
+}
+
+template <class Q>
+static void fill_seq_tracked(Q& q, const std::uint32_t first, const std::uint32_t count) {
+    for (std::uint32_t i = 0u; i < count; ++i) {
+        QVERIFY(q.try_push(Tracked{first + i}));
+    }
+}
+
+template <class Q>
+static void check_fifo_exact_tracked(Q& q, const std::uint32_t first, const std::uint32_t count) {
+    for (std::uint32_t i = 0u; i < count; ++i) {
+        QVERIFY(!q.empty());
+        QCOMPARE(q.front().seq, first + i);
+        QCOMPARE(q.front().cookie, (first + i) ^ 0xA5A5A5A5u);
+        q.pop();
+    }
+    QVERIFY(q.empty());
+}
+
+template <class Q>
+static void fill_seq_u32(Q& q, const std::uint32_t first, const std::uint32_t count) {
+    for (std::uint32_t i = 0u; i < count; ++i) {
+        QVERIFY(q.try_push(first + i));
+    }
+}
+
+template <class Q>
+static void check_fifo_exact_u32(Q& q, const std::uint32_t first, const std::uint32_t count) {
+    for (std::uint32_t i = 0u; i < count; ++i) {
+        QVERIFY(!q.empty());
+        QCOMPARE(q.front(), first + i);
+        q.pop();
+    }
+    QVERIFY(q.empty());
+}
+
+template <class Q>
+static void full_empty_cycle_u32(Q& q, const std::uint32_t base) {
+    using T = typename Q::value_type;
+    static_assert(std::is_same_v<T, std::uint32_t>, "Expected fifo<uint32_t>.");
+
+    const reg cap = q.capacity();
+    QVERIFY(cap > 0u);
+
+    const reg s0 = q.size();
+    QVERIFY(s0 <= cap);
+
+    const reg fill = cap - s0;
+    for (reg i = 0u; i < fill; ++i) {
+        const auto v = static_cast<std::uint32_t>(base + static_cast<std::uint32_t>(i));
+        QVERIFY(q.try_push(v));
+    }
+
+    QCOMPARE(q.size(), cap);
+    QVERIFY(q.full());
+
+    {
+        const auto extra = static_cast<std::uint32_t>(base + static_cast<std::uint32_t>(fill));
+        QVERIFY(!q.try_push(extra));
+    }
+
+    for (reg i = 0u; i < s0; ++i) {
+        QVERIFY(q.try_front() != nullptr);
+        q.pop();
+    }
+
+    for (reg i = 0u; i < fill; ++i) {
+        auto* p = q.try_front();
+        QVERIFY(p != nullptr);
+        const auto out = *p;
+        q.pop();
+        const auto exp = static_cast<std::uint32_t>(base + static_cast<std::uint32_t>(i));
+        QCOMPARE(out, exp);
+    }
+
+    QVERIFY(q.empty());
+    QCOMPARE(q.size(), reg{0u});
 }
 
 // ------------------------------ per-method tests ------------------------------
@@ -1078,6 +1402,133 @@ static void test_raii_guards(Q& q) {
 }
 
 template <class Q>
+static void test_bulk_raii_overloads(Q& q) {
+    q.clear();
+
+    // bulk_write_guard: write + disarm => no publish.
+    {
+        auto bw = q.scoped_write(5u);
+        QVERIFY(static_cast<bool>(bw));
+        QCOMPARE(bw.claimed(), reg{5u});
+        QCOMPARE(bw.constructed(), reg{0u});
+        QCOMPARE(bw.remaining(), reg{5u});
+
+        auto* p1 = bw.emplace_next(10);
+        auto* p2 = bw.emplace_next(11);
+        QVERIFY(p1 != nullptr);
+        QVERIFY(p2 != nullptr);
+        QCOMPARE(bw.constructed(), reg{2u});
+        QCOMPARE(bw.remaining(), reg{3u});
+
+        bw.disarm_publish();
+    }
+    QVERIFY(q.empty());
+
+    // bulk_write_guard: manual pointer path via get_next() + mark_written().
+    {
+        auto bw = q.scoped_write(1u);
+        QVERIFY(static_cast<bool>(bw));
+        auto* slot = bw.get_next();
+        QVERIFY(slot != nullptr);
+        slot->v = 99;
+        slot->tag = 0xC0FFEEu;
+        bw.mark_written();
+        QCOMPARE(bw.constructed(), reg{1u});
+        bw.commit();
+    }
+    QCOMPARE(q.size(), reg{1u});
+    QCOMPARE(q.front().v, 99);
+    QCOMPARE(q.front().tag, std::uint32_t{0xC0FFEEu});
+    q.pop();
+    QVERIFY(q.empty());
+
+    // bulk_write_guard: explicit commit publishes exactly N written elements.
+    {
+        auto bw = q.scoped_write(4u);
+        QVERIFY(static_cast<bool>(bw));
+        for (int v = 100; v < 104; ++v) {
+            auto* p = bw.emplace_next(v);
+            QVERIFY(p != nullptr);
+            QCOMPARE(p->v, v);
+        }
+        QCOMPARE(bw.constructed(), reg{4u});
+        bw.commit();
+        QVERIFY(!static_cast<bool>(bw));
+    }
+    QCOMPARE(q.size(), reg{4u});
+
+    // bulk_write_guard move semantics + destructor publish.
+    {
+        auto bw1 = q.scoped_write(2u);
+        QVERIFY(static_cast<bool>(bw1));
+        auto bw2 = std::move(bw1);
+        QVERIFY(!static_cast<bool>(bw1));
+        QVERIFY(static_cast<bool>(bw2));
+        (void)bw2.write_next(Traced{104});
+        (void)bw2.write_next(Traced{105});
+        bw2.arm_publish();
+    }
+    QCOMPARE(q.size(), reg{6u});
+
+    // bulk_read_guard: inspect + cancel (must not pop).
+    {
+        auto br = q.scoped_read(3u);
+        QVERIFY(static_cast<bool>(br));
+        QCOMPARE(br.count(), reg{3u});
+        const auto& r = br.regions_view();
+
+        std::vector<int> vals;
+        vals.reserve(static_cast<std::size_t>(r.total));
+        for (reg i = 0; i < r.first.count; ++i) {
+            vals.push_back(r.first.ptr[i].v);
+        }
+        for (reg i = 0; i < r.second.count; ++i) {
+            vals.push_back(r.second.ptr[i].v);
+        }
+        QCOMPARE(vals.size(), std::size_t{3u});
+        QCOMPARE(vals[0], 100);
+        QCOMPARE(vals[1], 101);
+        QCOMPARE(vals[2], 102);
+
+        br.cancel();
+        QVERIFY(!static_cast<bool>(br));
+    }
+    QCOMPARE(q.size(), reg{6u});
+
+    // bulk_read_guard: commit pops exactly requested count.
+    {
+        auto br = q.scoped_read(4u);
+        QVERIFY(static_cast<bool>(br));
+        QCOMPARE(br.count(), reg{4u});
+        br.commit();
+        QVERIFY(!static_cast<bool>(br));
+    }
+    QCOMPARE(q.size(), reg{2u});
+    QCOMPARE(q.front().v, 104);
+
+    // bulk_read_guard move semantics + destructor pop.
+    {
+        auto br1 = q.scoped_read(2u);
+        QVERIFY(static_cast<bool>(br1));
+        auto br2 = std::move(br1);
+        QVERIFY(!static_cast<bool>(br1));
+        QVERIFY(static_cast<bool>(br2));
+        QCOMPARE(br2.count(), reg{2u});
+    }
+    QVERIFY(q.empty());
+
+    // max_count=0 => inactive guards.
+    {
+        auto bw = q.scoped_write(0u);
+        QVERIFY(!static_cast<bool>(bw));
+    }
+    {
+        auto br = q.scoped_read(0u);
+        QVERIFY(!static_cast<bool>(br));
+    }
+}
+
+template <class Q>
 static void paranoid_random_fuzz(Q& q, int seed, int iters) {
     q.clear();
     std::deque<int> model;
@@ -1291,6 +1742,11 @@ static void test_invalid_queue_behavior(Q& q) {
         QVERIFY(!static_cast<bool>(rg));
         auto wg = q.scoped_write();
         QVERIFY(!static_cast<bool>(wg));
+
+        auto brg = q.scoped_read(reg{8u});
+        QVERIFY(!static_cast<bool>(brg));
+        auto bwg = q.scoped_write(reg{8u});
+        QVERIFY(!static_cast<bool>(bwg));
     }
 
     // Snapshot on invalid should be empty and non-consumable.
@@ -1429,6 +1885,7 @@ static void run_static_suite() {
     test_bulk_regions(q);
     test_snapshots(q);
     test_raii_guards(q);
+    test_bulk_raii_overloads(q);
 
     paranoid_random_fuzz(q, /*seed*/ 0x123456 + int(sizeof(Policy)), /*iters*/ kFuzzIters);
 }
@@ -1458,6 +1915,7 @@ static void run_dynamic_suite() {
     test_bulk_regions(q);
     test_snapshots(q);
     test_raii_guards(q);
+    test_bulk_raii_overloads(q);
 
     paranoid_random_fuzz(q, /*seed*/ 0xBADC0DE + int(sizeof(Policy)), /*iters*/ kFuzzIters);
 
@@ -1704,6 +2162,917 @@ static void run_threaded_suite() {
         QVERIFY(q.resize(4096u));
         threaded_spsc_stress_fifo(q);
     }
+}
+
+template <class Q>
+static void deterministic_interleaving_suite(Q& q) {
+    using T = typename Q::value_type;
+    static_assert(std::is_same_v<T, std::uint32_t>, "deterministic_interleaving_suite expects fifo<uint32_t>.");
+
+    QVERIFY(q.is_valid());
+    q.clear();
+    QVERIFY(q.empty());
+
+    auto* s0 = q.try_claim();
+    QVERIFY(s0 != nullptr);
+    *s0 = 1u;
+
+    // claim() must not reserve: repeated claim points to the same slot until publish().
+    auto* s0_again = q.try_claim();
+    QVERIFY(s0_again != nullptr);
+    QCOMPARE(reinterpret_cast<void*>(s0_again), reinterpret_cast<void*>(s0));
+
+    QVERIFY(q.try_publish());
+    QVERIFY(!q.empty());
+    QCOMPARE(q.front(), std::uint32_t{1u});
+
+    q.pop();
+    QVERIFY(q.empty());
+
+    auto* s1 = q.try_claim();
+    QVERIFY(s1 != nullptr);
+    *s1 = 2u;
+    QVERIFY(q.try_publish());
+    QCOMPARE(q.front(), std::uint32_t{2u});
+    q.pop();
+    QVERIFY(q.empty());
+}
+
+template <class Policy>
+static void run_threaded_snapshot_suite(const char* name) {
+    using Q = spsc::fifo<ThreadMsg, 0u, Policy>;
+
+    Q q;
+    QVERIFY2(q.resize(1024u), name);
+    QVERIFY2(q.is_valid(), name);
+
+    std::atomic<bool> abort{false};
+    std::atomic<bool> prod_done{false};
+    std::atomic<int> fail{0};
+
+    auto should_abort = [&]() -> bool {
+        return abort.load(std::memory_order_relaxed);
+    };
+
+    std::thread prod([&]() {
+        for (int i = 1; i <= kThreadIters && !should_abort(); ++i) {
+            const auto msg = make_msg(static_cast<std::uint32_t>(i));
+            while (!q.try_push(msg)) {
+                if (should_abort()) {
+                    return;
+                }
+                std::this_thread::yield();
+            }
+        }
+        prod_done.store(true, std::memory_order_release);
+    });
+
+    std::thread cons([&]() {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(kThreadTimeoutMs);
+        std::uint32_t expected = 1u;
+
+        while (expected <= static_cast<std::uint32_t>(kThreadIters) && !should_abort()) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                fail.store(1, std::memory_order_relaxed);
+                abort.store(true, std::memory_order_relaxed);
+                return;
+            }
+
+            // Iterator must not loop forever under concurrent producer activity.
+            {
+                reg steps = 0u;
+                for (const auto& v : q) {
+                    (void)v;
+                    if (++steps > q.capacity()) {
+                        fail.store(2, std::memory_order_relaxed);
+                        abort.store(true, std::memory_order_relaxed);
+                        return;
+                    }
+                }
+            }
+
+            auto snap = q.make_snapshot();
+            const reg sz = snap.size();
+
+            if (sz == 0u) {
+                if (!(snap.begin() == snap.end())) {
+                    fail.store(3, std::memory_order_relaxed);
+                    abort.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                if (prod_done.load(std::memory_order_acquire) && q.empty() &&
+                    expected <= static_cast<std::uint32_t>(kThreadIters)) {
+                    fail.store(4, std::memory_order_relaxed);
+                    abort.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                std::this_thread::yield();
+                continue;
+            }
+
+            const reg cap = q.capacity();
+            reg cnt = 0u;
+            std::uint32_t cur = expected;
+            for (auto it = snap.begin(); it != snap.end(); ++it) {
+                if (cnt > cap) {
+                    fail.store(5, std::memory_order_relaxed);
+                    abort.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                if (!msg_matches(*it, cur)) {
+                    fail.store(6, std::memory_order_relaxed);
+                    abort.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                ++cur;
+                ++cnt;
+            }
+
+            if (cnt != sz) {
+                fail.store(7, std::memory_order_relaxed);
+                abort.store(true, std::memory_order_relaxed);
+                return;
+            }
+
+            if (!q.try_consume(snap)) {
+                fail.store(8, std::memory_order_relaxed);
+                abort.store(true, std::memory_order_relaxed);
+                return;
+            }
+
+            expected += static_cast<std::uint32_t>(cnt);
+        }
+    });
+
+    prod.join();
+    cons.join();
+
+    QVERIFY2(fail.load(std::memory_order_relaxed) == 0, name);
+    QVERIFY2(!abort.load(std::memory_order_relaxed), name);
+    QVERIFY2(q.empty(), name);
+    q.destroy();
+}
+
+template <class Policy>
+static void run_threaded_bulk_regions_suite(const char* name) {
+    using Q = spsc::fifo<ThreadMsg, 0u, Policy>;
+
+    Q q;
+    QVERIFY2(q.resize(1024u), name);
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> done{false};
+    std::atomic<bool> abort{false};
+
+    constexpr std::uint32_t kMaxBatch = 8u;
+
+    std::thread prod([&] {
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        std::uint32_t seq = 1u;
+        std::uint32_t rng = 0x1234567u;
+
+        auto next_u32 = [&] {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            return rng;
+        };
+
+        while (seq <= static_cast<std::uint32_t>(kThreadIters) &&
+               !abort.load(std::memory_order_relaxed)) {
+            const reg want = static_cast<reg>((next_u32() % kMaxBatch) + 1u);
+            auto wr = q.claim_write(::spsc::unsafe, want);
+            if (wr.total == 0u) {
+                std::this_thread::yield();
+                continue;
+            }
+
+            reg written = 0u;
+            for (reg i = 0u; i < wr.first.count && seq <= static_cast<std::uint32_t>(kThreadIters); ++i) {
+                wr.first.ptr[i] = make_msg(seq++);
+                ++written;
+            }
+            for (reg i = 0u; i < wr.second.count && seq <= static_cast<std::uint32_t>(kThreadIters); ++i) {
+                wr.second.ptr[i] = make_msg(seq++);
+                ++written;
+            }
+
+            if (written != 0u) {
+                q.publish(written);
+            }
+        }
+
+        done.store(true, std::memory_order_release);
+    });
+
+    std::thread cons([&] {
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        std::uint32_t expect = 1u;
+        const auto t0 = std::chrono::steady_clock::now();
+
+        while (expect <= static_cast<std::uint32_t>(kThreadIters) &&
+               !abort.load(std::memory_order_relaxed)) {
+            auto rr = q.claim_read(::spsc::unsafe, kMaxBatch);
+            if (rr.total == 0u) {
+                if (done.load(std::memory_order_acquire) && q.empty()) {
+                    abort.store(true, std::memory_order_relaxed);
+                    break;
+                }
+                const auto now = std::chrono::steady_clock::now();
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+                if (ms > kThreadTimeoutMs) {
+                    abort.store(true, std::memory_order_relaxed);
+                    break;
+                }
+                std::this_thread::yield();
+                continue;
+            }
+
+            auto check_span = [&](const ThreadMsg* p, const reg n) {
+                for (reg i = 0u; i < n; ++i) {
+                    if (!msg_matches(p[i], expect)) {
+                        abort.store(true, std::memory_order_relaxed);
+                        return;
+                    }
+                    ++expect;
+                }
+            };
+
+            if (rr.first.count) {
+                check_span(rr.first.ptr, rr.first.count);
+            }
+            if (rr.second.count) {
+                check_span(rr.second.ptr, rr.second.count);
+            }
+
+            q.pop(rr.total);
+        }
+    });
+
+    start.store(true, std::memory_order_release);
+    prod.join();
+    cons.join();
+
+    QVERIFY2(!abort.load(std::memory_order_relaxed), name);
+    q.destroy();
+}
+
+static void allocator_accounting_suite() {
+    using Q = spsc::fifo<Tracked, 0u, spsc::policy::P,
+                         CountingAlignedAlloc<Tracked, alignof(Tracked)>>;
+    tracked_reset();
+    AllocStats::reset();
+
+    {
+        Q q;
+        QVERIFY(!q.is_valid());
+        QVERIFY(q.resize(64u));
+        QVERIFY(q.is_valid());
+        QCOMPARE(AllocStats::allocs.load(), std::size_t{1});
+        QVERIFY(AllocStats::bytes_live.load() >= 64u * sizeof(Tracked));
+
+        fill_seq_tracked(q, 1u, 10u);
+        QVERIFY(q.resize(256u));
+        QVERIFY(q.capacity() >= 256u);
+        QVERIFY(AllocStats::allocs.load() >= std::size_t{2});
+        QVERIFY(AllocStats::deallocs.load() >= std::size_t{1});
+
+        q.destroy();
+        QVERIFY(!q.is_valid());
+    }
+
+    QCOMPARE(AllocStats::bytes_live.load(), std::size_t{0});
+    QCOMPARE(AllocStats::allocs.load(), AllocStats::deallocs.load());
+    QCOMPARE(Tracked::live.load(), 0);
+    QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+}
+
+static void dynamic_capacity_sweep_suite() {
+    using Q = spsc::fifo<std::uint32_t, 0u, spsc::policy::P>;
+    Q q;
+
+    for (reg req = 0u; req < 2048u; req += 7u) {
+        const reg want = (req == 0u) ? 0u : req;
+        QVERIFY(q.resize(want));
+
+        if (want == 0u) {
+            QVERIFY(!q.is_valid());
+            QCOMPARE(q.capacity(), reg{0u});
+            continue;
+        }
+
+        QVERIFY(q.is_valid());
+        const reg cap = q.capacity();
+        QVERIFY(cap >= 2u);
+        QVERIFY((cap & (cap - 1u)) == 0u);
+
+        q.clear();
+        const std::uint32_t n = static_cast<std::uint32_t>((cap < 5u) ? cap : 5u);
+        fill_seq_u32(q, 1u, n);
+        check_fifo_exact_u32(q, 1u, n);
+    }
+
+    q.destroy();
+}
+
+static void move_swap_stress_suite() {
+    using Q = spsc::fifo<Tracked, 0u, spsc::policy::P>;
+    tracked_reset();
+
+    Q a;
+    Q b;
+    QVERIFY(a.resize(128u));
+    QVERIFY(b.resize(128u));
+
+    std::uint32_t seq = 1u;
+    for (int i = 0; i < kSwapIters; ++i) {
+        if (!a.full()) {
+            static_cast<void>(a.try_push(Tracked{seq++}));
+        }
+        if (!b.full()) {
+            static_cast<void>(b.try_push(Tracked{seq++}));
+        }
+
+        if ((i & 7) == 0) {
+            a.swap(b);
+        } else if ((i & 31) == 0) {
+            Q tmp{std::move(a)};
+            a = std::move(b);
+            b = std::move(tmp);
+        }
+
+        QVERIFY(a.is_valid());
+        QVERIFY(b.is_valid());
+
+        if ((i & 3) == 0) {
+            if (!a.empty()) {
+                a.pop();
+            }
+            if (!b.empty()) {
+                b.pop();
+            }
+        }
+    }
+
+    a.destroy();
+    b.destroy();
+    QCOMPARE(Tracked::live.load(), 0);
+    QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+}
+
+enum class FuzzOp : std::uint8_t {
+    TryPush,
+    TryEmplace,
+    ClaimPublish,
+    RegionPublish,
+    TryPop,
+    PopN,
+    SnapshotConsume,
+    Clear,
+    Resize,
+    Swap
+};
+
+static FuzzOp pick_fuzz_op(std::mt19937& rng) {
+    std::uniform_int_distribution<int> d(0, 9);
+    return static_cast<FuzzOp>(d(rng));
+}
+
+template <class Policy>
+static void run_state_machine_fuzz(const bool dynamic) {
+    using QStatic = spsc::fifo<Tracked, 64u, Policy>;
+    using QDynamic = spsc::fifo<Tracked, 0u, Policy>;
+
+    tracked_reset();
+    std::mt19937 rng(0xC0FFEEu + static_cast<std::uint32_t>(sizeof(Policy) * 17u) + (dynamic ? 1u : 0u));
+    std::uniform_int_distribution<int> val(1, 1'000'000);
+    std::deque<std::uint32_t> model;
+
+    auto check_equal = [&](auto& q) {
+        QCOMPARE(q.size(), reg(model.size()));
+        for (reg i = 0u; i < q.size(); ++i) {
+            QCOMPARE(q[i].seq, model[static_cast<std::size_t>(i)]);
+            QCOMPARE(q[i].cookie, model[static_cast<std::size_t>(i)] ^ 0xA5A5A5A5u);
+        }
+        if (!model.empty()) {
+            QCOMPARE(q.front().seq, model.front());
+            QCOMPARE(q.front().cookie, model.front() ^ 0xA5A5A5A5u);
+        }
+    };
+
+    auto do_one = [&](auto& q, auto& other) {
+        const auto op = pick_fuzz_op(rng);
+        switch (op) {
+        case FuzzOp::TryPush: {
+            const auto x = static_cast<std::uint32_t>(val(rng));
+            if (q.try_push(Tracked{x})) {
+                model.push_back(x);
+            }
+            break;
+        }
+        case FuzzOp::TryEmplace: {
+            const auto x = static_cast<std::uint32_t>(val(rng));
+            auto* p = q.try_emplace(x);
+            if (p != nullptr) {
+                model.push_back(x);
+            }
+            break;
+        }
+        case FuzzOp::ClaimPublish: {
+            if (q.full()) {
+                break;
+            }
+            const auto x = static_cast<std::uint32_t>(val(rng));
+            auto* slot = q.try_claim();
+            QVERIFY(slot != nullptr);
+            *slot = Tracked{x};
+            QVERIFY(q.try_publish());
+            model.push_back(x);
+            break;
+        }
+        case FuzzOp::RegionPublish: {
+            if (!q.can_write(1u)) {
+                break;
+            }
+            const reg maxn = static_cast<reg>(1u + (rng() % 7u));
+            auto wr = q.claim_write(::spsc::unsafe, maxn);
+            if (wr.empty()) {
+                break;
+            }
+            for (reg i = 0u; i < wr.first.count; ++i) {
+                const auto x = static_cast<std::uint32_t>(val(rng));
+                wr.first.ptr[i] = Tracked{x};
+                model.push_back(x);
+            }
+            for (reg i = 0u; i < wr.second.count; ++i) {
+                const auto x = static_cast<std::uint32_t>(val(rng));
+                wr.second.ptr[i] = Tracked{x};
+                model.push_back(x);
+            }
+            q.publish(wr.total);
+            break;
+        }
+        case FuzzOp::TryPop: {
+            if (model.empty()) {
+                QVERIFY(q.try_front() == nullptr);
+                QVERIFY(!q.try_pop());
+            } else {
+                QVERIFY(q.try_front() != nullptr);
+                QVERIFY(q.try_pop());
+                model.pop_front();
+            }
+            break;
+        }
+        case FuzzOp::PopN: {
+            if (model.empty()) {
+                break;
+            }
+            const reg n = static_cast<reg>(1u + (rng() % 5u));
+            const reg can = q.can_read(n) ? n : q.size();
+            q.pop(can);
+            for (reg i = 0u; i < can; ++i) {
+                model.pop_front();
+            }
+            break;
+        }
+        case FuzzOp::SnapshotConsume: {
+            auto snap = q.make_snapshot();
+            const reg snap_sz = static_cast<reg>(snap.size());
+            if (snap_sz == 0u) {
+                break;
+            }
+            QVERIFY(q.try_consume(snap));
+            for (reg i = 0u; i < snap_sz; ++i) {
+                model.pop_front();
+            }
+            break;
+        }
+        case FuzzOp::Clear: {
+            q.clear();
+            model.clear();
+            break;
+        }
+        case FuzzOp::Resize: {
+            if constexpr (std::is_same_v<std::decay_t<decltype(q)>, QDynamic>) {
+                const reg req = static_cast<reg>(2u << (rng() % 9u));
+                QVERIFY(q.resize(req));
+                QVERIFY(q.is_valid());
+                QVERIFY(q.capacity() >= 2u);
+            }
+            break;
+        }
+        case FuzzOp::Swap: {
+            q.swap(other);
+            model.clear();
+            q.clear();
+            other.clear();
+            break;
+        }
+        default:
+            break;
+        }
+
+        check_equal(q);
+    };
+
+    if (dynamic) {
+        QDynamic q;
+        QDynamic other;
+        QVERIFY(q.resize(64u));
+        QVERIFY(other.resize(64u));
+        for (int i = 0; i < kFuzzIters; ++i) {
+            do_one(q, other);
+        }
+        q.destroy();
+        other.destroy();
+    } else {
+        {
+            QStatic q;
+            QStatic other;
+            for (int i = 0; i < kFuzzIters; ++i) {
+                do_one(q, other);
+            }
+        }
+    }
+
+    QCOMPARE(Tracked::live.load(), 0);
+    QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+}
+
+static void state_machine_fuzz_sweep_suite() {
+    run_state_machine_fuzz<spsc::policy::P>(false);
+    run_state_machine_fuzz<spsc::policy::A<>>(false);
+    run_state_machine_fuzz<spsc::policy::P>(true);
+    run_state_machine_fuzz<spsc::policy::CA<>>(true);
+}
+
+static void resize_migration_order_suite() {
+    using Q = spsc::fifo<Tracked, 0u, spsc::policy::P>;
+    tracked_reset();
+
+    Q q;
+    QVERIFY(q.resize(32u));
+
+    fill_seq_tracked(q, 1u, 25u);
+    QVERIFY(q.resize(256u));
+    QCOMPARE(q.size(), reg{25u});
+    check_fifo_exact_tracked(q, 1u, 25u);
+
+    q.destroy();
+    QCOMPARE(Tracked::live.load(), 0);
+    QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+}
+
+static void snapshot_try_consume_contract_suite() {
+    using Q = spsc::fifo<Tracked, 64u, spsc::policy::P>;
+    tracked_reset();
+
+    {
+        Q q;
+        fill_seq_tracked(q, 1u, 10u);
+        auto snap = q.make_snapshot();
+
+        q.pop();
+        QVERIFY(!q.try_consume(snap));
+
+        auto snap2 = q.make_snapshot();
+        QVERIFY(q.try_consume(snap2));
+        QVERIFY(q.empty());
+    }
+
+    QCOMPARE(Tracked::live.load(), 0);
+    QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+}
+
+static void snapshot_iteration_contract_suite() {
+    using Q = spsc::fifo<std::uint32_t, 64u, spsc::policy::P>;
+    Q q;
+    fill_seq_u32(q, 1u, 30u);
+
+    auto snap = q.make_snapshot();
+    reg n = 0u;
+    std::uint32_t exp = 1u;
+    for (auto it = snap.begin(); it != snap.end(); ++it) {
+        QCOMPARE(*it, exp++);
+        ++n;
+    }
+    QCOMPARE(n, reg{30u});
+
+    q.pop(10u);
+    fill_seq_u32(q, 1000u, 10u);
+
+    n = 0u;
+    exp = 1u;
+    for (auto it = snap.begin(); it != snap.end(); ++it) {
+        QCOMPARE(*it, exp++);
+        ++n;
+    }
+    QCOMPARE(n, reg{30u});
+    QVERIFY(!q.try_consume(snap));
+}
+
+template <class Q>
+static void bulk_regions_max_count_suite(Q& q) {
+    q.clear();
+    const reg limit = 7u;
+    auto wr = q.claim_write(::spsc::unsafe, limit);
+    QCOMPARE(wr.total, limit);
+    QVERIFY(wr.first.count > 0u);
+    QCOMPARE(wr.first.count + wr.second.count, wr.total);
+
+    std::uint32_t v = 1u;
+    for (reg i = 0u; i < wr.first.count; ++i) {
+        wr.first.ptr[i] = v++;
+    }
+    for (reg i = 0u; i < wr.second.count; ++i) {
+        wr.second.ptr[i] = v++;
+    }
+
+    q.publish(wr.total);
+    QCOMPARE(q.size(), limit);
+    check_fifo_exact_u32(q, 1u, static_cast<std::uint32_t>(limit));
+}
+
+template <class Q>
+static void bulk_read_max_count_suite(Q& q) {
+    q.clear();
+    fill_seq_u32(q, 1u, 30u);
+    QCOMPARE(q.size(), reg{30u});
+
+    auto rr = q.claim_read(::spsc::unsafe, 7u);
+    QCOMPARE(rr.total, reg{7u});
+
+    std::uint32_t expected = 1u;
+    for (reg i = 0u; i < rr.first.count; ++i) {
+        QCOMPARE(rr.first.ptr[i], expected++);
+    }
+    for (reg i = 0u; i < rr.second.count; ++i) {
+        QCOMPARE(rr.second.ptr[i], expected++);
+    }
+
+    q.pop(rr.total);
+    QCOMPARE(q.size(), reg{23u});
+    check_fifo_exact_u32(q, 8u, 23u);
+}
+
+template <class Q>
+static void guard_move_semantics_suite(Q& q) {
+    q.clear();
+    QVERIFY(q.empty());
+
+    {
+        auto w1 = q.scoped_write();
+        QVERIFY(w1);
+        w1.ref() = Tracked{1u};
+
+        auto w2 = std::move(w1);
+        QVERIFY(!w1);
+        QVERIFY(w2);
+        w2.commit();
+    }
+    QCOMPARE(q.size(), reg{1u});
+    QCOMPARE(q.front().seq, 1u);
+
+    {
+        auto r1 = q.scoped_read();
+        QVERIFY(r1);
+        auto r2 = std::move(r1);
+        QVERIFY(!r1);
+        QVERIFY(r2);
+        QCOMPARE(r2->seq, 1u);
+    }
+    QVERIFY(q.empty());
+}
+
+static void reserve_resize_edge_cases_dynamic_suite() {
+    using Q = spsc::fifo<std::uint32_t, 0u, spsc::policy::P>;
+    Q q;
+
+    QVERIFY(!q.is_valid());
+    QVERIFY(q.reserve(1u));
+    QVERIFY(q.is_valid());
+    QVERIFY(q.capacity() >= 2u);
+
+    const reg cap_min = q.capacity();
+    QVERIFY(q.reserve(1u));
+    QCOMPARE(q.capacity(), cap_min);
+
+    QVERIFY(q.resize(2u));
+    QCOMPARE(q.capacity(), cap_min);
+
+    QVERIFY(q.reserve(16u));
+    QVERIFY(q.capacity() >= 16u);
+    const reg cap0 = q.capacity();
+
+    fill_seq_u32(q, 1u, 10u);
+    const reg sz_before = q.size();
+    QVERIFY(q.reserve(cap0 * 4u));
+    QVERIFY(q.capacity() >= cap0 * 4u);
+    QCOMPARE(q.size(), sz_before);
+    check_fifo_exact_u32(q, 1u, static_cast<std::uint32_t>(sz_before));
+
+    QVERIFY(q.resize(0u));
+    QVERIFY(!q.is_valid());
+    QCOMPARE(q.capacity(), reg{0u});
+    QVERIFY(q.empty());
+
+    QVERIFY(q.reserve(64u));
+    QVERIFY(q.is_valid());
+    QVERIFY(q.capacity() >= 64u);
+
+    q.destroy();
+    QVERIFY(!q.is_valid());
+}
+
+template <class Q>
+static void snapshot_consume_suite(Q& q) {
+    q.clear();
+    QVERIFY(q.empty());
+
+    fill_seq_u32(q, 1u, 12u);
+    QCOMPARE(q.size(), reg{12u});
+
+    auto snap = q.make_snapshot();
+    QCOMPARE(static_cast<reg>(snap.size()), reg{12u});
+    q.consume(snap);
+    QVERIFY(q.empty());
+
+    fill_seq_u32(q, 100u, 5u);
+    const Q& cq = q;
+    auto csnap = cq.make_snapshot();
+    QCOMPARE(static_cast<reg>(csnap.size()), reg{5u});
+
+    std::uint32_t exp = 100u;
+    for (auto it = csnap.begin(); it != csnap.end(); ++it) {
+        QCOMPARE(*it, exp++);
+    }
+
+    q.clear();
+    QVERIFY(q.empty());
+}
+
+static void snapshot_invalid_queue_suite() {
+    using Q = spsc::fifo<std::uint32_t, 0u, spsc::policy::P>;
+    Q q;
+    QVERIFY(!q.is_valid());
+
+    auto snap = q.make_snapshot();
+    QCOMPARE(static_cast<reg>(snap.size()), reg{0u});
+    QVERIFY(snap.begin() == snap.end());
+
+    QVERIFY(!q.try_consume(snap));
+}
+
+static void dynamic_move_contract_suite() {
+    using Q = spsc::fifo<Tracked, 0u, spsc::policy::P>;
+    tracked_reset();
+
+    {
+        Q a;
+        QVERIFY(a.resize(64u));
+        fill_seq_tracked(a, 1u, 20u);
+
+        Q b{std::move(a)};
+        QVERIFY(!a.is_valid());
+        QVERIFY(b.is_valid());
+        QCOMPARE(b.size(), reg{20u});
+        for (reg i = 0u; i < b.size(); ++i) {
+            QCOMPARE(b[i].seq, static_cast<std::uint32_t>(i + 1u));
+        }
+
+        Q c;
+        QVERIFY(c.resize(32u));
+        fill_seq_tracked(c, 1000u, 5u);
+
+        c = std::move(b);
+        QVERIFY(!b.is_valid());
+        QVERIFY(c.is_valid());
+        QCOMPARE(c.size(), reg{20u});
+        check_fifo_exact_tracked(c, 1u, 20u);
+
+        c.destroy();
+    }
+
+    QCOMPARE(Tracked::live.load(), 0);
+    QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+}
+
+static void consume_all_contract_suite() {
+    {
+        spsc::fifo<std::uint32_t, 64u, spsc::policy::P> q;
+        fill_seq_u32(q, 1u, 40u);
+        QVERIFY(!q.empty());
+        q.consume_all();
+        QVERIFY(q.empty());
+    }
+
+    tracked_reset();
+    {
+        spsc::fifo<Tracked, 64u, spsc::policy::P> q;
+        fill_seq_tracked(q, 1u, 40u);
+        QVERIFY(!q.empty());
+        q.consume_all();
+        QVERIFY(q.empty());
+    }
+
+    QCOMPARE(Tracked::live.load(), 0);
+    QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+}
+
+static void stress_cached_ca_transitions_suite() {
+    using QS = spsc::fifo<std::uint32_t, 64u, spsc::policy::CA<>>;
+    using QD = spsc::fifo<std::uint32_t, 0u, spsc::policy::CA<>>;
+
+    {
+        QS a;
+        QS b;
+
+        for (std::uint32_t i = 1u; i <= 17u; ++i) {
+            QVERIFY(a.try_push(i));
+        }
+        for (std::uint32_t i = 100u; i < 121u; ++i) {
+            QVERIFY(b.try_push(i));
+        }
+
+        a.swap(b);
+        QCOMPARE(a.front(), std::uint32_t{100u});
+        QCOMPARE(b.front(), std::uint32_t{1u});
+
+        full_empty_cycle_u32(a, 1000u);
+        full_empty_cycle_u32(b, 2000u);
+    }
+
+    {
+        QS src;
+        for (std::uint32_t i = 1u; i <= 33u; ++i) {
+            QVERIFY(src.try_push(i));
+        }
+
+        QS dst(std::move(src));
+        QCOMPARE(dst.size(), reg{33u});
+        full_empty_cycle_u32(dst, 3000u);
+    }
+
+    {
+        QS a;
+        QS b;
+
+        for (std::uint32_t i = 10u; i < 30u; ++i) {
+            QVERIFY(a.try_push(i));
+        }
+        for (std::uint32_t i = 200u; i < 210u; ++i) {
+            QVERIFY(b.try_push(i));
+        }
+
+        a = std::move(b);
+        QCOMPARE(a.front(), std::uint32_t{200u});
+        full_empty_cycle_u32(a, 4000u);
+    }
+
+    {
+        QD q;
+        QVERIFY(q.resize(64u));
+        for (std::uint32_t i = 1u; i <= 48u; ++i) {
+            QVERIFY(q.try_push(i));
+        }
+
+        QVERIFY(q.resize(128u));
+        full_empty_cycle_u32(q, 5000u);
+
+        QVERIFY(q.resize(64u));
+        for (std::uint32_t i = 1u; i <= 10u; ++i) {
+            QVERIFY(q.try_push(6000u + i));
+        }
+
+        QVERIFY(q.resize(16u));
+        full_empty_cycle_u32(q, 7000u);
+    }
+}
+
+static void lifecycle_traced_suite() {
+    tracked_reset();
+    {
+        spsc::fifo<Tracked, 64u, spsc::policy::P> q;
+        for (int i = 0; i < 200; ++i) {
+            if (!q.full()) {
+                QVERIFY(q.try_push(Tracked{static_cast<std::uint32_t>(i)}));
+            }
+            if ((i & 1) == 0 && !q.empty()) {
+                q.pop();
+            }
+        }
+        q.clear();
+        QVERIFY(q.empty());
+    }
+    QCOMPARE(Tracked::live.load(), 0);
+    QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1981,8 +3350,12 @@ static void api_compile_smoke_one() {
     // Scoped guards should be movable.
     using WG = decltype(std::declval<Q&>().scoped_write());
     using RG = decltype(std::declval<Q&>().scoped_read());
+    using BWG = decltype(std::declval<Q&>().scoped_write(size_type{1u}));
+    using BRG = decltype(std::declval<Q&>().scoped_read(size_type{1u}));
     static_assert(std::is_move_constructible_v<WG>);
     static_assert(std::is_move_constructible_v<RG>);
+    static_assert(std::is_move_constructible_v<BWG>);
+    static_assert(std::is_move_constructible_v<BRG>);
 
     // Const API.
     (void)sizeof(decltype(std::declval<const Q&>().empty()));
@@ -2005,12 +3378,51 @@ static void api_compile_smoke_all() {
     api_compile_smoke_one<QCA>();
 }
 
+static void death_tests_debug_only_suite() {
+#if !defined(NDEBUG)
+    auto expect_death = [&](const char* mode) {
+        QProcess p;
+        p.setProgram(QCoreApplication::applicationFilePath());
+        p.setArguments(QStringList{});
+
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert("SPSC_FIFO_DEATH", QString::fromLatin1(mode));
+        p.setProcessEnvironment(env);
+
+        p.start();
+        QVERIFY2(p.waitForStarted(1500), "Death child failed to start.");
+
+        if (!p.waitForFinished(8000)) {
+            p.kill();
+            QVERIFY2(false, "Death child did not finish (possible crash dialog)." );
+        }
+
+        const int code = p.exitCode();
+        QVERIFY2(code == spsc_fifo_death_detail::kDeathExitCode,
+                 "Expected assertion death (SIGABRT -> kDeathExitCode)." );
+    };
+
+    expect_death("pop_empty");
+    expect_death("front_empty");
+    expect_death("publish_full");
+    expect_death("claim_full");
+    expect_death("bulk_double_emplace_next");
+    expect_death("bulk_arm_publish_unwritten");
+    expect_death("consume_foreign_snapshot");
+    expect_death("pop_n_too_many");
+#else
+    QSKIP("Death tests are debug-only (assertions disabled)." );
+#endif
+}
+
 
 } // namespace
 
 class tst_fifo_api_paranoid final : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase() { api_compile_smoke_all(); }
+
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
     void static_atomic_A()   { run_static_suite<spsc::policy::A<>>(); }
@@ -2021,11 +3433,137 @@ private slots:
     void dynamic_atomic_A()   { run_dynamic_suite<spsc::policy::A<>>(); }
     void dynamic_cached_CA()  { run_dynamic_suite<spsc::policy::CA<>>(); }
 
+    void deterministic_interleaving() {
+        spsc::fifo<std::uint32_t, 64u, spsc::policy::P> q;
+        deterministic_interleaving_suite(q);
+    }
+
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>(); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>(); }
-    void alignment_sweep()    { alignment_sweep_all(); }
+
+    void threaded_snapshot_atomic_A() {
+        run_threaded_snapshot_suite<spsc::policy::A<>>("threaded_snapshot_atomic");
+    }
+    void threaded_snapshot_cached_CA() {
+        run_threaded_snapshot_suite<spsc::policy::CA<>>("threaded_snapshot_cached");
+    }
+
+    void allocator_accounting() { allocator_accounting_suite(); }
+
+    void invalid_inputs() {
+        spsc::fifo<Traced, 0u, spsc::policy::P> q;
+        test_invalid_queue_behavior(q);
+    }
+
+    void dynamic_capacity_sweep()   { dynamic_capacity_sweep_suite(); }
+    void move_swap_stress()         { move_swap_stress_suite(); }
+    void state_machine_fuzz_sweep() { state_machine_fuzz_sweep_suite(); }
+    void resize_migration_order()   { resize_migration_order_suite(); }
+    void snapshot_try_consume_contract() { snapshot_try_consume_contract_suite(); }
+
+    void bulk_regions_wraparound() {
+        spsc::fifo<Traced, 64u, spsc::policy::P> q;
+        test_bulk_regions(q);
+    }
+
+    void raii_guards_static() {
+        spsc::fifo<Traced, 64u, spsc::policy::P> q;
+        test_raii_guards(q);
+    }
+
+    void raii_guards_dynamic() {
+        spsc::fifo<Traced, 0u, spsc::policy::P> q;
+        QVERIFY(q.resize(64u));
+        test_raii_guards(q);
+        q.destroy();
+    }
+
+    void iterators_and_indexing_static() {
+        spsc::fifo<Traced, 64u, spsc::policy::P> q;
+        test_indexing_and_iterators(q);
+    }
+
+    void iterators_wraparound_static() {
+        spsc::fifo<Traced, 64u, spsc::policy::P> q;
+        q.clear();
+        const reg cap = q.capacity();
+        for (reg i = 0u; i < cap; ++i) {
+            QVERIFY(q.try_push(Traced{static_cast<int>(i)}));
+        }
+        q.pop(cap - 4u);
+        QVERIFY(q.try_push(Traced{1000}));
+        QVERIFY(q.try_push(Traced{1001}));
+        QVERIFY(q.try_push(Traced{1002}));
+        QVERIFY(q.try_push(Traced{1003}));
+
+        std::vector<int> got;
+        for (const auto& v : q) {
+            got.push_back(v.v);
+        }
+        QCOMPARE(got.size(), std::size_t{8u});
+        QCOMPARE(got.front(), static_cast<int>(cap - 4u));
+        QCOMPARE(got.back(), 1003);
+    }
+
+    void bulk_raii_overloads_static() {
+        spsc::fifo<Traced, 64u, spsc::policy::P> q;
+        test_bulk_raii_overloads(q);
+    }
+
+    void bulk_raii_overloads_dynamic() {
+        spsc::fifo<Traced, 0u, spsc::policy::P> q;
+        QVERIFY(q.resize(64u));
+        test_bulk_raii_overloads(q);
+        q.destroy();
+    }
+
+    void snapshot_iteration_contract() { snapshot_iteration_contract_suite(); }
+
+    void bulk_regions_max_count_static() {
+        spsc::fifo<std::uint32_t, 64u, spsc::policy::P> q;
+        bulk_regions_max_count_suite(q);
+    }
+
+    void bulk_read_max_count_static() {
+        spsc::fifo<std::uint32_t, 64u, spsc::policy::P> q;
+        bulk_read_max_count_suite(q);
+    }
+
+    void guard_move_semantics_static() {
+        tracked_reset();
+        {
+            spsc::fifo<Tracked, 64u, spsc::policy::P> q;
+            guard_move_semantics_suite(q);
+        }
+        QCOMPARE(Tracked::live.load(), 0);
+        QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+    }
+
+    void reserve_resize_edge_cases_dynamic() { reserve_resize_edge_cases_dynamic_suite(); }
+
+    void snapshot_consume_contract() {
+        spsc::fifo<std::uint32_t, 64u, spsc::policy::P> q;
+        snapshot_consume_suite(q);
+    }
+
+    void snapshot_invalid_queue() { snapshot_invalid_queue_suite(); }
+    void dynamic_move_contract()  { dynamic_move_contract_suite(); }
+    void consume_all_contract()   { consume_all_contract_suite(); }
+
+    void threaded_bulk_regions_atomic_A() {
+        run_threaded_bulk_regions_suite<spsc::policy::A<>>("threaded_fifo_bulk_atomic");
+    }
+    void threaded_bulk_regions_cached_CA() {
+        run_threaded_bulk_regions_suite<spsc::policy::CA<>>("threaded_fifo_bulk_cached");
+    }
+
+    void alignment_sweep() { alignment_sweep_all(); }
+    void stress_cached_ca_transitions() { stress_cached_ca_transitions_suite(); }
     void regression_matrix() { regression_matrix_all(); }
-    void api_smoke()         { api_compile_smoke_all(); }
+    void api_smoke() { api_compile_smoke_all(); }
+    void death_tests_debug_only() { death_tests_debug_only_suite(); }
+    void lifecycle_traced() { lifecycle_traced_suite(); }
+    void cleanupTestCase() {}
 };
 
 // ------------------------------ runner (no main here) ------------------------------
