@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 18.0.2, 2026-02-08T19:28:05. -->
+<!-- Written by QtCreator 18.0.2, 2026-02-10T00:07:00. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -72,6 +72,10 @@
    </valuemap>
    <value type="bool" key="AutoTest.ApplyFilter">false</value>
    <valuemap type="QVariantMap" key="AutoTest.CheckStates">
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/fifo_test.cpp:cleanupTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/fifo_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/fifo_view_test.cpp:cleanupTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/fifo_view_test.cpp:initTestCase">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/latest_test.cpp:cleanupTestCase">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/latest_test.cpp:initTestCase">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_128">Unchecked</value>
@@ -79,10 +83,13 @@
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_32">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_64">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_default_alloc">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:death_tests_debug_only">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_atomic_A">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_cached_CA">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_capacity_sweep">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_plain_P">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_volatile_V">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:initTestCase">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:static_atomic_A">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:static_cached_CA">Unchecked</value>
     <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:static_plain_P">Unchecked</value>

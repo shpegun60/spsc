@@ -19,7 +19,6 @@ SOURCES += \
     src/chunk_test.cpp \
     src/latest_test.cpp \
     src/pool_view_test.cpp \
-    src/fifo_bench.cpp \
     src/fifo_test.cpp \
     src/fifo_view_test.cpp \
     src/pool_test.cpp \
@@ -34,7 +33,6 @@ HEADERS += \
     src/queue_test.h \
     src/latest_test.h \
     src/pool_view_test.h \
-    src/fifo_bench.h \
     src/fifo_test.h \
     src/fifo_view_test.h \
     src/pool_test.h \
