@@ -27,6 +27,7 @@
 // Base and utility includes
 #include "base/SPSCbase.hpp"        // ::spsc::SPSCbase<Capacity, Policy>, reg
 #include "base/spsc_snapshot.hpp"   // ::spsc::snapshot_view, ::spsc::snapshot_traits
+#include "base/spsc_regions.hpp"    // ::spsc::bulk::slot_region/slot_regions
 #include "base/spsc_tools.hpp"      // RB_FORCEINLINE, RB_UNLIKELY, SPSC_HAS_SPAN
 
 namespace spsc {
@@ -99,25 +100,10 @@ public:
                   "[spsc::pool_view]: Capacity must be >= 2 (or 0 for dynamic).");
 
     // ------------------------------------------------------------------------------------------
-    // Bulk Region Types
+    // Region Types (Bulk Operations)
     // ------------------------------------------------------------------------------------------
-    struct region {
-        pointer const* ptr{nullptr};
-        size_type      count{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return count == 0u; }
-#if SPSC_HAS_SPAN
-        [[nodiscard]] std::span<pointer const> span() const noexcept { return {ptr, count}; }
-#endif /* SPSC_HAS_SPAN */
-    };
-
-    struct regions {
-        region    first{};
-        region    second{};
-        size_type total{0u};
-
-        [[nodiscard]] constexpr bool empty() const noexcept { return total == 0u; }
-    };
+    using region  = ::spsc::bulk::slot_region<pointer, size_type>;
+    using regions = ::spsc::bulk::slot_regions<pointer, size_type>;
 
     // ------------------------------------------------------------------------------------------
     // Serializable State
@@ -629,56 +615,130 @@ public:
     // ------------------------------------------------------------------------------------------
     // Bulk / Regions
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] regions claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        if (RB_UNLIKELY(!is_valid())) { return {}; }
+    [[nodiscard]] regions
+    claim_write(const ::spsc::unsafe_t, const size_type max_count =
+                                        std::numeric_limits<size_type>::max()) noexcept {
+        if (RB_UNLIKELY(!is_valid())) {
+            return {};
+        }
 
         const size_type cap = Base::capacity();
+        if (RB_UNLIKELY(cap == 0u)) {
+            return {};
+        }
 
-        size_type total = static_cast<size_type>(Base::free());
-        if (max_count < total) { total = max_count; }
-        if (RB_UNLIKELY(total == 0u)) { return {}; }
+        size_type head = static_cast<size_type>(Base::head());
+        size_type tail = static_cast<size_type>(Base::tail());
+        size_type used = static_cast<size_type>(head - tail);
 
-        const size_type wi      = static_cast<size_type>(Base::write_index()); // masked
-        const size_type w2e     = static_cast<size_type>(cap - wi);
-        const size_type first_n = (w2e < total) ? w2e : total;
+        // Atomic backends can yield an inconsistent snapshot (used > cap).
+        if (RB_UNLIKELY(used > cap)) {
+            head = static_cast<size_type>(Base::head());
+            tail = static_cast<size_type>(Base::tail());
+            used = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(used > cap)) {
+                return {}; // conservative
+            }
+        }
+
+        if (RB_UNLIKELY(used >= cap)) {
+            return {};
+        }
+
+        size_type total = static_cast<size_type>(cap - used);
+        if (max_count < total) {
+            total = max_count;
+        }
+        if (RB_UNLIKELY(total == 0u)) {
+            return {};
+        }
+
+        const size_type mask  = Base::mask();
+        const size_type idx   = static_cast<size_type>(head & mask);
+        const size_type to_end = static_cast<size_type>(cap - idx);
+
+        const size_type first_n  = (to_end < total) ? to_end : total;
+        const size_type second_n = static_cast<size_type>(total - first_n);
 
         regions r{};
-        auto* const buf = data();
-        r.first.ptr   = buf + wi;
+        auto *const buf = data();
+
+        r.first.ptr = buf + idx;
         r.first.count = first_n;
 
-        const size_type second_n = static_cast<size_type>(total - first_n);
-        r.second.ptr   = (second_n != 0u) ? buf : nullptr;
         r.second.count = second_n;
+        r.second.ptr = (second_n != 0u) ? buf : nullptr;
 
         r.total = total;
         return r;
     }
 
-    [[nodiscard]] regions claim_read(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        if (RB_UNLIKELY(!is_valid())) { return {}; }
+    [[nodiscard]] regions
+    claim_read(const ::spsc::unsafe_t, const size_type max_count =
+                                       std::numeric_limits<size_type>::max()) noexcept {
+        if (RB_UNLIKELY(!is_valid())) {
+            return {};
+        }
 
         const size_type cap = Base::capacity();
+        if (RB_UNLIKELY(cap == 0u)) {
+            return {};
+        }
 
-        size_type total = static_cast<size_type>(Base::size());
-        if (max_count < total) { total = max_count; }
-        if (RB_UNLIKELY(total == 0u)) { return {}; }
+        size_type tail = static_cast<size_type>(Base::tail());
+        size_type head = static_cast<size_type>(Base::head());
+        size_type av   = static_cast<size_type>(head - tail);
 
-        const size_type ri      = static_cast<size_type>(Base::read_index()); // masked
-        const size_type r2e     = static_cast<size_type>(cap - ri);
-        const size_type first_n = (r2e < total) ? r2e : total;
+        // Atomic backends can yield an inconsistent snapshot (av > cap).
+        if (RB_UNLIKELY(av > cap)) {
+            tail = static_cast<size_type>(Base::tail());
+            head = static_cast<size_type>(Base::head());
+            av   = static_cast<size_type>(head - tail);
+            if (RB_UNLIKELY(av > cap)) {
+                return {}; // conservative
+            }
+        }
+
+        if (RB_UNLIKELY(av == 0u)) {
+            return {};
+        }
+
+        size_type total = av;
+        if (max_count < total) {
+            total = max_count;
+        }
+        if (RB_UNLIKELY(total == 0u)) {
+            return {};
+        }
+
+        const size_type mask  = Base::mask();
+        const size_type idx   = static_cast<size_type>(tail & mask);
+        const size_type to_end = static_cast<size_type>(cap - idx);
+
+        const size_type first_n  = (to_end < total) ? to_end : total;
+        const size_type second_n = static_cast<size_type>(total - first_n);
 
         regions r{};
-        auto* const buf = data();
-        r.first.ptr   = buf + ri;
+        auto *const buf = data();
+
+        r.first.ptr = buf + idx;
         r.first.count = first_n;
 
-        const size_type second_n = static_cast<size_type>(total - first_n);
-        r.second.ptr   = (second_n != 0u) ? buf : nullptr;
         r.second.count = second_n;
+        r.second.ptr = (second_n != 0u) ? buf : nullptr;
 
         r.total = total;
         return r;
+    }
+
+    [[nodiscard]] regions
+    claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        return claim_write(::spsc::unsafe, max_count);
+    }
+
+    [[nodiscard]] regions
+    claim_read(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        return claim_read(::spsc::unsafe, max_count);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -687,11 +747,11 @@ public:
     template<class U>
     RB_FORCEINLINE void push(const U& v) noexcept {
         static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
-        SPSC_ASSERT(!full());
-        SPSC_ASSERT(sizeof(U) <= bufferSize_.load());
+        if (RB_UNLIKELY(full())) { SPSC_ASSERT(!full()); return; }
+        if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { SPSC_ASSERT(sizeof(U) <= bufferSize_.load()); return; }
 
         pointer dst = slots_[Base::write_index()];
-        SPSC_ASSERT(dst != nullptr);
+        if (RB_UNLIKELY(dst == nullptr)) { SPSC_ASSERT(dst != nullptr); return; }
         std::memcpy(dst, &v, sizeof(U));
         Base::increment_head();
     }
@@ -710,38 +770,117 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
-        SPSC_ASSERT(!full());
+        if (RB_UNLIKELY(full())) { SPSC_ASSERT(!full()); return nullptr; }
         pointer p = slots_[Base::write_index()];
-        SPSC_ASSERT(p != nullptr);
+        if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
         return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
         if (RB_UNLIKELY(full())) { return nullptr; }
         pointer p = slots_[Base::write_index()];
-        SPSC_ASSERT(p != nullptr);
+        if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
         return p;
     }
 
+    template<class U>
+    [[nodiscard]] RB_FORCEINLINE U* claim_as() noexcept {
+        static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
+        pointer p = try_claim();
+        if (RB_UNLIKELY(!p)) { return nullptr; }
+        if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { return nullptr; }
+        if (RB_UNLIKELY((reinterpret_cast<std::uintptr_t>(p) % alignof(U)) != 0u)) { return nullptr; }
+        return static_cast<U*>(p);
+    }
+
+    template<class U>
+    [[nodiscard]] bool try_peek(U& out) const noexcept {
+        static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
+        const_pointer p = try_front();
+        if (!p) return false;
+        if (sizeof(U) > buffer_size()) return false;
+
+        // memcpy is the only universal "no UB" bridge for raw storage
+        std::memcpy(&out, p, sizeof(U));
+        return true;
+    }
+
+    template<class U>
+    [[nodiscard]] bool try_write(const U& v) noexcept {
+        return try_push(v);
+    }
+
     RB_FORCEINLINE void publish() noexcept {
-        SPSC_ASSERT(!full());
+        if (RB_UNLIKELY(full())) { SPSC_ASSERT(!full()); return; }
+        if (RB_UNLIKELY(slots_[Base::write_index()] == nullptr)) {
+            SPSC_ASSERT(slots_[Base::write_index()] != nullptr);
+            return;
+        }
         Base::increment_head();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
         if (RB_UNLIKELY(full())) { return false; }
+        if (RB_UNLIKELY(slots_[Base::write_index()] == nullptr)) { return false; }
         Base::increment_head();
         return true;
     }
 
     RB_FORCEINLINE void publish(const size_type n) noexcept {
-        SPSC_ASSERT(can_write(n));
+        if (RB_UNLIKELY(!can_write(n))) { SPSC_ASSERT(can_write(n)); return; }
+        const size_type h = static_cast<size_type>(Base::head());
+        const size_type m = Base::mask();
+        for (size_type i = 0u; i < n; ++i) {
+            if (RB_UNLIKELY(slots_[(h + i) & m] == nullptr)) {
+                SPSC_ASSERT(slots_[(h + i) & m] != nullptr);
+                return;
+            }
+        }
         Base::advance_head(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const size_type n) noexcept {
         if (RB_UNLIKELY(!can_write(n))) { return false; }
+        const size_type h = static_cast<size_type>(Base::head());
+        const size_type m = Base::mask();
+        for (size_type i = 0u; i < n; ++i) {
+            if (RB_UNLIKELY(slots_[(h + i) & m] == nullptr)) { return false; }
+        }
         Base::advance_head(n);
+        return true;
+    }
+
+    // --------------------------------------------------------------------------
+    // Raw Buffer Push API
+    // --------------------------------------------------------------------------
+    RB_FORCEINLINE void push(const void* data, const size_type size) noexcept {
+        if (RB_UNLIKELY(full())) { SPSC_ASSERT(!full()); return; }
+
+        const size_type bufferSize = bufferSize_.load();
+        const size_type copy_n = (size < bufferSize) ? size : bufferSize;
+        if (RB_UNLIKELY((copy_n != 0u) && (data == nullptr))) { SPSC_ASSERT((copy_n == 0u) || (data != nullptr)); return; }
+
+        pointer dst = slots_[Base::write_index()];
+        if (RB_UNLIKELY(dst == nullptr)) { SPSC_ASSERT(dst != nullptr); return; }
+        if (copy_n != 0u) {
+            std::memcpy(dst, data, copy_n);
+        }
+        Base::increment_head();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool try_push(const void* data, const size_type size) noexcept {
+        if (RB_UNLIKELY(full())) { return false; }
+
+        const size_type bufferSize = bufferSize_.load();
+        const size_type copy_n = (size < bufferSize) ? size : bufferSize;
+        if (RB_UNLIKELY((copy_n != 0u) && (data == nullptr))) { return false; }
+
+        pointer dst = slots_[Base::write_index()];
+        if (RB_UNLIKELY(dst == nullptr)) { return false; }
+        if (copy_n != 0u) {
+            std::memcpy(dst, data, copy_n);
+        }
+        Base::increment_head();
         return true;
     }
 
@@ -749,35 +888,45 @@ public:
     // Consumer Operations
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
-        SPSC_ASSERT(!empty());
+        if (RB_UNLIKELY(empty())) { SPSC_ASSERT(!empty()); return nullptr; }
         pointer p = slots_[Base::read_index()];
-        SPSC_ASSERT(p != nullptr);
+        if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
         return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
-        SPSC_ASSERT(!empty());
+        if (RB_UNLIKELY(empty())) { SPSC_ASSERT(!empty()); return nullptr; }
         const_pointer p = slots_[Base::read_index()];
-        SPSC_ASSERT(p != nullptr);
+        if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
         return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
         if (RB_UNLIKELY(empty())) { return nullptr; }
         pointer p = slots_[Base::read_index()];
-        SPSC_ASSERT(p != nullptr);
+        if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
         return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
         if (RB_UNLIKELY(empty())) { return nullptr; }
         const_pointer p = slots_[Base::read_index()];
-        SPSC_ASSERT(p != nullptr);
+        if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
         return p;
     }
 
+    template<class U>
+    [[nodiscard]] RB_FORCEINLINE U* front_as() noexcept {
+        static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
+        pointer p = try_front();
+        if (RB_UNLIKELY(!p)) { return nullptr; }
+        if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { return nullptr; }
+        if (RB_UNLIKELY((reinterpret_cast<std::uintptr_t>(p) % alignof(U)) != 0u)) { return nullptr; }
+        return static_cast<U*>(p);
+    }
+
     RB_FORCEINLINE void pop() noexcept {
-        SPSC_ASSERT(!empty());
+        if (RB_UNLIKELY(empty())) { SPSC_ASSERT(!empty()); return; }
         Base::increment_tail();
     }
 
@@ -788,7 +937,7 @@ public:
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
-        SPSC_ASSERT(can_read(n));
+        if (RB_UNLIKELY(!can_read(n))) { SPSC_ASSERT(can_read(n)); return; }
         Base::advance_tail(n);
     }
 
@@ -798,14 +947,30 @@ public:
         return true;
     }
 
+    // Prevent accidental overload selection when passing a numeric lvalue:
+    //   std::uint32_t n = 3;
+    //   p.pop(n);   // would bind to pop(size_type) and pop 3 buffers.
+    template<class U,
+             typename = std::enable_if_t<
+                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
+                 std::is_convertible_v<U, size_type>>>
+    void pop(U&) noexcept = delete;
+
+    // Same trap for try_pop(n).
+    template<class U,
+             typename = std::enable_if_t<
+                 !std::is_same_v<std::remove_cv_t<U>, size_type> &&
+                 std::is_convertible_v<U, size_type>>>
+    [[nodiscard]] bool try_pop(U&) noexcept = delete;
+
     [[nodiscard]] RB_FORCEINLINE pointer operator[](const size_type i) noexcept {
-        SPSC_ASSERT(i < size());
+        if (RB_UNLIKELY(i >= size())) { SPSC_ASSERT(i < size()); return nullptr; }
         const size_type idx = static_cast<size_type>((Base::tail() + i) & Base::mask());
         return slots_[idx];
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer operator[](const size_type i) const noexcept {
-        SPSC_ASSERT(i < size());
+        if (RB_UNLIKELY(i >= size())) { SPSC_ASSERT(i < size()); return nullptr; }
         const size_type idx = static_cast<size_type>((Base::tail() + i) & Base::mask());
         return slots_[idx];
     }
@@ -824,8 +989,236 @@ public:
     }
 #endif /* SPSC_HAS_SPAN */
     // ------------------------------------------------------------------------------------------
-    // RAII Wrappers
+    // RAII Based API
     // ------------------------------------------------------------------------------------------
+
+    class bulk_write_guard {
+    public:
+        bulk_write_guard() noexcept = default;
+
+        explicit bulk_write_guard(pool_view& p,
+                                  const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept
+            : p_(&p), regs_(p.claim_write(::spsc::unsafe, max_count)) {
+            if (regs_.total == 0u) {
+                p_ = nullptr;
+            }
+        }
+
+        bulk_write_guard(const bulk_write_guard&) = delete;
+        bulk_write_guard& operator=(const bulk_write_guard&) = delete;
+
+        bulk_write_guard(bulk_write_guard&& other) noexcept
+            : p_(other.p_), regs_(other.regs_), written_(other.written_),
+              publish_on_destroy_(other.publish_on_destroy_) {
+            other.p_ = nullptr;
+            other.regs_ = {};
+            other.written_ = 0u;
+            other.publish_on_destroy_ = false;
+        }
+
+        bulk_write_guard& operator=(bulk_write_guard&&) = delete;
+
+        ~bulk_write_guard() noexcept {
+            if (p_ != nullptr && written_ != 0u && publish_on_destroy_) {
+                p_->publish(written_);
+            }
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept {
+            return (p_ != nullptr) && (regs_.total != 0u);
+        }
+
+        [[nodiscard]] size_type claimed() const noexcept { return regs_.total; }
+        [[nodiscard]] size_type constructed() const noexcept { return written_; }
+        [[nodiscard]] size_type remaining() const noexcept {
+            return static_cast<size_type>(regs_.total - written_);
+        }
+
+        [[nodiscard]] pointer peek_next() const noexcept {
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return nullptr; }
+            if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return nullptr; }
+            return slot_ptr_at_(written_);
+        }
+
+        [[nodiscard]] pointer get_next() const noexcept { return peek_next(); }
+
+        template<class U>
+        [[nodiscard]] pointer emplace_next(const U& v) noexcept {
+            return write_next(v);
+        }
+
+        template<class U>
+        [[nodiscard]] pointer write_next(const U& v) noexcept {
+            static_assert(std::is_trivially_copyable_v<U>, "[pool_view::bulk_write_guard]: U must be trivially copyable");
+
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return nullptr; }
+            if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return nullptr; }
+            SPSC_ASSERT(sizeof(U) <= p_->buffer_size());
+            if (RB_UNLIKELY(sizeof(U) > p_->buffer_size())) { return nullptr; }
+
+            pointer dst = slot_ptr_at_(written_);
+            if (RB_UNLIKELY(dst == nullptr)) { return nullptr; }
+            std::memcpy(dst, &v, sizeof(U));
+            ++written_;
+            publish_on_destroy_ = true;
+            return dst;
+        }
+
+        [[nodiscard]] pointer write_next(const void* src, const size_type size) noexcept {
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return nullptr; }
+            if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return nullptr; }
+
+            pointer dst = slot_ptr_at_(written_);
+            if (RB_UNLIKELY(dst == nullptr)) { return nullptr; }
+            const size_type bs = p_->buffer_size();
+            const size_type n = (size < bs) ? size : bs;
+            SPSC_ASSERT((n == 0u) || (src != nullptr));
+            if (RB_UNLIKELY((n != 0u) && (src == nullptr))) { return nullptr; }
+            if (n != 0u) {
+                std::memcpy(dst, src, n);
+            }
+            ++written_;
+            publish_on_destroy_ = true;
+            return dst;
+        }
+
+        void mark_written() noexcept {
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return; }
+            if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return; }
+            ++written_;
+        }
+
+        void arm_publish() noexcept {
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return; }
+            SPSC_ASSERT(written_ != 0u && "arm_publish() requires at least one written element");
+            if (RB_UNLIKELY(written_ == 0u)) { return; }
+            publish_on_destroy_ = true;
+        }
+
+        void publish_on_destroy() noexcept { arm_publish(); }
+
+        void disarm_publish() noexcept { publish_on_destroy_ = false; }
+
+        void commit() noexcept {
+            if (p_ != nullptr && written_ != 0u) {
+                p_->publish(written_);
+            }
+            reset_();
+        }
+
+        void cancel() noexcept { reset_(); }
+
+    private:
+        [[nodiscard]] pointer slot_ptr_at_(const size_type i) const noexcept {
+            SPSC_ASSERT(i < regs_.total);
+            if (RB_UNLIKELY(i >= regs_.total)) { return nullptr; }
+            if (i < regs_.first.count) {
+                return (regs_.first.ptr != nullptr) ? regs_.first.ptr[i] : nullptr;
+            }
+            return (regs_.second.ptr != nullptr) ? regs_.second.ptr[i - regs_.first.count] : nullptr;
+        }
+
+        void reset_() noexcept {
+            p_ = nullptr;
+            regs_ = {};
+            written_ = 0u;
+            publish_on_destroy_ = false;
+        }
+
+        pool_view* p_{nullptr};
+        regions regs_{};
+        size_type written_{0u};
+        bool publish_on_destroy_{false};
+    };
+
+    class bulk_read_guard {
+    public:
+        class region_view {
+        public:
+            region_view() noexcept = default;
+            constexpr region_view(pointer const* slts, const size_type count) noexcept
+                : slts_(slts), count_(count) {}
+
+            [[nodiscard]] constexpr bool empty() const noexcept { return count_ == 0u; }
+            [[nodiscard]] constexpr size_type size() const noexcept { return count_; }
+
+            [[nodiscard]] pointer ptr(const size_type i) const noexcept {
+                SPSC_ASSERT(i < count_);
+                if (RB_UNLIKELY(i >= count_) || RB_UNLIKELY(slts_ == nullptr)) { return nullptr; }
+                return slts_[i];
+            }
+
+            [[nodiscard]] pointer operator[](const size_type i) const noexcept { return ptr(i); }
+
+#if SPSC_HAS_SPAN
+            [[nodiscard]] std::span<pointer const> raw_span() const noexcept {
+                return {slts_, static_cast<std::size_t>(count_)};
+            }
+#endif /* SPSC_HAS_SPAN */
+
+        private:
+            pointer const* slts_{nullptr};
+            size_type count_{0u};
+        };
+
+        bulk_read_guard() noexcept = default;
+
+        explicit bulk_read_guard(pool_view& p,
+                                 const size_type max_count = static_cast<size_type>(~size_type(0))) noexcept
+            : p_(&p), regs_(p.claim_read(::spsc::unsafe, max_count)), active_(regs_.total != 0u) {
+            if (!active_) {
+                p_ = nullptr;
+            }
+        }
+
+        bulk_read_guard(const bulk_read_guard&) = delete;
+        bulk_read_guard& operator=(const bulk_read_guard&) = delete;
+
+        bulk_read_guard(bulk_read_guard&& other) noexcept
+            : p_(other.p_), regs_(other.regs_), active_(other.active_) {
+            other.p_ = nullptr;
+            other.regs_ = {};
+            other.active_ = false;
+        }
+
+        bulk_read_guard& operator=(bulk_read_guard&&) = delete;
+
+        ~bulk_read_guard() noexcept {
+            if (active_ && p_) {
+                p_->pop(regs_.total);
+            }
+        }
+
+        [[nodiscard]] explicit operator bool() const noexcept { return active_; }
+
+        [[nodiscard]] size_type count() const noexcept { return regs_.total; }
+        [[nodiscard]] const regions& regions_view() const noexcept { return regs_; }
+
+        [[nodiscard]] region_view first() const noexcept {
+            return region_view(regs_.first.ptr, regs_.first.count);
+        }
+        [[nodiscard]] region_view second() const noexcept {
+            return region_view(regs_.second.ptr, regs_.second.count);
+        }
+
+        void commit() noexcept {
+            if (active_ && p_) {
+                p_->pop(regs_.total);
+            }
+            cancel();
+        }
+
+        void cancel() noexcept {
+            active_ = false;
+            p_ = nullptr;
+            regs_ = {};
+        }
+
+    private:
+        pool_view* p_{nullptr};
+        regions regs_{};
+        bool active_{false};
+    };
 
     class write_guard {
     public:
@@ -852,7 +1245,9 @@ public:
             }
         }
 
+        // Raw access does not arm publishing.
         [[nodiscard]] pointer get() const noexcept { return ptr_; }
+        [[nodiscard]] pointer peek() const noexcept { return ptr_; }
         explicit operator bool() const noexcept { return (p_ != nullptr) && (ptr_ != nullptr); }
 
         template<class U>
@@ -861,6 +1256,8 @@ public:
             static_assert(std::is_trivially_copyable_v<U>, "[pool_view::guard]: U must be trivially copyable");
             if (RB_UNLIKELY(sizeof(U) > p_->buffer_size())) { return nullptr; }
             if (RB_UNLIKELY((reinterpret_cast<std::uintptr_t>(ptr_) % alignof(U)) != 0u)) { return nullptr; }
+            // If typed view is usable, assume caller intends to write.
+            publish_on_destroy_ = true;
             return static_cast<U*>(ptr_);
         }
 
@@ -869,6 +1266,10 @@ public:
             SPSC_ASSERT(p_ && ptr_);
             publish_on_destroy_ = true;
         }
+
+        void arm_publish() noexcept { publish_on_destroy(); }
+
+        void disarm_publish() noexcept { publish_on_destroy_ = false; }
 
         void commit() noexcept {
             if (p_ && ptr_) {
@@ -886,7 +1287,7 @@ public:
     private:
         pool_view* p_{nullptr};
         pointer    ptr_{nullptr};
-        bool       publish_on_destroy_{false};
+        mutable bool publish_on_destroy_{false};
     };
 
     class read_guard {
@@ -945,7 +1346,13 @@ public:
     };
 
     [[nodiscard]] write_guard scoped_write() noexcept { return write_guard(*this); }
+    [[nodiscard]] bulk_write_guard scoped_write(const size_type max_count) noexcept {
+        return bulk_write_guard(*this, max_count);
+    }
     [[nodiscard]] read_guard  scoped_read()  noexcept { return read_guard(*this); }
+    [[nodiscard]] bulk_read_guard scoped_read(const size_type max_count) noexcept {
+        return bulk_read_guard(*this, max_count);
+    }
 
 private:
     void move_from(pool_view&& other) noexcept(kNoThrowMoveOps)
@@ -964,7 +1371,10 @@ private:
                 bufferSize_.store(0u);
                 (void)Base::init(0u);
             } else {
-                if (RB_UNLIKELY((ptr == nullptr) != (cap == 0u))) {
+                // Defensive: moved-from source must satisfy dynamic invariant
+                // (ptr, buffer_size, capacity) are either all zero/empty or all present.
+                if (RB_UNLIKELY(((ptr == nullptr) != (cap == 0u)) ||
+                                ((ptr == nullptr) != (bs  == 0u)))) {
                     slots_ = nullptr;
                     bufferSize_.store(0u);
                     (void)Base::init(0u);
@@ -987,13 +1397,26 @@ private:
 
             other.detach();
         } else {
+            const size_type obs = other.bufferSize_.load();
             slots_ = other.slots_;
-            bufferSize_.store(other.bufferSize_.load());
+            bufferSize_.store(obs);
 
-            // Non-concurrent state transfer: must synchronize shadows too (if enabled).
-            const bool ok = Base::init(other.Base::head(), other.Base::tail());
-            SPSC_ASSERT(ok);
-            (void)ok;
+            // Defensive normalization: static view is valid only with both slot table and non-zero buffer_size.
+            if (RB_UNLIKELY(slots_ == nullptr || obs == 0u)) {
+                slots_ = nullptr;
+                bufferSize_.store(0u);
+                Base::clear();
+            } else {
+                // Non-concurrent state transfer: must synchronize shadows too (if enabled).
+                const bool ok = Base::init(other.Base::head(), other.Base::tail());
+                if (RB_UNLIKELY(!ok)) {
+                    // If source counters are corrupted, degrade safely to detached invalid.
+                    slots_ = nullptr;
+                    bufferSize_.store(0u);
+                    Base::clear();
+                }
+                SPSC_ASSERT(ok);
+            }
 
             other.slots_ = nullptr;
             other.bufferSize_.store(0u);

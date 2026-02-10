@@ -260,6 +260,8 @@ static void api_compile_smoke() {
     using regions_t        = typename Q::regions;
     using write_guard_t    = typename Q::write_guard;
     using read_guard_t     = typename Q::read_guard;
+    using bulk_write_guard_t = typename Q::bulk_write_guard;
+    using bulk_read_guard_t  = typename Q::bulk_read_guard;
 
     using smoke_pack = type_pack<
         decltype(std::declval<Q&>().is_valid()),
@@ -292,8 +294,17 @@ static void api_compile_smoke() {
         decltype(std::declval<Q&>().consume(std::declval<snapshot_t>())),
         decltype(std::declval<Q&>().try_consume(std::declval<snapshot_t>())),
         decltype(std::declval<Q&>().consume_all()),
+        decltype(std::declval<Q&>().claim_write(::spsc::unsafe)),
+        decltype(std::declval<Q&>().claim_write(::spsc::unsafe, reg{1u})),
+        decltype(std::declval<Q&>().claim_read(::spsc::unsafe)),
+        decltype(std::declval<Q&>().claim_read(::spsc::unsafe, reg{1u})),
         decltype(std::declval<Q&>().claim_write(reg{1u})),
         decltype(std::declval<Q&>().claim_read(reg{1u})),
+        decltype(std::declval<Q&>().template claim_as<std::uint32_t>()),
+        decltype(std::declval<const Q&>().template try_peek<std::uint32_t>(std::declval<std::uint32_t&>())),
+        decltype(std::declval<Q&>().template try_write<std::uint32_t>(std::declval<const std::uint32_t&>())),
+        decltype(std::declval<Q&>().push(std::declval<const void*>(), reg{1u})),
+        decltype(std::declval<Q&>().try_push(std::declval<const void*>(), reg{1u})),
         decltype(std::declval<Q&>().try_claim()),
         decltype(std::declval<Q&>().claim()),
         decltype(std::declval<Q&>().try_publish()),
@@ -303,6 +314,7 @@ static void api_compile_smoke() {
         decltype(std::declval<Q&>().try_front()),
         decltype(std::declval<const Q&>().try_front()),
         decltype(std::declval<Q&>().front()),
+        decltype(std::declval<Q&>().template front_as<std::uint32_t>()),
         decltype(std::declval<const Q&>().front()),
         decltype(std::declval<Q&>().try_pop()),
         decltype(std::declval<Q&>().pop()),
@@ -311,7 +323,39 @@ static void api_compile_smoke() {
         decltype(std::declval<Q&>()[reg{0u}]),
         decltype(std::declval<const Q&>()[reg{0u}]),
         decltype(std::declval<Q&>().scoped_write()),
-        decltype(std::declval<Q&>().scoped_read())
+        decltype(std::declval<Q&>().scoped_write(reg{1u})),
+        decltype(std::declval<Q&>().scoped_read()),
+        decltype(std::declval<Q&>().scoped_read(reg{1u})),
+        decltype(std::declval<write_guard_t&>().get()),
+        decltype(std::declval<write_guard_t&>().peek()),
+        decltype(std::declval<write_guard_t&>().template as<std::uint32_t>()),
+        decltype(std::declval<write_guard_t&>().publish_on_destroy()),
+        decltype(std::declval<write_guard_t&>().arm_publish()),
+        decltype(std::declval<write_guard_t&>().disarm_publish()),
+        decltype(std::declval<write_guard_t&>().commit()),
+        decltype(std::declval<write_guard_t&>().cancel()),
+        decltype(std::declval<bulk_write_guard_t&>().claimed()),
+        decltype(std::declval<bulk_write_guard_t&>().constructed()),
+        decltype(std::declval<bulk_write_guard_t&>().remaining()),
+        decltype(std::declval<bulk_write_guard_t&>().peek_next()),
+        decltype(std::declval<bulk_write_guard_t&>().get_next()),
+        decltype(std::declval<bulk_write_guard_t&>().write_next(std::declval<const void*>(), reg{1u})),
+        decltype(std::declval<bulk_write_guard_t&>().mark_written()),
+        decltype(std::declval<bulk_write_guard_t&>().publish_on_destroy()),
+        decltype(std::declval<bulk_write_guard_t&>().arm_publish()),
+        decltype(std::declval<bulk_write_guard_t&>().disarm_publish()),
+        decltype(std::declval<bulk_write_guard_t&>().commit()),
+        decltype(std::declval<bulk_write_guard_t&>().cancel()),
+        decltype(std::declval<read_guard_t&>().get()),
+        decltype(std::declval<read_guard_t&>().template as<std::uint32_t>()),
+        decltype(std::declval<read_guard_t&>().commit()),
+        decltype(std::declval<read_guard_t&>().cancel()),
+        decltype(std::declval<bulk_read_guard_t&>().count()),
+        decltype(std::declval<bulk_read_guard_t&>().regions_view()),
+        decltype(std::declval<bulk_read_guard_t&>().first()),
+        decltype(std::declval<bulk_read_guard_t&>().second()),
+        decltype(std::declval<bulk_read_guard_t&>().commit()),
+        decltype(std::declval<bulk_read_guard_t&>().cancel())
         >;
 
     [[maybe_unused]] smoke_pack smoke{};
@@ -321,8 +365,16 @@ static void api_compile_smoke() {
     [[maybe_unused]] regions_t r{};
     [[maybe_unused]] write_guard_t wg{};
     [[maybe_unused]] read_guard_t rg{};
+    [[maybe_unused]] bulk_write_guard_t bwg{};
+    [[maybe_unused]] bulk_read_guard_t brg{};
 
-    (void)smoke; (void)st; (void)s1; (void)s2; (void)r; (void)wg; (void)rg;
+    using trap_lvalue_t =
+        std::conditional_t<std::is_same_v<reg, std::uint32_t>, std::uint64_t, std::uint32_t>;
+    static_assert(!std::is_same_v<trap_lvalue_t, reg>);
+    static_assert(!requires(Q& q, trap_lvalue_t& n) { q.pop(n); });
+    static_assert(!requires(Q& q, trap_lvalue_t& n) { q.try_pop(n); });
+
+    (void)smoke; (void)st; (void)s1; (void)s2; (void)r; (void)wg; (void)rg; (void)bwg; (void)brg;
 }
 
 // ------------------------------ state helpers ------------------------------
@@ -678,6 +730,174 @@ static void test_push_pop_front_try(Q& q) {
     QVERIFY(q.empty());
 }
 
+template <class Q>
+static void test_typed_and_raw_helpers(Q& q) {
+    std::mt19937 rng(0x10203040u);
+    q.reset();
+    verify_invariants(q);
+    QVERIFY(q.empty());
+
+    // try_write + try_peek + front_as
+    {
+        const Blob b = make_blob(901u, rng);
+        QVERIFY(q.try_write(b));
+
+        Blob peek{};
+        QVERIFY(q.try_peek(peek));
+        expect_blob_eq(peek, b);
+
+        if (auto* fb = q.template front_as<Blob>(); fb != nullptr) {
+            expect_blob_eq(*fb, b);
+        } else {
+            Blob got{};
+            load_from_slot(q.front(), got);
+            expect_blob_eq(got, b);
+        }
+
+        QVERIFY(q.try_pop());
+        QVERIFY(q.empty());
+    }
+
+    // claim_as + publish path (alignment-aware fallback)
+    {
+        const Blob b = make_blob(902u, rng);
+        if (auto* typed_slot = q.template claim_as<Blob>(); typed_slot != nullptr) {
+            *typed_slot = b;
+            QVERIFY(q.try_publish());
+        } else {
+            void* raw_slot = q.try_claim();
+            QVERIFY(raw_slot != nullptr);
+            store_to_slot(raw_slot, b);
+            QVERIFY(q.try_publish());
+        }
+
+        Blob got{};
+        load_from_slot(q.front(), got);
+        expect_blob_eq(got, b);
+        q.pop();
+        QVERIFY(q.empty());
+    }
+
+    // raw push(data,size) must truncate to buffer_size()
+    {
+        Big big{};
+        for (auto& x : big.payload) {
+            x = static_cast<std::byte>(rng() & 0xFF);
+        }
+
+        q.push(&big, static_cast<reg>(sizeof(big)));
+        std::vector<std::byte> tmp(static_cast<std::size_t>(q.buffer_size()));
+        std::memcpy(tmp.data(), q.front(), tmp.size());
+        QCOMPARE(std::memcmp(tmp.data(), &big, tmp.size()), 0);
+        q.pop();
+        QVERIFY(q.empty());
+    }
+
+    // try_push(data,size) safety contracts
+    {
+        QVERIFY(!q.try_push(nullptr, reg{1u}));
+        QVERIFY(q.try_push(nullptr, reg{0u}));
+        QVERIFY(!q.empty());
+        q.pop();
+        QVERIFY(q.empty());
+    }
+
+    verify_invariants(q);
+}
+
+template <class Q>
+static void test_bulk_raii_overloads(Q& q) {
+    std::mt19937 rng(0x55667788u);
+    q.reset();
+    QVERIFY(q.empty());
+
+    const reg cap = q.capacity();
+    QVERIFY(cap > 0u);
+    const reg want = std::min<reg>(cap, reg{6u});
+
+    {
+        auto bw = q.scoped_write(want);
+        QVERIFY(static_cast<bool>(bw));
+        QCOMPARE(bw.claimed(), want);
+        QCOMPARE(bw.constructed(), reg{0u});
+        QCOMPARE(bw.remaining(), want);
+
+        for (reg i = 0u; i < want; ++i) {
+            auto* slot = bw.peek_next();
+            QVERIFY(slot != nullptr);
+            QCOMPARE(slot, bw.get_next());
+            const Blob b = make_blob(1200u + static_cast<std::uint32_t>(i), rng);
+            store_to_slot(slot, b);
+            bw.mark_written();
+        }
+
+        QCOMPARE(bw.constructed(), want);
+        QCOMPARE(bw.remaining(), reg{0u});
+        bw.publish_on_destroy();
+    }
+    QCOMPARE(q.size(), want);
+
+    {
+        auto br = q.scoped_read(want);
+        QVERIFY(static_cast<bool>(br));
+        QCOMPARE(br.count(), want);
+        QCOMPARE(br.regions_view().total, want);
+
+        reg seen = 0u;
+        for (reg i = 0u; i < br.first().size(); ++i) {
+            Blob b{};
+            load_from_slot(br.first()[i], b);
+            QCOMPARE(b.seq, 1200u + static_cast<std::uint32_t>(seen++));
+        }
+        for (reg i = 0u; i < br.second().size(); ++i) {
+            Blob b{};
+            load_from_slot(br.second()[i], b);
+            QCOMPARE(b.seq, 1200u + static_cast<std::uint32_t>(seen++));
+        }
+        QCOMPARE(seen, want);
+        br.commit();
+    }
+    QVERIFY(q.empty());
+
+    // disarm path: written slot must not be published.
+    {
+        auto bw = q.scoped_write(reg{1u});
+        QVERIFY(static_cast<bool>(bw));
+        auto* slot = bw.get_next();
+        QVERIFY(slot != nullptr);
+        const Blob b = make_blob(1300u, rng);
+        store_to_slot(slot, b);
+        bw.mark_written();
+        bw.disarm_publish();
+    }
+    QVERIFY(q.empty());
+
+    // write_next(raw) + cancel/commit contracts.
+    {
+        auto bw = q.scoped_write(reg{1u});
+        QVERIFY(static_cast<bool>(bw));
+        const Blob b = make_blob(1301u, rng);
+        QVERIFY(bw.write_next(&b, static_cast<reg>(sizeof(b))) != nullptr);
+        bw.commit();
+    }
+    QCOMPARE(q.size(), reg{1u});
+
+    {
+        auto br = q.scoped_read(reg{1u});
+        QVERIFY(static_cast<bool>(br));
+        br.cancel();
+    }
+    QCOMPARE(q.size(), reg{1u});
+
+    {
+        auto br = q.scoped_read(reg{1u});
+        QVERIFY(static_cast<bool>(br));
+        br.commit();
+    }
+    QVERIFY(q.empty());
+    verify_invariants(q);
+}
+
 // ------------------------------ tests: bulk regions + wrap ------------------------------
 
 template <reg Cap, class Policy>
@@ -941,6 +1161,38 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
     std::mt19937 rng(0x515151u);
 
+    // write_guard: raw get() must NOT auto-publish.
+    {
+        const reg before = q.size();
+        {
+            auto wg = q.scoped_write();
+            QVERIFY(wg);
+            const Blob b = make_blob(776u, rng);
+            store_to_slot(wg.get(), b);
+        }
+        QCOMPARE(q.size(), before);
+    }
+
+    // write_guard: as<T>() must arm auto-publish.
+    {
+        const reg before = q.size();
+        {
+            auto wg = q.scoped_write();
+            QVERIFY(wg);
+            Blob* b = wg.template as<Blob>();
+            QVERIFY(b != nullptr);
+            *b = make_blob(777u, rng);
+        }
+        QCOMPARE(q.size(), static_cast<reg>(before + 1u));
+
+        auto rg = q.scoped_read();
+        QVERIFY(rg);
+        const Blob* b = rg.template as<Blob>();
+        QVERIFY(b != nullptr);
+        QCOMPARE(b->seq, 777u);
+        rg.commit();
+    }
+
     // Slot #1: write a Blob and publish it.
     {
         auto wg = q.scoped_write();
@@ -948,7 +1200,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
         Blob* b = wg.template as<Blob>();
         QVERIFY(b != nullptr);
-        *b = make_blob(777u, rng);
+        *b = make_blob(780u, rng);
 
         // Probe alignment without scribbling over the Blob (same memory).
         const Align16* a16_probe = wg.template as<Align16>();
@@ -972,6 +1224,37 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
     QCOMPARE(q.size(), reg{2u});
 
+    // write_guard: peek/get + arm/disarm path.
+    {
+        const reg before = q.size();
+        {
+            auto wg = q.scoped_write();
+            QVERIFY(wg);
+            void* p1 = wg.peek();
+            void* p2 = wg.get();
+            QVERIFY(p1 != nullptr);
+            QCOMPARE(p1, p2);
+            const Blob b = make_blob(778u, rng);
+            store_to_slot(p1, b);
+            wg.arm_publish();
+            wg.disarm_publish();
+        }
+        QCOMPARE(q.size(), before);
+    }
+
+    // write_guard: publish_on_destroy() path.
+    {
+        const reg before = q.size();
+        {
+            auto wg = q.scoped_write();
+            QVERIFY(wg);
+            const Blob b = make_blob(779u, rng);
+            store_to_slot(wg.get(), b);
+            wg.publish_on_destroy();
+        }
+        QCOMPARE(q.size(), static_cast<reg>(before + 1u));
+    }
+
     // Read slot #1.
     {
         auto rg = q.scoped_read();
@@ -979,7 +1262,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
         const Blob* b = rg.template as<Blob>();
         QVERIFY(b != nullptr);
-        QCOMPARE(b->seq, 777u);
+        QCOMPARE(b->seq, 780u);
 
         rg.commit();
     }
@@ -992,6 +1275,18 @@ static void test_raii_guards_alignment_aligned(Q& q) {
         const Align16* a16 = rg.template as<Align16>();
         QVERIFY(a16 != nullptr);
         QCOMPARE(a16->x[0], std::byte{0x42});
+
+        rg.commit();
+    }
+
+    // Read slot #3 (published on destroy).
+    {
+        auto rg = q.scoped_read();
+        QVERIFY(rg);
+
+        const Blob* b = rg.template as<Blob>();
+        QVERIFY(b != nullptr);
+        QCOMPARE(b->seq, 779u);
 
         rg.commit();
     }
@@ -1473,7 +1768,18 @@ static void test_shadow_swap_move_regression_static() {
     QVERIFY(moved.full());
     QVERIFY(moved.try_claim() == nullptr);
 
-    drain_expect_seq(moved, 1000u);
+    // Move-assign into a pre-warmed valid target: full-state must be preserved.
+    Q assigned(st_a.slot_table, kBufSz, Policy{});
+    QVERIFY(assigned.is_valid());
+    warm_producer_queries(assigned);
+    assigned = std::move(moved);
+
+    QVERIFY(assigned.is_valid());
+    QVERIFY(assigned.full());
+    QVERIFY(assigned.try_claim() == nullptr);
+    QVERIFY(!moved.is_valid());
+
+    drain_expect_seq(assigned, 1000u);
 }
 
 template <class Policy>
@@ -1509,7 +1815,17 @@ static void test_shadow_swap_move_regression_dynamic() {
     QVERIFY(moved.full());
     QVERIFY(moved.try_claim() == nullptr);
 
-    drain_expect_seq(moved, 2000u);
+    Q assigned(st_a.slot_table.data(), st_a.depth, kBufSz, Policy{});
+    QVERIFY(assigned.is_valid());
+    warm_producer_queries(assigned);
+    assigned = std::move(moved);
+
+    QVERIFY(assigned.is_valid());
+    QVERIFY(assigned.full());
+    QVERIFY(assigned.try_claim() == nullptr);
+    QVERIFY(!moved.is_valid());
+
+    drain_expect_seq(assigned, 2000u);
 }
 
 // 2) nullptr slot pointers: high-level APIs must refuse to claim/push to a null backing slot.
@@ -1537,6 +1853,8 @@ static void test_null_slot_pointer_defense_static() {
 
     std::mt19937 rng(0x1111u);
     QVERIFY(!q.try_push(make_blob(1u, rng)));
+    QVERIFY(!q.try_publish());
+    QVERIFY(!q.try_publish(reg{1u}));
     verify_invariants(q);
     QVERIFY(q.empty());
 
@@ -1569,6 +1887,8 @@ static void test_null_slot_pointer_defense_dynamic() {
 
     std::mt19937 rng(0x2222u);
     QVERIFY(!q.try_push(make_blob(2u, rng)));
+    QVERIFY(!q.try_publish());
+    QVERIFY(!q.try_publish(reg{1u}));
 
     const auto wr = q.claim_write(1u);
     QCOMPARE(wr.total, reg{1u});
@@ -1897,7 +2217,9 @@ static void run_static_suite() {
 
     test_introspection_and_data(q);
     test_push_pop_front_try(q);
+    test_typed_and_raw_helpers(q);
     test_bulk_regions(q, st.slot_table.data());
+    test_bulk_raii_overloads(q);
     test_snapshots(q);
     test_raii_guards_alignment_aligned(q);
     test_raii_guards_alignment_misaligned<Q>();
@@ -1933,7 +2255,9 @@ static void run_dynamic_suite() {
 
     test_introspection_and_data(q);
     test_push_pop_front_try(q);
+    test_typed_and_raw_helpers(q);
     test_bulk_regions(q, st.slot_table.data(), st.depth);
+    test_bulk_raii_overloads(q);
     test_snapshots(q);
     test_raii_guards_alignment_aligned(q);
 
