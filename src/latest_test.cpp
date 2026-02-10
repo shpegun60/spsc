@@ -15,12 +15,18 @@
 
 #include <QtTest/QtTest>
 
+#include <QCoreApplication>
+#include <QProcess>
+#include <QProcessEnvironment>
+
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <csignal>
+#include <cstdlib>
 #include <concepts>
 #include <limits>
 #include <memory>
@@ -30,7 +36,79 @@
 #include <utility>
 #include <vector>
 
+#if !defined(SPSC_ASSERT) && !defined(NDEBUG)
+#  define SPSC_ASSERT(expr) do { if(!(expr)) { std::abort(); } } while(0)
+#endif
+
 #include "latest.hpp"
+
+namespace spsc_latest_death_detail {
+
+#if !defined(NDEBUG)
+
+static constexpr int kDeathExitCode = 0xB1;
+
+static void sigabrt_handler_(int) noexcept {
+    std::_Exit(kDeathExitCode);
+}
+
+[[noreturn]] static void run_case_(const char* mode) {
+    std::signal(SIGABRT, &sigabrt_handler_);
+
+    using QStatic = spsc::latest<std::uint32_t, 16u, spsc::policy::P>;
+    using QDyn    = spsc::latest<std::uint32_t, 0u, spsc::policy::P>;
+
+    if (std::strcmp(mode, "pop_empty") == 0) {
+        QStatic q;
+        q.pop();
+    } else if (std::strcmp(mode, "front_empty") == 0) {
+        QStatic q;
+        (void)q.front();
+    } else if (std::strcmp(mode, "publish_full") == 0) {
+        QStatic q;
+        for (std::uint32_t i = 0; i < 16u; ++i) {
+            const bool ok = q.try_push(i);
+            if (!ok) {
+                std::_Exit(0xE1);
+            }
+        }
+        q.publish();
+    } else if (std::strcmp(mode, "claim_full") == 0) {
+        QStatic q;
+        for (std::uint32_t i = 0; i < 16u; ++i) {
+            const bool ok = q.try_push(i);
+            if (!ok) {
+                std::_Exit(0xE2);
+            }
+        }
+        (void)q.claim();
+    } else if (std::strcmp(mode, "claim_invalid_dynamic") == 0) {
+        QDyn q;
+        (void)q.claim();
+    } else if (std::strcmp(mode, "front_invalid_dynamic") == 0) {
+        QDyn q;
+        (void)q.front();
+    } else {
+        std::_Exit(0xEF);
+    }
+
+    std::_Exit(0xF0);
+}
+
+struct Runner_ {
+    Runner_() {
+        const char* mode = std::getenv("SPSC_LATEST_DEATH");
+        if (mode && *mode) {
+            run_case_(mode);
+        }
+    }
+};
+
+static const Runner_ g_runner_{};
+
+#endif // !defined(NDEBUG)
+
+} // namespace spsc_latest_death_detail
 
 namespace {
 
@@ -1941,6 +2019,213 @@ static void raw_bytes_per_slot_contract() {
     std::memcpy(&out, q.front(), sizeof(out));
     QCOMPARE(out, v);
 }
+
+template <class Policy>
+static void reserve_resize_edge_cases_typed_dynamic() {
+    using Q = spsc::latest<Blob, 0u, Policy>;
+
+    Q q;
+    QVERIFY(q.reserve(0u));
+    QVERIFY(!q.valid());
+    QVERIFY(!q.try_push(Blob{.seq = 1u}));
+
+    QVERIFY(q.init(3u));
+    QVERIFY(q.valid());
+    QVERIFY(q.capacity() >= 4u);
+    QVERIFY((q.capacity() & (q.capacity() - 1u)) == 0u);
+
+    const reg cap0 = q.capacity();
+    q.push(Blob{.seq = 11u});
+    QCOMPARE(q.front().seq, 11u);
+
+    QVERIFY(q.resize(1u)); // No shrink.
+    QCOMPARE(q.capacity(), cap0);
+    QCOMPARE(q.front().seq, 11u);
+
+    QVERIFY(q.reserve(cap0 + 1u)); // Grow (drops old state by contract).
+    QVERIFY(q.capacity() >= cap0 + 1u);
+    QVERIFY(q.empty());
+
+    QVERIFY(q.resize(0u));
+    QVERIFY(!q.valid());
+    QCOMPARE(q.capacity(), reg{0u});
+    QVERIFY(q.try_claim() == nullptr);
+    QVERIFY(q.try_front() == nullptr);
+}
+
+template <class Policy>
+static void reserve_resize_edge_cases_raw_dynamic() {
+    using Q = spsc::latest<void, 0u, Policy>;
+
+    Q q;
+    QVERIFY(q.reserve(0u, 0u));
+    QVERIFY(!q.valid());
+    QVERIFY(!q.resize(8u, 0u)); // bytes_per_slot must be > 0.
+    QVERIFY(!q.valid());
+
+    QVERIFY(q.init(3u, sizeof(std::uint32_t)));
+    QVERIFY(q.valid());
+    QVERIFY(q.capacity() >= 4u);
+    QVERIFY((q.capacity() & (q.capacity() - 1u)) == 0u);
+    QCOMPARE(q.bytes_per_slot(), reg(sizeof(std::uint32_t)));
+
+    const reg cap0 = q.capacity();
+    const reg bs0  = q.bytes_per_slot();
+
+    QVERIFY(q.reserve(2u, 1u)); // No shrink.
+    QCOMPARE(q.capacity(), cap0);
+    QCOMPARE(q.bytes_per_slot(), bs0);
+
+    QVERIFY(q.reserve(cap0 + 1u, bs0 + 8u)); // Grow geometry and per-slot bytes.
+    QVERIFY(q.capacity() >= cap0 + 1u);
+    QVERIFY(q.bytes_per_slot() >= bs0 + 8u);
+    QVERIFY(q.empty());
+
+    const std::uint32_t v = 0xDEADBEEFu;
+    QVERIFY(q.try_push(v));
+    std::uint32_t out{};
+    std::memcpy(&out, q.front(), sizeof(out));
+    QCOMPARE(out, v);
+
+    QVERIFY(q.resize(0u, q.bytes_per_slot()));
+    QVERIFY(!q.valid());
+    QCOMPARE(q.capacity(), reg{0u});
+    QCOMPARE(q.bytes_per_slot(), reg{0u});
+}
+
+template <class Q>
+static void consume_all_and_clear_contract_typed(Q& q) {
+    using T = typename Q::value_type;
+    q.clear();
+    QVERIFY(q.try_front() == nullptr);
+
+    q.push(T{.seq = 1u});
+    q.push(T{.seq = 2u});
+    QVERIFY(q.try_front() != nullptr);
+    QCOMPARE(q.front().seq, 2u);
+
+    q.consume_all();
+    QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
+    QVERIFY(!q.try_pop());
+
+    q.push(T{.seq = 3u});
+    QCOMPARE(q.front().seq, 3u);
+    (void)q.try_front();
+    q.clear();
+    QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
+    QVERIFY(!q.try_pop());
+}
+
+template <class Q>
+static void consume_all_and_clear_contract_raw(Q& q) {
+    q.clear();
+    QVERIFY(q.try_front() == nullptr);
+
+    const std::uint32_t a = 0x01020304u;
+    const std::uint32_t b = 0xAABBCCDDu;
+    QVERIFY(q.try_push(a));
+    QVERIFY(q.try_push(b));
+
+    std::uint32_t out{};
+    std::memcpy(&out, q.front(), sizeof(out));
+    QCOMPARE(out, b);
+
+    q.consume_all();
+    QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
+    QVERIFY(!q.try_pop());
+
+    const std::uint32_t c = 0x11223344u;
+    QVERIFY(q.try_push(c));
+    std::memcpy(&out, q.front(), sizeof(out));
+    QCOMPARE(out, c);
+    (void)q.try_front();
+    q.clear();
+    QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
+    QVERIFY(!q.try_pop());
+}
+
+template <class Policy>
+static void move_contract_static_typed() {
+    using Q = spsc::latest<Blob, kSmallCap, Policy>;
+
+    Q a;
+    a.push(Blob{.seq = 7u});
+    Q b = std::move(a);
+    QVERIFY(a.valid());
+    QVERIFY(a.empty());
+    QVERIFY(b.valid());
+    QCOMPARE(b.front().seq, 7u);
+
+    Q c;
+    c.push(Blob{.seq = 9u});
+    c = std::move(b);
+    QVERIFY(c.valid());
+    QCOMPARE(c.front().seq, 7u);
+    QVERIFY(b.valid());
+    QVERIFY(b.empty());
+}
+
+template <class Policy>
+static void move_contract_typed_dynamic() {
+    using Q = spsc::latest<Blob, 0u, Policy>;
+
+    Q src;
+    QVERIFY(src.init(64u));
+    src.push(Blob{.seq = 1u});
+    src.push(Blob{.seq = 2u});
+    QVERIFY(src.try_front() != nullptr);
+
+    Q dst;
+    QVERIFY(dst.init(32u));
+    dst.push(Blob{.seq = 9u});
+
+    dst = std::move(src);
+    QVERIFY(dst.valid());
+    QVERIFY(!src.valid());
+    QCOMPARE(dst.front().seq, 2u);
+
+    QVERIFY(dst.try_pop());
+    QVERIFY(dst.empty());
+
+    dst.swap(dst);
+    QVERIFY(dst.valid());
+}
+
+template <class Policy>
+static void move_contract_raw_dynamic() {
+    using Q = spsc::latest<void, 0u, Policy>;
+
+    Q src;
+    QVERIFY(src.init(64u, sizeof(std::uint32_t)));
+    const std::uint32_t v1 = 0x11111111u;
+    const std::uint32_t v2 = 0x22222222u;
+    QVERIFY(src.try_push(v1));
+    QVERIFY(src.try_push(v2));
+    QVERIFY(src.try_front() != nullptr);
+
+    Q dst;
+    QVERIFY(dst.init(32u, sizeof(std::uint32_t)));
+    const std::uint32_t d = 0xAAAAAAAAu;
+    QVERIFY(dst.try_push(d));
+
+    dst = std::move(src);
+    QVERIFY(dst.valid());
+    QVERIFY(!src.valid());
+
+    std::uint32_t out{};
+    std::memcpy(&out, dst.front(), sizeof(out));
+    QCOMPARE(out, v2);
+
+    QVERIFY(dst.try_pop());
+    QVERIFY(dst.empty());
+
+    dst.swap(dst);
+    QVERIFY(dst.valid());
+}
 // -------------------------
 // QtTest harness
 // -------------------------
@@ -2068,6 +2353,82 @@ private slots:
         raw_bytes_per_slot_contract<spsc::policy::P>();
         raw_bytes_per_slot_contract<spsc::policy::A<>>();
         raw_bytes_per_slot_contract<spsc::policy::CA<>>();
+    }
+
+    void reserve_resize_edge_cases_dynamic() {
+        reserve_resize_edge_cases_typed_dynamic<spsc::policy::P>();
+        reserve_resize_edge_cases_typed_dynamic<spsc::policy::A<>>();
+        reserve_resize_edge_cases_typed_dynamic<spsc::policy::CA<>>();
+
+        reserve_resize_edge_cases_raw_dynamic<spsc::policy::P>();
+        reserve_resize_edge_cases_raw_dynamic<spsc::policy::A<>>();
+        reserve_resize_edge_cases_raw_dynamic<spsc::policy::CA<>>();
+    }
+
+    void consume_all_clear_contract() {
+        {
+            spsc::latest<Blob, kSmallCap, spsc::policy::P> q;
+            consume_all_and_clear_contract_typed(q);
+        }
+        {
+            spsc::latest<Blob, 0u, spsc::policy::A<>> q;
+            QVERIFY(q.init(64u));
+            consume_all_and_clear_contract_typed(q);
+        }
+        {
+            spsc::latest<void, 0u, spsc::policy::CA<>> q;
+            QVERIFY(q.init(64u, sizeof(std::uint32_t)));
+            consume_all_and_clear_contract_raw(q);
+        }
+    }
+
+    void move_contracts() {
+        move_contract_static_typed<spsc::policy::P>();
+        move_contract_static_typed<spsc::policy::A<>>();
+        move_contract_static_typed<spsc::policy::CA<>>();
+
+        move_contract_typed_dynamic<spsc::policy::P>();
+        move_contract_typed_dynamic<spsc::policy::A<>>();
+        move_contract_typed_dynamic<spsc::policy::CA<>>();
+
+        move_contract_raw_dynamic<spsc::policy::P>();
+        move_contract_raw_dynamic<spsc::policy::A<>>();
+        move_contract_raw_dynamic<spsc::policy::CA<>>();
+    }
+
+    void death_tests_debug_only() {
+#if !defined(NDEBUG)
+        auto expect_death = [&](const char* mode) {
+            QProcess p;
+            p.setProgram(QCoreApplication::applicationFilePath());
+            p.setArguments(QStringList{});
+
+            QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+            env.insert("SPSC_LATEST_DEATH", QString::fromLatin1(mode));
+            p.setProcessEnvironment(env);
+
+            p.start();
+            QVERIFY2(p.waitForStarted(1500), "Death child failed to start.");
+
+            if (!p.waitForFinished(8000)) {
+                p.kill();
+                QVERIFY2(false, "Death child did not finish (possible crash dialog).");
+            }
+
+            const int code = p.exitCode();
+            QVERIFY2(code == spsc_latest_death_detail::kDeathExitCode,
+                     "Expected assertion death (SIGABRT -> kDeathExitCode).");
+        };
+
+        expect_death("pop_empty");
+        expect_death("front_empty");
+        expect_death("publish_full");
+        expect_death("claim_full");
+        expect_death("claim_invalid_dynamic");
+        expect_death("front_invalid_dynamic");
+#else
+        QSKIP("Death tests are debug-only (assertions disabled).");
+#endif
     }
     void alignment_sweep() {
         // typed dynamic

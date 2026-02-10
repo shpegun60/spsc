@@ -160,12 +160,10 @@ public:
     ~latest() noexcept { destroy(); }
 
     void swap(latest& other) noexcept {
+        if (this == &other) {
+            return;
+        }
         using std::swap;
-
-        swap(slots_, other.slots_);
-        swap(bufferSize_, other.bufferSize_);
-        swap(cons_head_snapshot_, other.cons_head_snapshot_);
-        swap(cons_has_snapshot_, other.cons_has_snapshot_);
 
         const size_type cap_a  = Base::capacity();
         const size_type head_a = Base::head();
@@ -175,8 +173,49 @@ public:
         const size_type head_b = other.Base::head();
         const size_type tail_b = other.Base::tail();
 
-        (void)Base::init(cap_b, head_b, tail_b);
-        (void)other.Base::init(cap_a, head_a, tail_a);
+        SPSC_ASSERT((slots_ == nullptr) == (cap_a == 0u));
+        SPSC_ASSERT((other.slots_ == nullptr) == (cap_b == 0u));
+        SPSC_ASSERT((slots_ == nullptr) == (bufferSize_ == 0u));
+        SPSC_ASSERT((other.slots_ == nullptr) == (other.bufferSize_ == 0u));
+
+        swap(slots_, other.slots_);
+        swap(bufferSize_, other.bufferSize_);
+        swap(cons_head_snapshot_, other.cons_head_snapshot_);
+        swap(cons_has_snapshot_, other.cons_has_snapshot_);
+
+        const bool ok1 = (cap_b != 0u) ? Base::init(cap_b, head_b, tail_b)
+                                       : Base::init(0u);
+        const bool ok2 = (cap_a != 0u) ? other.Base::init(cap_a, head_a, tail_a)
+                                       : other.Base::init(0u);
+
+        if (RB_UNLIKELY(!ok1 || !ok2)) {
+            swap(slots_, other.slots_);
+            swap(bufferSize_, other.bufferSize_);
+            swap(cons_head_snapshot_, other.cons_head_snapshot_);
+            swap(cons_has_snapshot_, other.cons_has_snapshot_);
+
+            const bool rb1 = (cap_a != 0u) ? Base::init(cap_a, head_a, tail_a)
+                                           : Base::init(0u);
+            const bool rb2 = (cap_b != 0u) ? other.Base::init(cap_b, head_b, tail_b)
+                                           : other.Base::init(0u);
+            SPSC_ASSERT(rb1 && rb2);
+            (void)rb1;
+            (void)rb2;
+        }
+
+        if (slots_ == nullptr) {
+            bufferSize_ = 0u;
+            (void)Base::init(0u);
+        }
+        if (other.slots_ == nullptr) {
+            other.bufferSize_ = 0u;
+            (void)other.Base::init(0u);
+        }
+
+        SPSC_ASSERT((slots_ == nullptr) == (Base::capacity() == 0u));
+        SPSC_ASSERT((other.slots_ == nullptr) == (other.Base::capacity() == 0u));
+        SPSC_ASSERT((slots_ == nullptr) == (bufferSize_ == 0u));
+        SPSC_ASSERT((other.slots_ == nullptr) == (other.bufferSize_ == 0u));
     }
 
     friend void swap(latest& a, latest& b) noexcept { a.swap(b); }
@@ -328,15 +367,27 @@ public:
 
         destroy();
 
-        slots_       = new_pool;
-        bufferSize_  = bytes_per_slot;
-        (void)Base::init(depth_pow2);
+        const bool ok = Base::init(depth_pow2);
+        if (RB_UNLIKELY(!ok)) {
+            for (size_type j = 0u; j < depth_pow2; ++j) {
+                auto* bptr = static_cast<byte_pointer>(new_pool[j]);
+                byte_alloc_traits::deallocate(buf_alloc, bptr, bytes_per_slot);
+            }
+            slot_alloc_traits::deallocate(slot_alloc, new_pool, depth_pow2);
+            (void)Base::init(0u);
+            return false;
+        }
+
+        slots_      = new_pool;
+        bufferSize_ = bytes_per_slot;
         return true;
     }
 
-    [[nodiscard]] RB_FORCEINLINE bool empty() const noexcept { return Base::empty(); }
-    [[nodiscard]] RB_FORCEINLINE bool full()  const noexcept { return Base::full(); }
-    [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept { return static_cast<size_type>(Base::size()); }
+    [[nodiscard]] RB_FORCEINLINE bool empty() const noexcept { return !is_valid() || Base::empty(); }
+    [[nodiscard]] RB_FORCEINLINE bool full()  const noexcept { return !is_valid() || Base::full(); }
+    [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept {
+        return is_valid() ? static_cast<size_type>(Base::size()) : 0u;
+    }
 
     // ------------------------------------------------------------------------------------------
     // Producer API
@@ -393,6 +444,7 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -417,6 +469,7 @@ public:
 
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -491,6 +544,7 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -630,38 +684,74 @@ private:
         byte_allocator_type buf_alloc{};
         slot_allocator_type slot_alloc{};
 
-        if (slots_ != nullptr) {
-            const size_type d  = depth();
-            const size_type bs = buffer_size();
-
-            if (d != 0u && bs != 0u) {
-                for (size_type i = 0u; i < d; ++i) {
-                    if (slots_[i] != nullptr) {
-                        auto* bptr = static_cast<byte_pointer>(slots_[i]);
-                        byte_alloc_traits::deallocate(buf_alloc, bptr, bs);
-                    }
-                }
-            }
-
-            if (d != 0u) {
-                slot_alloc_traits::deallocate(slot_alloc, slots_, d);
-            }
-        }
+        slot_pointer const old_slots = slots_;
+        const size_type old_depth = depth();
+        const size_type old_bs    = buffer_size();
 
         slots_       = nullptr;
         bufferSize_  = 0u;
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_ = false;
         (void)Base::init(0u);
+
+        if (old_slots != nullptr) {
+            SPSC_ASSERT(old_depth != 0u);
+            SPSC_ASSERT(old_bs != 0u);
+
+            if (old_depth != 0u && old_bs != 0u) {
+                for (size_type i = 0u; i < old_depth; ++i) {
+                    if (old_slots[i] != nullptr) {
+                        auto* bptr = static_cast<byte_pointer>(old_slots[i]);
+                        byte_alloc_traits::deallocate(buf_alloc, bptr, old_bs);
+                    }
+                }
+            }
+
+            if (old_depth != 0u) {
+                slot_alloc_traits::deallocate(slot_alloc, old_slots, old_depth);
+            }
+        }
     }
 
     void move_from(latest&& other) noexcept {
-        slots_              = other.slots_;
-        bufferSize_         = other.bufferSize_;
+        const size_type cap  = other.Base::capacity();
+        const size_type head = other.Base::head();
+        const size_type tail = other.Base::tail();
+
+        const slot_pointer other_slots = other.slots_;
+        const size_type other_bs       = other.bufferSize_;
+
+        SPSC_ASSERT((other_slots == nullptr) == (cap == 0u));
+        SPSC_ASSERT((other_slots == nullptr) == (other_bs == 0u));
+
+        if (RB_UNLIKELY(other_slots == nullptr || cap == 0u || other_bs == 0u)) {
+            slots_ = nullptr;
+            bufferSize_ = 0u;
+            cons_head_snapshot_ = 0u;
+            cons_has_snapshot_ = false;
+            (void)Base::init(0u);
+            other.slots_ = nullptr;
+            other.bufferSize_ = 0u;
+            other.cons_head_snapshot_ = 0u;
+            other.cons_has_snapshot_ = false;
+            (void)other.Base::init(0u);
+            return;
+        }
+
+        const bool ok = Base::init(cap, head, tail);
+        if (RB_UNLIKELY(!ok)) {
+            slots_ = nullptr;
+            bufferSize_ = 0u;
+            cons_head_snapshot_ = 0u;
+            cons_has_snapshot_ = false;
+            (void)Base::init(0u);
+            return;
+        }
+
+        slots_              = other_slots;
+        bufferSize_         = other_bs;
         cons_head_snapshot_ = other.cons_head_snapshot_;
         cons_has_snapshot_  = other.cons_has_snapshot_;
-
-        (void)Base::init(other.Base::capacity(), other.Base::head(), other.Base::tail());
 
         other.slots_              = nullptr;
         other.bufferSize_         = 0u;
@@ -776,11 +866,10 @@ public:
     ~latest() noexcept(std::is_nothrow_destructible_v<value_type>) { destroy(); }
 
     void swap(latest& other) noexcept {
+        if (this == &other) {
+            return;
+        }
         using std::swap;
-
-        swap(storage_, other.storage_);
-        swap(cons_head_snapshot_, other.cons_head_snapshot_);
-        swap(cons_has_snapshot_, other.cons_has_snapshot_);
 
         const size_type cap_a  = Base::capacity();
         const size_type head_a = Base::head();
@@ -790,8 +879,41 @@ public:
         const size_type head_b = other.Base::head();
         const size_type tail_b = other.Base::tail();
 
-        (void)Base::init(cap_b, head_b, tail_b);
-        (void)other.Base::init(cap_a, head_a, tail_a);
+        SPSC_ASSERT((storage_ == nullptr) == (cap_a == 0u));
+        SPSC_ASSERT((other.storage_ == nullptr) == (cap_b == 0u));
+
+        swap(storage_, other.storage_);
+        swap(cons_head_snapshot_, other.cons_head_snapshot_);
+        swap(cons_has_snapshot_, other.cons_has_snapshot_);
+
+        const bool ok1 = (cap_b != 0u) ? Base::init(cap_b, head_b, tail_b)
+                                       : Base::init(0u);
+        const bool ok2 = (cap_a != 0u) ? other.Base::init(cap_a, head_a, tail_a)
+                                       : other.Base::init(0u);
+
+        if (RB_UNLIKELY(!ok1 || !ok2)) {
+            swap(storage_, other.storage_);
+            swap(cons_head_snapshot_, other.cons_head_snapshot_);
+            swap(cons_has_snapshot_, other.cons_has_snapshot_);
+
+            const bool rb1 = (cap_a != 0u) ? Base::init(cap_a, head_a, tail_a)
+                                           : Base::init(0u);
+            const bool rb2 = (cap_b != 0u) ? other.Base::init(cap_b, head_b, tail_b)
+                                           : other.Base::init(0u);
+            SPSC_ASSERT(rb1 && rb2);
+            (void)rb1;
+            (void)rb2;
+        }
+
+        if (storage_ == nullptr) {
+            (void)Base::init(0u);
+        }
+        if (other.storage_ == nullptr) {
+            (void)other.Base::init(0u);
+        }
+
+        SPSC_ASSERT((storage_ == nullptr) == (Base::capacity() == 0u));
+        SPSC_ASSERT((other.storage_ == nullptr) == (other.Base::capacity() == 0u));
     }
 
     friend void swap(latest& a, latest& b) noexcept { a.swap(b); }
@@ -841,9 +963,11 @@ public:
         return is_valid() ? static_cast<size_type>(Base::read_size()) : 0u;
     }
 
-    [[nodiscard]] RB_FORCEINLINE bool empty() const noexcept { return Base::empty(); }
-    [[nodiscard]] RB_FORCEINLINE bool full()  const noexcept { return Base::full(); }
-    [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept { return static_cast<size_type>(Base::size()); }
+    [[nodiscard]] RB_FORCEINLINE bool empty() const noexcept { return !is_valid() || Base::empty(); }
+    [[nodiscard]] RB_FORCEINLINE bool full()  const noexcept { return !is_valid() || Base::full(); }
+    [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept {
+        return is_valid() ? static_cast<size_type>(Base::size()) : 0u;
+    }
 
     // Dynamic-only: explicit resource release.
     RB_FORCEINLINE void destroy() noexcept(std::is_nothrow_destructible_v<value_type>) { destroy_impl(); }
@@ -852,7 +976,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE bool init(const size_type depth_req) { return resize(depth_req); }
 
     [[nodiscard]] bool reserve(const size_type min_depth) {
-        if (depth() >= min_depth) {
+        if (is_valid() && depth() >= min_depth) {
             return true;
         }
         return resize(min_depth);
@@ -905,8 +1029,20 @@ public:
         // Drop old state (latest is not a FIFO; resize is not a concurrent operation).
         destroy();
 
+        const bool ok = Base::init(target_cap);
+        if (RB_UNLIKELY(!ok)) {
+            if constexpr (!std::is_trivially_destructible_v<value_type>) {
+                std::destroy_n(new_buf, target_cap);
+            }
+            alloc_traits::deallocate(alloc, new_buf, target_cap);
+            storage_ = nullptr;
+            cons_head_snapshot_ = 0u;
+            cons_has_snapshot_ = false;
+            (void)Base::init(0u);
+            return false;
+        }
+
         storage_ = new_buf;
-        (void)Base::init(target_cap);
         return true;
     }
 
@@ -963,6 +1099,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -988,6 +1125,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1062,6 +1200,7 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1136,6 +1275,9 @@ public:
     }
 
     RB_FORCEINLINE void clear() noexcept {
+        if (RB_UNLIKELY(!is_valid())) {
+            return;
+        }
         Base::clear();
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
@@ -1198,28 +1340,58 @@ private:
     void destroy_impl() noexcept(std::is_nothrow_destructible_v<value_type>) {
         allocator_type alloc{};
 
-        if (storage_ != nullptr) {
-            const size_type cap = depth();
-            if (cap != 0u) {
-                if constexpr (!std::is_trivially_destructible_v<value_type>) {
-                    std::destroy_n(storage_, cap);
-                }
-                alloc_traits::deallocate(alloc, storage_, cap);
-            }
-        }
+        pointer const old_storage = storage_;
+        const size_type old_cap = depth();
 
         storage_ = nullptr;
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_ = false;
         (void)Base::init(0u);
+
+        if (old_storage != nullptr) {
+            SPSC_ASSERT(old_cap != 0u);
+            if (old_cap != 0u) {
+                if constexpr (!std::is_trivially_destructible_v<value_type>) {
+                    std::destroy_n(old_storage, old_cap);
+                }
+                alloc_traits::deallocate(alloc, old_storage, old_cap);
+            }
+        }
     }
 
     void move_from(latest&& other) noexcept {
-        storage_            = other.storage_;
+        const size_type cap  = other.Base::capacity();
+        const size_type head = other.Base::head();
+        const size_type tail = other.Base::tail();
+
+        const pointer other_storage = other.storage_;
+
+        SPSC_ASSERT((other_storage == nullptr) == (cap == 0u));
+
+        if (RB_UNLIKELY(other_storage == nullptr || cap == 0u)) {
+            storage_ = nullptr;
+            cons_head_snapshot_ = 0u;
+            cons_has_snapshot_ = false;
+            (void)Base::init(0u);
+            other.storage_ = nullptr;
+            other.cons_head_snapshot_ = 0u;
+            other.cons_has_snapshot_ = false;
+            (void)other.Base::init(0u);
+            return;
+        }
+
+        const bool ok = Base::init(cap, head, tail);
+        if (RB_UNLIKELY(!ok)) {
+            storage_ = nullptr;
+            cons_head_snapshot_ = 0u;
+            cons_has_snapshot_ = false;
+            (void)Base::init(0u);
+            return;
+        }
+
+        storage_            = other_storage;
         cons_head_snapshot_ = other.cons_head_snapshot_;
         cons_has_snapshot_  = other.cons_has_snapshot_;
-
-        (void)Base::init(other.Base::capacity(), other.Base::head(), other.Base::tail());
 
         other.storage_            = nullptr;
         other.cons_head_snapshot_ = 0u;
@@ -1439,6 +1611,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1464,6 +1637,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1530,6 +1704,7 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!empty());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
