@@ -117,8 +117,12 @@ public:
                   "[spsc::fifo_view]: no-exceptions mode requires noexcept default constructor.");
     static_assert(std::is_nothrow_destructible_v<value_type>,
                   "[spsc::fifo_view]: no-exceptions mode requires noexcept destructor.");
-    static_assert(std::is_nothrow_move_assignable_v<value_type> || std::is_nothrow_copy_assignable_v<value_type>,
-                  "[spsc::fifo_view]: no-exceptions mode requires noexcept assignment (move or copy).");
+    static_assert(
+        std::is_array_v<value_type> ||
+        std::is_nothrow_move_assignable_v<value_type> ||
+        std::is_nothrow_copy_assignable_v<value_type>,
+        "[spsc::fifo_view]: no-exceptions mode requires noexcept assignment (move or copy), "
+        "or an array type used via claim/publish APIs.");
 #endif /* (SPSC_ENABLE_EXCEPTIONS == 0) */
 
     static_assert(std::is_trivially_copyable_v<counter_value>,
@@ -127,8 +131,12 @@ public:
                   "[spsc::fifo_view]: static Capacity must be power-of-two (mask-based indexing).");
     static_assert(Capacity == 0 || Capacity >= 2,
                   "[spsc::fifo_view]: Capacity must be >= 2 (or 0 for dynamic).");
-    static_assert(std::is_move_assignable_v<value_type> || std::is_copy_assignable_v<value_type>,
-                  "[spsc::fifo_view]: value_type must be move- or copy-assignable.");
+    static_assert(
+        std::is_array_v<value_type> ||
+        std::is_move_assignable_v<value_type> ||
+        std::is_copy_assignable_v<value_type>,
+        "[spsc::fifo_view]: value_type must be move- or copy-assignable, "
+        "or an array type used via claim/publish APIs.");
     static_assert(std::numeric_limits<counter_value>::digits >= 2,
                   "[spsc::fifo_view]: counter type is too narrow.");
     static_assert(::spsc::cap::RB_MAX_UNAMBIGUOUS <= (counter_value(1) << (std::numeric_limits<counter_value>::digits - 1)),

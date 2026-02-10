@@ -1717,18 +1717,33 @@ private:
 
     void move_from(typed_pool &&other) noexcept {
         if constexpr (kDynamic) {
-            slots_ = other.slots_;
-            other.slots_ = nullptr;
-
             const size_type cap = other.Base::capacity();
             const size_type head = other.Base::head();
             const size_type tail = other.Base::tail();
+            pointer *ptr = other.slots_;
 
-            if (cap != 0u) {
-                (void)Base::init(cap, head, tail);
+            if (RB_UNLIKELY((ptr == nullptr) != (cap == 0u))) {
+                // Broken source invariant: keep source untouched, poison *this*.
+                slots_ = nullptr;
+                (void)Base::init(0u);
+                return;
+            }
+
+            if (ptr != nullptr) {
+                const bool ok = Base::init(cap, head, tail);
+                if (RB_UNLIKELY(!ok)) {
+                    // Corrupted source geometry: keep source untouched, poison *this*.
+                    slots_ = nullptr;
+                    (void)Base::init(0u);
+                    return;
+                }
+                slots_ = ptr;
             } else {
+                slots_ = nullptr;
                 (void)Base::init(0u);
             }
+
+            other.slots_ = nullptr;
             (void)other.Base::init(0u);
         } else {
             slots_ = other.slots_;

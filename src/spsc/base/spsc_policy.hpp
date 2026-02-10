@@ -138,8 +138,9 @@ struct Policy {
  * P   : fastest single-core (plain counters and geometry)
  * V   : ISR <-> task, single-core (volatile counters; plain geometry)
  * VV  : everything volatile (rare; mainly for strict volatile propagation)
- * A<O>: RTOS/tasks (atomic counters with acq/rel; plain geometry)
- * AA<O>: both counters and geometry atomic (shared memory / SMP)
+ * A<O>: RTOS/tasks (strict atomic counters with RMW add/inc; plain geometry)
+ * FA<O>: fast single-writer atomic counters (load+store add/inc; plain geometry)
+ * AA<O>: strict atomic counters and geometry atomic (shared memory / SMP)
  * ------------------------------------------------------------------------- */
 using P = Policy<>;
 
@@ -147,24 +148,24 @@ using V = Policy<VolatileCounter<reg>, PlainCounter<reg>>;
 using VV = Policy<VolatileCounter<reg>, VolatileCounter<reg>>;
 
 template <class O = default_orders>
-using A = Policy<FastAtomicCounter<reg, O>, PlainCounter<reg>>;
+using A = Policy<AtomicCounter<reg, O>, PlainCounter<reg>>;
 
 template <class O = default_orders>
 using FA = Policy<FastAtomicCounter<reg, O>, PlainCounter<reg>>;
 
 template <class O = default_orders>
-using AA = Policy<FastAtomicCounter<reg, O>, FastAtomicCounter<reg, O>>;
+using AA = Policy<AtomicCounter<reg, O>, AtomicCounter<reg, O>>;
 
-// RMW variants (slower): keep only if you really need atomic RMW semantics.
+// Backward-compatible aliases with explicit RMW naming.
 template <class O = default_orders>
-using ARMW = Policy<AtomicCounter<reg, O>, PlainCounter<reg>>;
+using ARMW = A<O>;
 
 template <class O = default_orders>
-using AARMW = Policy<AtomicCounter<reg, O>, AtomicCounter<reg, O>>;
+using AARMW = AA<O>;
 
 /* Default policy: compile-time switchable without editing callers. */
 #ifndef SPSC_DEFAULT_POLICY_ATOMIC
-#define SPSC_DEFAULT_POLICY_ATOMIC 1
+#  define SPSC_DEFAULT_POLICY_ATOMIC 1
 #endif /* SPSC_DEFAULT_POLICY_ATOMIC */
 
 static_assert(SPSC_DEFAULT_POLICY_ATOMIC == 0 ||

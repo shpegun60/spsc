@@ -2,7 +2,6 @@
 #include "ui_mainwindow.h"
 
 #include "src/fifo_test.h"
-#include "src/fifo_bench.h"
 
 #include "src/fifo_view_test.h"
 #include "src/pool_test.h"
@@ -44,7 +43,6 @@ MainWindow::MainWindow(QWidget *parent)
     run_tst_typed_pool_api_paranoid(-1, nullptr);
 
 
-    //run_fifo_bench();
 }
 
 MainWindow::~MainWindow()

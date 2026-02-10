@@ -629,7 +629,7 @@ public:
 
 
     template<class U>
-    RB_FORCEINLINE void push(U&& src) noexcept {
+    RB_FORCEINLINE void push(U&& src) noexcept(std::is_nothrow_constructible_v<std::decay_t<U>, U&&>) {
         using V = std::decay_t<U>;
         static_assert(std::is_trivially_copyable_v<V>,
                       "latest<void,0>::push(U): U must be trivially copyable");
@@ -652,7 +652,7 @@ public:
     }
 
     template<class U>
-    [[nodiscard]] RB_FORCEINLINE bool try_push(U&& src) noexcept {
+    [[nodiscard]] RB_FORCEINLINE bool try_push(U&& src) noexcept(std::is_nothrow_constructible_v<std::decay_t<U>, U&&>) {
         using V = std::decay_t<U>;
         static_assert(std::is_trivially_copyable_v<V>,
                       "latest<void,0>::try_push(U): U must be trivially copyable");

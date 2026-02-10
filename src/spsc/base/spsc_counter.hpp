@@ -272,7 +272,12 @@ public:
 
 
 /* ------------------------------ FastAtomicCounter ------------------------------
- * Fast atomic counter
+ * Fast single-writer atomic counter.
+ *
+ * IMPORTANT:
+ * - add()/inc() are implemented as load+store (not atomic RMW).
+ * - Correct only when exactly one writer mutates this counter.
+ * - For generic atomic RMW semantics use AtomicCounter.
  * --------------------------------------------------------------------------- */
 template<typename T, typename Orders = default_orders>
 class FastAtomicCounter {

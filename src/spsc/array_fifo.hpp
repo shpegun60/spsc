@@ -9,7 +9,6 @@
 #define SPSC_BASE_ARRAY_FIFO_HPP_
 
 #include "base/spsc_alloc.hpp" // ::spsc::alloc::default_alloc
-#include "base/spsc_alloc.hpp" // ::spsc::alloc::default_alloc
 #include "fifo.hpp"            // ::spsc::fifo
 #include "fifo_view.hpp"       // ::spsc::fifo_view
 #include <array>

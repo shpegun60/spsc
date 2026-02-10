@@ -1382,16 +1382,37 @@ private:
     }
 
     void move_from_(queue &&other) noexcept {
-        storage_ = other.storage_;
-
         if constexpr (kDynamic) {
-            const bool ok = Base::init(other.Base::capacity(), other.Base::head(),
-                                       other.Base::tail());
-            SPSC_ASSERT(ok);
-            (void)ok;
+            const size_type cap  = other.Base::capacity();
+            const size_type head = other.Base::head();
+            const size_type tail = other.Base::tail();
+            pointer ptr = other.storage_;
+
+            if (RB_UNLIKELY((ptr == nullptr) != (cap == 0u))) {
+                // Broken source invariant: keep source untouched, poison *this*.
+                storage_ = nullptr;
+                (void)Base::init(0u);
+                return;
+            }
+
+            if (ptr != nullptr) {
+                const bool ok = Base::init(cap, head, tail);
+                if (RB_UNLIKELY(!ok)) {
+                    // Corrupted source geometry: keep source untouched, poison *this*.
+                    storage_ = nullptr;
+                    (void)Base::init(0u);
+                    return;
+                }
+                storage_ = ptr;
+            } else {
+                storage_ = nullptr;
+                (void)Base::init(0u);
+            }
+
             other.storage_ = nullptr;
             (void)other.Base::init(0u);
         } else {
+            storage_ = other.storage_;
             this->isAllocated_ = other.isAllocated_;
             Base::set_head(other.Base::head());
             Base::set_tail(other.Base::tail());
