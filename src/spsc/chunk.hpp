@@ -28,6 +28,7 @@
 #include <cstddef>      // std::ptrdiff_t
 #include <cstring>      // std::memcpy
 #include <iterator>     // std::reverse_iterator
+#include <limits>
 #include <memory>       // std::allocator_traits, std::uninitialized_default_construct_n
 #include <type_traits>
 #include <utility>      // std::move, std::forward, std::swap
@@ -124,7 +125,9 @@ public:
     [[nodiscard]] RB_FORCEINLINE bool full()  const noexcept { return len_ >= kCapacity; }
     [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept { return len_; }
     [[nodiscard]] static constexpr size_type capacity() noexcept { return kCapacity; }
-    [[nodiscard]] RB_FORCEINLINE size_type free() const noexcept { return static_cast<size_type>(kCapacity - len_); }
+    [[nodiscard]] RB_FORCEINLINE size_type free() const noexcept {
+        return (len_ < kCapacity) ? static_cast<size_type>(kCapacity - len_) : 0u;
+    }
 
     void clear() noexcept { len_ = 0; }
 
@@ -147,7 +150,7 @@ public:
     // Accept externally-written size (e.g., DMA) without allocation.
     void commit_size(const size_type n) noexcept {
         SPSC_ASSERT(n <= kCapacity);
-        len_ = n;
+        len_ = (n <= kCapacity) ? n : kCapacity;
     }
 
     // --------------------------------------------------------------------------
@@ -207,7 +210,7 @@ public:
 
     void pop_back_n(size_type n) noexcept {
         SPSC_ASSERT(n <= len_);
-        len_ = static_cast<size_type>(len_ - n);
+        len_ = (n < len_) ? static_cast<size_type>(len_ - n) : 0u;
     }
     // --------------------------------------------------------------------------
     // Producer Interface
@@ -349,6 +352,13 @@ public:
         , len_(other.len_)
         , cap_(other.cap_)
     {
+        if (RB_UNLIKELY(storage_ == nullptr)) {
+            len_ = 0u;
+            cap_ = 0u;
+        } else if (RB_UNLIKELY(len_ > cap_)) {
+            len_ = cap_;
+        }
+
         other.storage_ = nullptr;
         other.len_     = 0;
         other.cap_     = 0;
@@ -360,6 +370,13 @@ public:
             storage_ = other.storage_;
             len_     = other.len_;
             cap_     = other.cap_;
+
+            if (RB_UNLIKELY(storage_ == nullptr)) {
+                len_ = 0u;
+                cap_ = 0u;
+            } else if (RB_UNLIKELY(len_ > cap_)) {
+                len_ = cap_;
+            }
 
             other.storage_ = nullptr;
             other.len_     = 0;
@@ -373,9 +390,11 @@ public:
     // --------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE bool empty() const noexcept { return len_ == 0; }
     [[nodiscard]] RB_FORCEINLINE bool full()  const noexcept { return len_ >= cap_; }
-    [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept { return len_; }
+    [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept { return (len_ <= cap_) ? len_ : cap_; }
     [[nodiscard]] RB_FORCEINLINE size_type capacity() const noexcept { return cap_; }
-    [[nodiscard]] RB_FORCEINLINE size_type free() const noexcept { return static_cast<size_type>(cap_ - len_); }
+    [[nodiscard]] RB_FORCEINLINE size_type free() const noexcept {
+        return (len_ < cap_) ? static_cast<size_type>(cap_ - len_) : 0u;
+    }
 
     void clear() noexcept { len_ = 0; }
 
@@ -386,6 +405,9 @@ public:
     // Ensures capacity >= new_cap.
     // NOTE: Eagerly default-constructs new elements to allow unchecked writes.
     [[nodiscard]] bool reserve(const size_type new_cap) {
+        if (RB_UNLIKELY(len_ > cap_)) {
+            len_ = cap_;
+        }
         if (new_cap <= cap_) { return true; }
 
         allocator_type alloc{};
@@ -442,8 +464,23 @@ public:
     [[nodiscard]] bool resize(const size_type n) {
         if (n > cap_) {
             // Heuristic: +50% + small padding
-            const size_type grow_cap = static_cast<size_type>(n + (n >> 1) + 8);
+            const size_type kMax = std::numeric_limits<size_type>::max();
+            size_type grow_cap = n;
+            if (n <= static_cast<size_type>(kMax - 8u)) {
+                const size_type half = static_cast<size_type>(n >> 1u);
+                if (half <= static_cast<size_type>(kMax - n - 8u)) {
+                    grow_cap = static_cast<size_type>(n + half + 8u);
+                } else {
+                    grow_cap = kMax;
+                }
+            } else {
+                grow_cap = kMax;
+            }
+            if (grow_cap < n) {
+                grow_cap = n;
+            }
             if (!reserve(grow_cap)) { return false; }
+            if (RB_UNLIKELY(cap_ < n)) { return false; }
         }
         len_ = n;
         return true;
@@ -453,7 +490,7 @@ public:
     // Accept externally-written size without allocation (e.g., DMA into data()).
     void commit_size(const size_type n) noexcept {
         SPSC_ASSERT(n <= cap_);
-        len_ = n;
+        len_ = (n <= cap_) ? n : cap_;
     }
     // --------------------------------------------------------------------------
     // Data Access
@@ -482,8 +519,18 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept { SPSC_ASSERT(!empty()); return storage_[0]; }
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept { SPSC_ASSERT(!empty()); return storage_[0]; }
 
-    [[nodiscard]] RB_FORCEINLINE reference back() noexcept { SPSC_ASSERT(!empty()); return storage_[len_ - 1]; }
-    [[nodiscard]] RB_FORCEINLINE const_reference back() const noexcept { SPSC_ASSERT(!empty()); return storage_[len_ - 1]; }
+    [[nodiscard]] RB_FORCEINLINE reference back() noexcept {
+        SPSC_ASSERT(!empty());
+        const size_type used = size();
+        SPSC_ASSERT(used != 0u);
+        return storage_[used - 1u];
+    }
+    [[nodiscard]] RB_FORCEINLINE const_reference back() const noexcept {
+        SPSC_ASSERT(!empty());
+        const size_type used = size();
+        SPSC_ASSERT(used != 0u);
+        return storage_[used - 1u];
+    }
 
     [[nodiscard]] pointer try_front() noexcept {
         return empty() ? nullptr : &storage_[0];
@@ -493,10 +540,12 @@ public:
     }
 
     [[nodiscard]] pointer try_back() noexcept {
-        return empty() ? nullptr : &storage_[len_ - 1];
+        const size_type used = size();
+        return (used == 0u || storage_ == nullptr) ? nullptr : &storage_[used - 1u];
     }
     [[nodiscard]] const_pointer try_back() const noexcept {
-        return empty() ? nullptr : &storage_[len_ - 1];
+        const size_type used = size();
+        return (used == 0u || storage_ == nullptr) ? nullptr : &storage_[used - 1u];
     }
     void pop_back() noexcept {
         SPSC_ASSERT(!empty());
@@ -512,7 +561,7 @@ public:
 
     void pop_back_n(size_type n) noexcept {
         SPSC_ASSERT(n <= len_);
-        len_ = static_cast<size_type>(len_ - n);
+        len_ = (n < len_) ? static_cast<size_type>(len_ - n) : 0u;
     }
     // --------------------------------------------------------------------------
     // Producer Interface
@@ -566,9 +615,9 @@ public:
     // Iterators & Swap
     // --------------------------------------------------------------------------
     [[nodiscard]] iterator begin() noexcept { return storage_; }
-    [[nodiscard]] iterator end()   noexcept { return storage_ ? storage_ + len_ : nullptr; }
+    [[nodiscard]] iterator end()   noexcept { return storage_ ? storage_ + size() : nullptr; }
     [[nodiscard]] const_iterator begin() const noexcept { return storage_; }
-    [[nodiscard]] const_iterator end()   const noexcept { return storage_ ? storage_ + len_ : nullptr; }
+    [[nodiscard]] const_iterator end()   const noexcept { return storage_ ? storage_ + size() : nullptr; }
     [[nodiscard]] const_iterator cbegin() const noexcept { return begin(); }
     [[nodiscard]] const_iterator cend()   const noexcept { return end(); }
 

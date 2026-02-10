@@ -8,6 +8,7 @@
 #include "src/pool_test.h"
 #include "src/pool_view_test.h"
 #include "src/latest_test.h"
+#include "src/chunk_test.h"
 #include "src/queue_test.h"
 #include "src/typed_pool_test.h"
 
@@ -32,6 +33,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     qDebug() << "\n" << "latest test";
     run_tst_latest_api_paranoid(-1, nullptr);
+
+    qDebug() << "\n" << "chunk test";
+    run_tst_chunk_api_paranoid(-1, nullptr);
 
     qDebug() << "\n" << "queue test";
     run_tst_queue_api_paranoid(-1, nullptr);

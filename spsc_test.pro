@@ -16,6 +16,7 @@ include(src/spsc/spsc.pri)
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
+    src/chunk_test.cpp \
     src/latest_test.cpp \
     src/pool_view_test.cpp \
     src/fifo_bench.cpp \
@@ -29,6 +30,7 @@ HEADERS += \
     mainwindow.h \
     basic_types.h \
     macro.h \
+    src/chunk_test.h \
     src/queue_test.h \
     src/latest_test.h \
     src/pool_view_test.h \
