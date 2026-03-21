@@ -1,6 +1,9 @@
 /*
  * latest.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * Latest-value SPSC buffer ("latest queue"):
  * - Single producer, single consumer.
  * - Producer publishes state snapshots.

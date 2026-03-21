@@ -1,6 +1,9 @@
 /*
  * spsc_typed_pool.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * Owning typed SPSC pool of fixed-size slots.
  * Mirrors spsc::pool API/structure for consistency.
  *

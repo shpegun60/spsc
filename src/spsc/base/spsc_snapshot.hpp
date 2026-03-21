@@ -1,6 +1,9 @@
 /*
  * snapshot.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * Lightweight iteration and snapshot utilities for SPSC ring buffers.
  *
  * This header provides:

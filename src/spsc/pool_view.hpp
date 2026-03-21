@@ -1,6 +1,9 @@
 /*
  * pool_view.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * Non-owning SPSC pool view with the same API surface as spsc::pool.
  *
  * The ring stores 'void*' pointers.

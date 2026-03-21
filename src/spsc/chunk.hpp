@@ -1,6 +1,9 @@
 /*
  * chunk.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * High-performance contiguous buffer container.
  *
  * Variants:

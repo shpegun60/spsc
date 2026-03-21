@@ -1,6 +1,9 @@
 /*
  * spsc_regions.hpp
  *
+ * Created on: 08 Feb. 2026
+ *      Author: Shpegun60
+ *
  * Shared POD types for "bulk" APIs (claim_read/claim_write) across SPSC containers.
  *
  * Why this exists:

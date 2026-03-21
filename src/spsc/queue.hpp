@@ -1,6 +1,9 @@
 /*
  * queue.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * High-performance SPSC Queue (Ring Buffer) for type T.
  * Interface compatible with spsc::fifo (owning) and queue_view (non-owning).
  *

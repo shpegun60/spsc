@@ -1,6 +1,9 @@
 /*
  * spsc_object.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * Shared object-lifetime helpers used by containers that manage T manually.
  */
 

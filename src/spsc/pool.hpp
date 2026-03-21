@@ -1,6 +1,9 @@
 /*
  * spsc_pool.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * Modernized SPSC "pool" of fixed-size raw buffers.
  * Structure mirrors spsc::fifo for architectural consistency.
  *

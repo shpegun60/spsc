@@ -1,8 +1,8 @@
 /*
  * spsc_counter.hpp
  *
- * Created on: 30 Nov. 2025
- *   Author: Shpegun60
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
  *
  *
  * Family of lightweight counter wrappers used by SPSC ring buffers and related

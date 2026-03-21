@@ -1,8 +1,8 @@
 /*
  * chunk_fifo.hpp
  *
- * Created on: Nov 16, 2025
- * Author: Shpegun60
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
  */
 
 #ifndef SPSC_CHUNK_FIFO_HPP_

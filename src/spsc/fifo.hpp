@@ -1,6 +1,9 @@
 /*
  * fifo.hpp
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * Modernized SPSC FIFO (owning).
  *
  * Design goals:

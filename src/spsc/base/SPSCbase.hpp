@@ -1,6 +1,9 @@
 /*
  * SPSCbase<C, PolicyT>
  *
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
+ *
  * Core index and capacity logic for single-producer/single-consumer ring buffers.
  *
  * Notes on shadow indices:

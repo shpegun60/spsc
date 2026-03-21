@@ -1,8 +1,8 @@
 /*
  * array_fifo.hpp
  *
- *  Created on: Nov 16, 2025
- *      Author: admin
+ * Created on: 18 Jan. 2026
+ *      Author: Shpegun60
  */
 
 #ifndef SPSC_BASE_ARRAY_FIFO_HPP_
