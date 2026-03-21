@@ -2861,13 +2861,22 @@ void tst_pool_api_paranoid::alignment_align_alloc_32() {
 }
 // ------------------------------ Test runner ------------------------------
 
-void run_tst_pool_api_paranoid(bool verbose) {
+int run_tst_pool_api_paranoid(int argc, char** argv) {
     tst_pool_api_paranoid tc;
+    return QTest::qExec(&tc, argc, argv);
+}
 
+void run_tst_pool_api_paranoid(bool verbose) {
     if (verbose) {
-        QTest::qExec(&tc, {" ", "-vs"});
+        const char programName[] = "pool";
+        const char verboseArg[] = "-vs";
+        char* args[] = {
+            const_cast<char*>(programName),
+            const_cast<char*>(verboseArg)
+        };
+        (void)run_tst_pool_api_paranoid(2, args);
     } else {
-        QTest::qExec(&tc);
+        (void)run_tst_pool_api_paranoid(0, nullptr);
     }
 }
 

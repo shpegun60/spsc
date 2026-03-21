@@ -16,6 +16,7 @@ include(src/spsc/spsc.pri)
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
+    test_suite_registry.cpp \
     src/chunk_test.cpp \
     src/latest_test.cpp \
     src/pool_view_test.cpp \
@@ -27,6 +28,7 @@ SOURCES += \
 
 HEADERS += \
     mainwindow.h \
+    test_suite_registry.h \
     basic_types.h \
     macro.h \
     src/chunk_test.h \

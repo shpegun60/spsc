@@ -7,7 +7,7 @@ Main integration project for the `spsc` buffer library and paranoid API tests.
 - `src/spsc/`: core SPSC library headers (`fifo`, `queue`, `typed_pool`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, etc.).
 - `src/*_test.cpp`: paranoid test suites for each buffer type.
 - `spsc_test.pro`: Qt/qmake project file.
-- `mainwindow.cpp`: runs all test suites from one app entry point.
+- `mainwindow.cpp`: Qt dashboard that runs suites, shows `PASS/FAIL`, logs, and timeout status.
 
 Detailed API documentation is in `src/spsc/README.md`.
 
@@ -31,11 +31,18 @@ If you use Qt Creator, opening `spsc_test.pro` is enough.
 
 ## Run Tests
 
-Default runner executes suites from `MainWindow` startup:
+Launch the Qt dashboard:
 
 ```powershell
 .\debug\spsc_test.exe
 ```
+
+The dashboard:
+
+- runs each suite in a separate child process
+- shows `PASS`, `FAIL`, `TIMEOUT`, or `CRASH`
+- captures the full QtTest log in a text pane
+- supports a per-suite timeout from the UI
 
 Main suites include:
 
@@ -47,6 +54,12 @@ Main suites include:
 - `chunk`
 - `queue`
 - `typed_pool`
+
+## Qt Dashboard
+
+Screenshot of the integrated Qt runner with all suites passing:
+
+![Qt dashboard with all test suites passed](img/Screenshot%202026-03-21%20141744.png)
 
 ## Latest Test Report (Integrated Run)
 
