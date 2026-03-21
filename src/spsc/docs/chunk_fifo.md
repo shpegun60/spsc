@@ -71,7 +71,7 @@ That means a dynamic configuration may involve:
 - fixed chunk capacity, dynamic fifo depth
 - dynamic chunk capacity and dynamic fifo depth
 
-Read the long-form [overview](../README.md) for the detailed initialization recipes, especially for fully dynamic block pipelines.
+Read the [Quick Start](../README.md) for the top-level initialization overview, especially for fully dynamic block pipelines.
 
 ## `chunk_fifo_view`
 

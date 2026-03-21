@@ -9,7 +9,7 @@ If you are new to the library, read in this order:
 3. [Method Recipes](method-recipes.md)
 4. [Guard and Bulk Helpers](guard-and-bulk-helpers.md)
 5. One container guide from the list below
-6. The long-form [overview and recipes](../README.md) when you need broader context
+6. The short [Quick Start](../README.md) when you want a fast overview before diving into container-specific docs
 
 ## Quick Container Choice
 

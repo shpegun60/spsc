@@ -6,7 +6,7 @@ Main integration project for the `spsc` buffer library and paranoid API tests.
 
 Quick links:
 
-- [Library Overview](src/spsc/README.md)
+- [Quick Start](src/spsc/README.md)
 - [Documentation Hub](src/spsc/docs/README.md)
 - [Common Concepts](src/spsc/docs/common-concepts.md)
 - [Concurrency and FreeRTOS](src/spsc/docs/concurrency-and-freertos.md)
@@ -22,7 +22,7 @@ Quick links:
 
 Detailed API documentation is in:
 
-- `src/spsc/README.md` for the long-form overview
+- `src/spsc/README.md` for the quick start and top-level overview
 - `src/spsc/docs/README.md` for the new split-by-container documentation hub
 - `src/spsc/docs/concurrency-and-freertos.md` for task/ISR/FreeRTOS guidance
 
