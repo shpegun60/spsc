@@ -2,6 +2,17 @@
 
 Main integration project for the `spsc` buffer library and paranoid API tests.
 
+![Qt dashboard with all test suites passed](img/Screenshot%202026-03-21%20141744.png)
+
+Quick links:
+
+- [Library Overview](src/spsc/README.md)
+- [Documentation Hub](src/spsc/docs/README.md)
+- [Common Concepts](src/spsc/docs/common-concepts.md)
+- [Concurrency and FreeRTOS](src/spsc/docs/concurrency-and-freertos.md)
+- [Method Recipes](src/spsc/docs/method-recipes.md)
+- [Guard and Bulk Helpers](src/spsc/docs/guard-and-bulk-helpers.md)
+
 ## What Is Here
 
 - `src/spsc/`: core SPSC library headers (`fifo`, `queue`, `typed_pool`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, etc.).
@@ -9,7 +20,11 @@ Main integration project for the `spsc` buffer library and paranoid API tests.
 - `spsc_test.pro`: Qt/qmake project file.
 - `mainwindow.cpp`: Qt dashboard that runs suites, shows `PASS/FAIL`, logs, and timeout status.
 
-Detailed API documentation is in `src/spsc/README.md`.
+Detailed API documentation is in:
+
+- `src/spsc/README.md` for the long-form overview
+- `src/spsc/docs/README.md` for the new split-by-container documentation hub
+- `src/spsc/docs/concurrency-and-freertos.md` for task/ISR/FreeRTOS guidance
 
 ## Build
 
@@ -54,12 +69,6 @@ Main suites include:
 - `chunk`
 - `queue`
 - `typed_pool`
-
-## Qt Dashboard
-
-Screenshot of the integrated Qt runner with all suites passing:
-
-![Qt dashboard with all test suites passed](img/Screenshot%202026-03-21%20141744.png)
 
 ## Latest Test Report (Integrated Run)
 

@@ -1,6 +1,28 @@
 
 # SPSC FIFO Library
 
+## Documentation Map
+
+If you want the split documentation by container, start here:
+
+- [Documentation Hub](docs/README.md)
+- [Common Concepts](docs/common-concepts.md)
+- [Concurrency and FreeRTOS](docs/concurrency-and-freertos.md)
+- [Method Recipes](docs/method-recipes.md)
+- [Guard and Bulk Helpers](docs/guard-and-bulk-helpers.md)
+- [fifo](docs/fifo.md)
+- [fifo_view](docs/fifo_view.md)
+- [queue](docs/queue.md)
+- [pool](docs/pool.md)
+- [pool_view](docs/pool_view.md)
+- [latest](docs/latest.md)
+- [typed_pool](docs/typed_pool.md)
+- [chunk](docs/chunk.md)
+- [array_fifo family](docs/array_fifo.md)
+- [chunk_fifo family](docs/chunk_fifo.md)
+
+The rest of this file remains the long-form guide and recipe collection.
+
 Single-producer / single-consumer (SPSC) ring-buffer library with several layers:
 
 - `spsc::fifo<T, Capacity, Policy>`: generic SPSC ring over `T`.
