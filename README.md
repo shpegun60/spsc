@@ -6,6 +6,7 @@ Main integration project for the `spsc` buffer library and paranoid API tests.
 
 Quick links:
 
+- [Changelog](CHANGELOG.md)
 - [Quick Start](src/spsc/README.md)
 - [Documentation Hub](src/spsc/docs/README.md)
 - [Common Concepts](src/spsc/docs/common-concepts.md)
