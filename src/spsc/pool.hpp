@@ -3,6 +3,8 @@
  *
  * Created on: 18 Jan. 2026
  *      Author: Shpegun60
+ * Copyright (c) 2026 Shpegun60
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Modernized SPSC "pool" of fixed-size raw buffers.
  * Structure mirrors spsc::fifo for architectural consistency.

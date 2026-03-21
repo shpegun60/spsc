@@ -3,6 +3,8 @@
  *
  * Created on: 08 Feb. 2026
  *      Author: Shpegun60
+ * Copyright (c) 2026 Shpegun60
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Shared POD types for "bulk" APIs (claim_read/claim_write) across SPSC containers.
  *

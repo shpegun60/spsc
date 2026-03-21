@@ -3,6 +3,8 @@
  *
  * Created on: 18 Jan. 2026
  *      Author: Shpegun60
+ * Copyright (c) 2026 Shpegun60
+ * SPDX-License-Identifier: Apache-2.0
  *
  * High-performance SPSC Queue (Ring Buffer) for type T.
  * Interface compatible with spsc::fifo (owning) and queue_view (non-owning).

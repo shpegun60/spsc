@@ -3,6 +3,8 @@
  *
  * Created on: 18 Jan. 2026
  *      Author: Shpegun60
+ * Copyright (c) 2026 Shpegun60
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Non-owning SPSC FIFO (owning-free) with the same public API shape and hot-path logic
  * as spsc::fifo, but operating on user-provided storage.

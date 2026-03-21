@@ -204,3 +204,9 @@ In restricted environments they can fail with:
 - `QProcess: CreateFile failed. (Access is denied.)`
 
 In a normal local dev environment these tests should pass.
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+For the core library sources in [`src/spsc`](src/spsc), the license is also marked directly in file headers using `SPDX-License-Identifier: Apache-2.0`.

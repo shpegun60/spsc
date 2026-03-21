@@ -3,6 +3,8 @@
  *
  * Created on: 18 Jan. 2026
  *      Author: Shpegun60
+ * Copyright (c) 2026 Shpegun60
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Tiny portability helpers for inlining attributes across C/C++ compilers.
  * - Zero dependencies, header-only, safe for inclusion from multiple TUs.
