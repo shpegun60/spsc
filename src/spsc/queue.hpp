@@ -71,7 +71,8 @@ template <> struct queue_base<0> {};
  * ======================================================================= */
 template <class T, reg Capacity = 0,
          typename Policy = ::spsc::policy::default_policy,
-         typename Alloc = ::spsc::alloc::align_alloc<alignof(T)>>
+         typename Alloc = ::spsc::alloc::policy_default_alloc_t<
+             Policy, alignof(T), ::spsc::alloc::align_alloc<alignof(T)>>>
 class queue : public detail::queue_base<Capacity>,
               private ::spsc::SPSCbase<Capacity, Policy> {
     static constexpr bool kDynamic = (Capacity == 0);
@@ -1447,7 +1448,8 @@ private:
  * A pre-configured queue using Atomic counters and Cache-line padding.
  */
 template <class T, reg Capacity = 0,
-         typename Alloc = ::spsc::alloc::align_alloc<alignof(T)>>
+         typename Alloc = ::spsc::alloc::policy_default_alloc_t<
+             ::spsc::policy::CA<>, alignof(T), ::spsc::alloc::align_alloc<alignof(T)>>>
 using fast_queue = queue<T, Capacity, ::spsc::policy::CA<>, Alloc>;
 
 } // namespace spsc

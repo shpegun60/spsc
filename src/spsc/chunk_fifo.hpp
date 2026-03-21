@@ -27,7 +27,8 @@ template<
     reg   ChunkCapacity = 0,
     reg   FifoCapacity  = 0,
     typename Policy     = ::spsc::policy::default_policy,
-    typename Alloc      = ::spsc::alloc::default_alloc
+    typename Alloc      = ::spsc::alloc::policy_default_value_alloc_t<
+        Policy, ::spsc::chunk<T, ChunkCapacity>, ::spsc::alloc::default_alloc>
     >
 class chunk_fifo
     : public ::spsc::fifo<

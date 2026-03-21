@@ -51,7 +51,8 @@ namespace spsc {
  * ======================================================================= */
 template <class T, reg Capacity = 0,
          typename Policy = ::spsc::policy::default_policy,
-         typename Alloc = ::spsc::alloc::default_alloc>
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             Policy, T, ::spsc::alloc::default_alloc>>
 class fifo : private ::spsc::SPSCbase<Capacity, Policy> {
     static constexpr bool kDynamic = (Capacity == 0);
 
@@ -1518,7 +1519,8 @@ private:
     }
 
 private:
-    storage_type storage_{};
+    alignas(::spsc::alloc::policy_storage_alignment_v<policy_type, value_type>)
+        storage_type storage_{};
 };
 
 // ---------------------------------------------------------------------------
@@ -1532,7 +1534,8 @@ private:
  * high-performance concurrent queues.
  */
 template <class T, reg Capacity = 0,
-         typename Alloc = ::spsc::alloc::default_alloc>
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::CA<>, T, ::spsc::alloc::default_alloc>>
 using fast_fifo = fifo<T, Capacity, ::spsc::policy::CA<>, Alloc>;
 
 } // namespace spsc

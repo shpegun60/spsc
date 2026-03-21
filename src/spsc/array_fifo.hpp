@@ -25,7 +25,8 @@ namespace spsc {
  * ======================================================================== */
 template <class T, reg N, reg FifoCapacity = 0,
          typename Policy = ::spsc::policy::default_policy,
-         typename Alloc = ::spsc::alloc::default_alloc>
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             Policy, std::array<T, N>, ::spsc::alloc::default_alloc>>
 class array_fifo
     : public ::spsc::fifo<std::array<T, N>, FifoCapacity, Policy, Alloc> {
     static_assert(N > 0, "spsc::array_fifo<T,N>: N must be > 0");

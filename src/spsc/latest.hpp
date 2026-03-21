@@ -57,7 +57,9 @@
 namespace spsc {
 
 /* Forward declaration */
-template<class T = void, reg Depth = 0u, class Policy = ::spsc::policy::default_policy, class Alloc = ::spsc::alloc::default_alloc>
+template<class T = void, reg Depth = 0u, class Policy = ::spsc::policy::default_policy,
+         class Alloc = ::spsc::alloc::policy_default_alloc_t<
+             Policy, ::spsc::alloc::object_alignment_v<T>, ::spsc::alloc::default_alloc>>
 class latest;
 
 /* ============================================================================
@@ -308,6 +310,13 @@ public:
             return false;
         }
 
+        const size_type eff_bytes_per_slot =
+            ::spsc::alloc::round_up_size_for_policy<policy_type, base_allocator_type>(
+                bytes_per_slot);
+        if (RB_UNLIKELY(eff_bytes_per_slot == 0u)) {
+            return false;
+        }
+
         if (depth_req < 2u) {
             depth_req = 2u;
         }
@@ -322,7 +331,7 @@ public:
         }
 
         if (is_valid()) {
-            if (depth_pow2 <= depth() && bytes_per_slot <= buffer_size()) {
+            if (depth_pow2 <= depth() && eff_bytes_per_slot <= buffer_size()) {
                 return true;
             }
         }
@@ -339,7 +348,7 @@ public:
 
         SPSC_TRY {
             for (; i < depth_pow2; ++i) {
-                byte_pointer buf = byte_alloc_traits::allocate(buf_alloc, bytes_per_slot);
+                byte_pointer buf = byte_alloc_traits::allocate(buf_alloc, eff_bytes_per_slot);
                 if (RB_UNLIKELY(!buf)) {
                     break;
                 }
@@ -350,7 +359,7 @@ public:
                 const size_type allocated = i;
                 for (size_type j = 0u; j < allocated; ++j) {
                     auto* bptr = static_cast<byte_pointer>(new_pool[j]);
-                    byte_alloc_traits::deallocate(buf_alloc, bptr, bytes_per_slot);
+                    byte_alloc_traits::deallocate(buf_alloc, bptr, eff_bytes_per_slot);
                 }
                 slot_alloc_traits::deallocate(slot_alloc, new_pool, depth_pow2);
                 return false;
@@ -359,7 +368,7 @@ public:
             const size_type allocated = i;
             for (size_type j = 0u; j < allocated; ++j) {
                 auto* bptr = static_cast<byte_pointer>(new_pool[j]);
-                byte_alloc_traits::deallocate(buf_alloc, bptr, bytes_per_slot);
+                byte_alloc_traits::deallocate(buf_alloc, bptr, eff_bytes_per_slot);
             }
             slot_alloc_traits::deallocate(slot_alloc, new_pool, depth_pow2);
             SPSC_RETHROW;
@@ -371,7 +380,7 @@ public:
         if (RB_UNLIKELY(!ok)) {
             for (size_type j = 0u; j < depth_pow2; ++j) {
                 auto* bptr = static_cast<byte_pointer>(new_pool[j]);
-                byte_alloc_traits::deallocate(buf_alloc, bptr, bytes_per_slot);
+                byte_alloc_traits::deallocate(buf_alloc, bptr, eff_bytes_per_slot);
             }
             slot_alloc_traits::deallocate(slot_alloc, new_pool, depth_pow2);
             (void)Base::init(0u);
@@ -379,7 +388,7 @@ public:
         }
 
         slots_      = new_pool;
-        bufferSize_ = bytes_per_slot;
+        bufferSize_ = eff_bytes_per_slot;
         return true;
     }
 
@@ -1845,7 +1854,8 @@ private:
 
 
 private:
-    std::array<value_type, Depth> storage_{};
+    alignas(::spsc::alloc::policy_storage_alignment_v<policy_type, value_type>)
+        std::array<value_type, Depth> storage_{};
     mutable size_type cons_head_snapshot_ = 0u;
     mutable bool      cons_has_snapshot_ = false;
 };

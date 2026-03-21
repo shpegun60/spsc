@@ -31,7 +31,6 @@
  *
  * Non-concurrent operations:
  *   - init()/clear() are assumed to be called when the queue is not used concurrently.
- *   - sync_head_to_tail() must be non-concurrent when shadows are enabled (it may DECREASE head).
  *   - sync_cache() must be called only in non-concurrent restore/adopt/attach(state) paths.
  */
 
@@ -70,9 +69,12 @@ namespace detail {
  *   - AtomicCounter<T, Orders>
  *   - FastAtomicCounter<T, Orders>
  *   - CachelineCounter<Inner, AlignB> wrapping the above
+ *   - Any counter-like backend that exposes static constexpr bool is_atomic
+ *     (defaults to false when absent)
  */
 template <class T>
-inline constexpr bool is_atomic_counter_backend_v = T::counter_type::is_atomic;
+inline constexpr bool is_atomic_counter_backend_v =
+    ::spsc::cnt::counter_is_atomic_v<typename T::counter_type>;
 
 /* Shadow indices storage (EBO when disabled).
  * Threading contract (when enabled):
@@ -265,11 +267,8 @@ protected:
     [[nodiscard]] RB_FORCEINLINE reg write_to_end_capacity() const noexcept;
     [[nodiscard]] RB_FORCEINLINE reg read_to_end_capacity () const noexcept;
 
-    // Sync helpers (force queue to empty state).
-    // NOTE:
-    //  - sync_head_to_tail(): producer-owned "drop unread" (may DECREASE head). Must be non-concurrent when shadows enabled.
-    //  - sync_tail_to_head(): consumer-owned "consume all" (advances tail to head). Can be used concurrently.
-    RB_FORCEINLINE void sync_head_to_tail() noexcept;
+    // Sync helper (force queue to empty state from the consumer side).
+    // Consumer-owned "consume all" (advances tail to head). Can be used concurrently.
     RB_FORCEINLINE void sync_tail_to_head() noexcept;
 
     // Advancement helpers (producer/consumer responsibilities).
@@ -298,20 +297,6 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::clear() noexcept {
         // clear() is non-concurrent by contract: safe to reset both.
         this->prod_shadow_tail = 0u;
         this->cons_shadow_head = 0u;
-    }
-}
-
-template<reg C, typename PolicyT>
-RB_FORCEINLINE void SPSCbase<C, PolicyT>::sync_head_to_tail() noexcept {
-    // Producer-owned "drop unread" operation.
-    // NOTE: This operation may DECREASE head. It must be non-concurrent when shadows are enabled.
-    const reg t = _tail.load();
-    _head.store(t);
-
-    if constexpr (kUseShadow) {
-        // Non-concurrent reset: safe to set BOTH shadows.
-        this->prod_shadow_tail = t;
-        this->cons_shadow_head = t;
     }
 }
 

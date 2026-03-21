@@ -136,6 +136,13 @@ constexpr int kThreadIters = 25'000;
 constexpr int kThreadTimeoutMs = 12000;
 #endif
 
+template <class Q>
+static constexpr reg expected_raw_slot_bytes(const reg requested) noexcept {
+    return static_cast<reg>(::spsc::alloc::round_up_size_for_policy<
+        typename Q::policy_type,
+        typename Q::base_allocator_type>(requested));
+}
+
 // -------------------------
 // Compile-time API smoke
 // -------------------------
@@ -865,6 +872,27 @@ static void alignment_raw_dynamic_default_alloc_max_align() {
 
     // Fundamental guarantee: operator new provides at least max_align_t alignment.
     QVERIFY(is_aligned(s, alignof(std::max_align_t)));
+}
+
+static void alignment_raw_dynamic_policy_default_cached() {
+    using Q = spsc::latest<void, 0u, spsc::policy::CA<>>;
+
+    constexpr reg requested = 100u;
+    constexpr reg expected  = expected_raw_slot_bytes<Q>(requested);
+    constexpr std::size_t kPolicyAlign =
+        ::spsc::alloc::policy_allocator_alignment_v<typename Q::policy_type>;
+
+    static_assert(kPolicyAlign > 1u);
+    static_assert((expected % static_cast<reg>(kPolicyAlign)) == 0u);
+    static_assert(expected >= requested);
+
+    Q q;
+    QVERIFY(q.init(kMedCap, requested));
+    QCOMPARE(q.bytes_per_slot(), expected);
+
+    void* s = q.claim();
+    QVERIFY(s != nullptr);
+    QVERIFY(is_aligned(s, kPolicyAlign));
 }
 
 // -------------------------
@@ -1999,16 +2027,20 @@ template <class Policy>
 static void raw_bytes_per_slot_contract() {
     using Q = spsc::latest<void, 0u, Policy>;
 
+    constexpr reg requested = 4u;
+    constexpr reg slot_bytes = expected_raw_slot_bytes<Q>(requested);
+
     Q q;
-    QVERIFY(q.init(32u, 4u));
+    QVERIFY(q.init(32u, requested));
+    QCOMPARE(q.bytes_per_slot(), slot_bytes);
 
     // Pushing a larger trivially-copyable type must fail.
-    struct Big {
-        std::uint64_t a;
-        std::uint64_t b;
+    struct TooBig {
+        std::byte bytes[static_cast<std::size_t>(slot_bytes) + 1u];
     };
+    static_assert(std::is_trivially_copyable_v<TooBig>);
 
-    Big x{1u, 2u};
+    TooBig x{};
     QVERIFY(!q.try_push(x));
 
     // Pushing u32 fits.
@@ -2063,11 +2095,12 @@ static void reserve_resize_edge_cases_raw_dynamic() {
     QVERIFY(!q.resize(8u, 0u)); // bytes_per_slot must be > 0.
     QVERIFY(!q.valid());
 
-    QVERIFY(q.init(3u, sizeof(std::uint32_t)));
+    constexpr reg requested = reg(sizeof(std::uint32_t));
+    QVERIFY(q.init(3u, requested));
     QVERIFY(q.valid());
     QVERIFY(q.capacity() >= 4u);
     QVERIFY((q.capacity() & (q.capacity() - 1u)) == 0u);
-    QCOMPARE(q.bytes_per_slot(), reg(sizeof(std::uint32_t)));
+    QCOMPARE(q.bytes_per_slot(), expected_raw_slot_bytes<Q>(requested));
 
     const reg cap0 = q.capacity();
     const reg bs0  = q.bytes_per_slot();
@@ -2076,9 +2109,10 @@ static void reserve_resize_edge_cases_raw_dynamic() {
     QCOMPARE(q.capacity(), cap0);
     QCOMPARE(q.bytes_per_slot(), bs0);
 
-    QVERIFY(q.reserve(cap0 + 1u, bs0 + 8u)); // Grow geometry and per-slot bytes.
+    const reg grow_req = static_cast<reg>(bs0 + 8u);
+    QVERIFY(q.reserve(cap0 + 1u, grow_req)); // Grow geometry and per-slot bytes.
     QVERIFY(q.capacity() >= cap0 + 1u);
-    QVERIFY(q.bytes_per_slot() >= bs0 + 8u);
+    QCOMPARE(q.bytes_per_slot(), expected_raw_slot_bytes<Q>(grow_req));
     QVERIFY(q.empty());
 
     const std::uint32_t v = 0xDEADBEEFu;
@@ -2446,6 +2480,7 @@ private slots:
         // raw dynamic
         alignment_raw_dynamic_default_alloc_max_align<spsc::policy::P>();
         alignment_raw_dynamic_default_alloc_max_align<spsc::policy::A<>>();
+        alignment_raw_dynamic_policy_default_cached();
 
         alignment_raw_dynamic_aligned_alloc<spsc::policy::P, 32>();
         alignment_raw_dynamic_aligned_alloc<spsc::policy::A<>, 32>();

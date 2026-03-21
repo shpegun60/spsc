@@ -84,6 +84,29 @@ namespace spsc::cnt {
 template<class T>
 using rb_remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
 
+template<class T, class = void>
+struct counter_value {
+    using type = reg;
+};
+
+template<class T>
+struct counter_value<T, std::void_t<typename rb_remove_cvref_t<T>::value_type>> {
+    using type = typename rb_remove_cvref_t<T>::value_type;
+};
+
+template<class T>
+using counter_value_t = typename counter_value<T>::type;
+
+template<class T, class = void>
+struct counter_is_atomic : std::false_type {};
+
+template<class T>
+struct counter_is_atomic<T, std::void_t<decltype(rb_remove_cvref_t<T>::is_atomic)>>
+    : std::bool_constant<static_cast<bool>(rb_remove_cvref_t<T>::is_atomic)> {};
+
+template<class T>
+inline constexpr bool counter_is_atomic_v = counter_is_atomic<T>::value;
+
 /* Helper: integral but not bool */
 template<class T>
 inline constexpr bool is_integral_not_bool_v =
@@ -134,13 +157,13 @@ public:
     [[nodiscard]] RB_FORCEINLINE U load() const noexcept { return v; }
     RB_FORCEINLINE void add(const U n) noexcept {
         // Single load + single store (no double-reads of volatile).
-        const T cur = v;
-        v = static_cast<T>(cur + n);
+        const U cur = v;
+        v = static_cast<U>(cur + n);
     }
     RB_FORCEINLINE void inc() noexcept {
         // Avoid deprecated ++ on volatile: explicit load-modify-store.
-        const T cur = v;
-        v = static_cast<T>(cur + 1u);
+        const U cur = v;
+        v = static_cast<U>(cur + U{1});
     }
 };
 
@@ -334,9 +357,9 @@ template<
 >
 class alignas(AlignB) CachelineCounter {
 public:
-    static constexpr bool is_atomic = Counter::is_atomic;
+    static constexpr bool is_atomic = counter_is_atomic_v<Counter>;
     using underlying_type = Counter;
-    using value_type      = typename Counter::value_type;
+    using value_type      = counter_value_t<Counter>;
 
 private:
     static_assert(AlignB != 0, "CachelineCounter: AlignB must be non-zero");

@@ -60,7 +60,8 @@ namespace spsc {
 template<
     reg Capacity    = 0,
     typename Policy = ::spsc::policy::default_policy,
-    typename Alloc  = ::spsc::alloc::default_alloc
+    typename Alloc  = ::spsc::alloc::policy_default_alloc_t<
+        Policy, 1u, ::spsc::alloc::default_alloc>
     >
 class pool : private ::spsc::SPSCbase<Capacity, Policy>
 {
@@ -1258,6 +1259,13 @@ private:
         if (requested_depth == 0u || requested_buffer_size == 0u) {
             destroy();
             return true;
+        }
+
+        requested_buffer_size =
+            ::spsc::alloc::round_up_size_for_policy<policy_type, base_allocator_type>(
+                requested_buffer_size);
+        if (RB_UNLIKELY(requested_buffer_size == 0u)) {
+            return false;
         }
 
         // Normalize depth and enforce pow2 geometry

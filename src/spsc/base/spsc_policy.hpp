@@ -132,6 +132,9 @@ struct Policy {
 
     using counter_type = Cnt;
     using geometry_type = Geo;
+
+    // Payload/storage alignment hint used by default allocator traits.
+    static constexpr reg allocator_alignment = 1u;
 };
 
 /* --------------------------- Ready-made aliases ---------------------------
@@ -220,6 +223,9 @@ private:
 public:
     using counter_type = CachelineCounter<base_counter_type, CAlign>;
     using geometry_type = CachelineCounter<base_geometry_type, GAlign>;
+
+    // Propagate the strongest cache-line request to payload allocators/helpers.
+    static constexpr reg allocator_alignment = (CAlign > GAlign) ? CAlign : GAlign;
 
     static_assert(
         detail::is_counter_like_v<counter_type>,

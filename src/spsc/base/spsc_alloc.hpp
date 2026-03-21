@@ -460,6 +460,92 @@ using align_alloc = aligned_allocator<std::byte, Alignment,
     (SPSC_ENABLE_EXCEPTIONS != 0) ? fail_mode::throws : fail_mode::returns_null
 >;
 
+namespace detail {
+
+template<class T>
+struct object_alignment : std::integral_constant<std::size_t, alignof(T)> {};
+
+template<>
+struct object_alignment<void> : std::integral_constant<std::size_t, 1u> {};
+
+template<class Policy, class = void>
+struct policy_allocator_alignment : std::integral_constant<std::size_t, 1u> {};
+
+template<class Policy>
+struct policy_allocator_alignment<Policy, std::void_t<decltype(Policy::allocator_alignment)>>
+    : std::integral_constant<std::size_t, static_cast<std::size_t>(Policy::allocator_alignment)> {};
+
+template<class Alloc, class T>
+using rebind_alloc_t = typename std::allocator_traits<Alloc>::template rebind_alloc<T>;
+
+template<class Alloc, class T, class = void>
+struct allocator_min_alignment : std::integral_constant<std::size_t, object_alignment<T>::value> {};
+
+template<class T, fail_mode Mode>
+struct allocator_min_alignment<basic_allocator<T, Mode>, T, void>
+    : std::integral_constant<std::size_t, max_sz(kDefaultNewAlign, alignof(T))> {};
+
+template<class T, std::size_t Alignment, fail_mode Mode>
+struct allocator_min_alignment<aligned_allocator<T, Alignment, Mode>, T, void>
+    : std::integral_constant<std::size_t, max_sz(Alignment, alignof(T))> {};
+
+template<class SizeT>
+constexpr SizeT round_up_pow2_multiple(const SizeT n, const std::size_t alignment) noexcept
+{
+    if (alignment <= 1u) {
+        return n;
+    }
+
+    const auto mask = static_cast<SizeT>(alignment - 1u);
+    const auto maxv = (std::numeric_limits<SizeT>::max)();
+    if (n > static_cast<SizeT>(maxv - mask)) {
+        return SizeT{0};
+    }
+
+    return static_cast<SizeT>((n + mask) & ~mask);
+}
+
+} // namespace detail
+
+template<class T>
+inline constexpr std::size_t object_alignment_v = detail::object_alignment<T>::value;
+
+template<class Policy>
+inline constexpr std::size_t policy_allocator_alignment_v =
+    detail::policy_allocator_alignment<Policy>::value;
+
+template<class Policy, std::size_t ValueAlignment, class FallbackAlloc = default_alloc>
+using policy_default_alloc_t = std::conditional_t<
+    (policy_allocator_alignment_v<Policy> > 1u),
+    align_alloc<detail::max_sz(ValueAlignment, policy_allocator_alignment_v<Policy>)>,
+    FallbackAlloc
+>;
+
+template<class Policy, class T, class FallbackAlloc = default_alloc>
+using policy_default_value_alloc_t =
+    policy_default_alloc_t<Policy, object_alignment_v<T>, FallbackAlloc>;
+
+template<class Policy, class T>
+inline constexpr std::size_t policy_storage_alignment_v =
+    detail::max_sz(object_alignment_v<T>, policy_allocator_alignment_v<Policy>);
+
+template<class Alloc, class T>
+inline constexpr std::size_t rebind_allocator_min_alignment_v =
+    detail::allocator_min_alignment<typename detail::rebind_alloc_t<Alloc, T>, T>::value;
+
+template<class Policy, class Alloc>
+inline constexpr std::size_t policy_slot_round_alignment_v =
+    ((policy_allocator_alignment_v<Policy> > 1u) &&
+     (rebind_allocator_min_alignment_v<Alloc, std::byte> >= policy_allocator_alignment_v<Policy>))
+        ? policy_allocator_alignment_v<Policy>
+        : 1u;
+
+template<class Policy, class Alloc, class SizeT>
+constexpr SizeT round_up_size_for_policy(const SizeT n) noexcept
+{
+    return detail::round_up_pow2_multiple(n, policy_slot_round_alignment_v<Policy, Alloc>);
+}
+
 } // namespace spsc::alloc
 
 #endif /* SPSC_ALLOC_HPP_ */
