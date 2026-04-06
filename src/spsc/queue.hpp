@@ -669,18 +669,20 @@ public:
         return true;
     }
 
-    RB_FORCEINLINE void publish(const size_type n) noexcept {
+    RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(can_write(n));
         Base::advance_head(n);
     }
 
-    [[nodiscard]] RB_FORCEINLINE bool try_publish(const size_type n) noexcept {
+    [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!can_write(n))) {
             return false;
         }
         Base::advance_head(n);
         return true;
     }
+    void publish(const size_type) noexcept = delete;
+    [[nodiscard]] bool try_publish(const size_type) noexcept = delete;
 
     // ------------------------------------------------------------------------------------------
     // Consumer Operations (Explicit Destructor)
@@ -970,6 +972,37 @@ public:
             target_cap = 2u;
         }
 
+        if (RB_UNLIKELY((storage_ == nullptr) != (Base::capacity() == 0u))) {
+            destroy();
+        }
+
+        bool had_old = false;
+        size_type old_cap = 0u;
+        size_type old_mask = 0u;
+        size_type old_tail = 0u;
+        size_type old_size = 0u;
+
+        // Snapshot old state for migration. If the observed state is corrupted,
+        // normalize via destroy() first so resize() never deallocates storage
+        // under a weaker contract than clear()/destroy().
+        if (is_valid()) {
+            old_cap = Base::capacity();
+            old_mask = Base::mask();
+            old_tail = Base::tail();
+            const size_type old_head = Base::head();
+            old_size = static_cast<size_type>(old_head - old_tail);
+
+            if (RB_UNLIKELY(old_size > old_cap)) {
+                destroy();
+                old_cap = 0u;
+                old_mask = 0u;
+                old_tail = 0u;
+                old_size = 0u;
+            } else {
+                had_old = true;
+            }
+        }
+
         if (is_valid() && target_cap <= Base::capacity()) {
             return true;
         }
@@ -981,13 +1014,6 @@ public:
         }
 
         size_type migrated = 0u;
-
-        // Snapshot old state for migration (keep old queue intact until success).
-        const bool had_old = is_valid();
-        const size_type old_cap = had_old ? Base::capacity() : 0u;
-        const size_type old_mask = had_old ? Base::mask() : 0u;
-        const size_type old_tail = had_old ? Base::tail() : 0u;
-        const size_type old_size = had_old ? Base::size() : 0u;
 
         SPSC_TRY {
             for (size_type i = 0; i < old_size; ++i) {
@@ -1074,7 +1100,7 @@ public:
             }
 
             if (publish_on_destroy_) {
-                q_->publish(constructed_);
+                q_->publish(::spsc::unsafe, constructed_);
                 return;
             }
 
@@ -1114,7 +1140,7 @@ public:
 
         void commit() noexcept {
             if (q_ && constructed_ != 0u) {
-                q_->publish(constructed_);
+                q_->publish(::spsc::unsafe, constructed_);
             }
             // After publish, consumer owns destruction.
             reset_();
@@ -1418,11 +1444,34 @@ private:
             other.storage_ = nullptr;
             (void)other.Base::init(0u);
         } else {
-            storage_ = other.storage_;
-            this->isAllocated_ = other.isAllocated_;
-            Base::set_head(other.Base::head());
-            Base::set_tail(other.Base::tail());
-            Base::sync_cache();
+            const pointer other_storage = other.storage_;
+            const bool other_allocated = other.isAllocated_;
+            const size_type head = other.Base::head();
+            const size_type tail = other.Base::tail();
+
+            if (RB_UNLIKELY(other_allocated != (other_storage != nullptr))) {
+                storage_ = nullptr;
+                this->isAllocated_ = false;
+                Base::clear();
+                return;
+            }
+
+            if (other_storage != nullptr) {
+                const bool ok = Base::init(head, tail);
+                if (RB_UNLIKELY(!ok)) {
+                    storage_ = nullptr;
+                    this->isAllocated_ = false;
+                    Base::clear();
+                    return;
+                }
+
+                storage_ = other_storage;
+                this->isAllocated_ = true;
+            } else {
+                storage_ = nullptr;
+                this->isAllocated_ = false;
+                Base::clear();
+            }
 
             other.storage_ = nullptr;
             other.isAllocated_ = false;

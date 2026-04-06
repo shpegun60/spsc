@@ -186,7 +186,7 @@ Remember that the view never allocates buffers and never frees them.
 - `claim()` / `try_claim()`
 - `claim_as<U>()`
 - `publish()` / `try_publish()`
-- `publish(n)` / `try_publish(n)`
+- `publish(unsafe, n)` / `try_publish(unsafe, n)`
 - `push(const U&)` / `try_push(const U&)` for trivially-copyable payloads
 - `push(data, size)` / `try_push(data, size)` for raw byte copies
 - `try_write(v)` convenience wrapper
@@ -331,7 +331,7 @@ q.push(payload, sizeof(payload));
 (void)q.try_push(payload, sizeof(payload));
 ```
 
-### `try_publish()`, `publish(n)`
+### `try_publish()`, `publish(unsafe, n)`
 
 ```cpp
 if (void* slot = q.try_claim()) {

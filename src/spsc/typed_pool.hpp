@@ -733,18 +733,20 @@ public:
         return true;
     }
 
-    RB_FORCEINLINE void publish(const size_type n) noexcept {
+    RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(can_write(n));
         Base::advance_head(n);
     }
 
-    [[nodiscard]] RB_FORCEINLINE bool try_publish(const size_type n) noexcept {
+    [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!can_write(n))) {
             return false;
         }
         Base::advance_head(n);
         return true;
     }
+    void publish(const size_type) noexcept = delete;
+    [[nodiscard]] bool try_publish(const size_type) noexcept = delete;
 
     // ------------------------------------------------------------------------------------------
     // Consumer Operations
@@ -1059,7 +1061,7 @@ public:
             }
 
             if (publish_on_destroy_) {
-                p_->publish(constructed_);
+                p_->publish(::spsc::unsafe, constructed_);
                 return;
             }
 
@@ -1100,7 +1102,7 @@ public:
 
         void commit() noexcept {
             if (p_ && constructed_ != 0u) {
-                p_->publish(constructed_);
+                p_->publish(::spsc::unsafe, constructed_);
             }
             reset_();
         }
@@ -1752,12 +1754,36 @@ private:
             other.slots_ = nullptr;
             (void)other.Base::init(0u);
         } else {
-            slots_ = other.slots_;
-            this->isAllocated_ = other.isAllocated_;
+            const bool other_allocated = other.isAllocated_;
+            const bool slots_complete =
+                std::all_of(other.slots_.begin(), other.slots_.end(),
+                            [](pointer p) noexcept { return p != nullptr; });
+            const bool slots_empty =
+                std::all_of(other.slots_.begin(), other.slots_.end(),
+                            [](pointer p) noexcept { return p == nullptr; });
 
-            Base::set_head(other.Base::head());
-            Base::set_tail(other.Base::tail());
-            Base::sync_cache();
+            if (RB_UNLIKELY((other_allocated && !slots_complete) ||
+                            (!other_allocated && !slots_empty))) {
+                slots_.fill(nullptr);
+                this->isAllocated_ = false;
+                Base::clear();
+                return;
+            }
+
+            if (other_allocated) {
+                const bool ok = Base::init(other.Base::head(), other.Base::tail());
+                if (RB_UNLIKELY(!ok)) {
+                    slots_.fill(nullptr);
+                    this->isAllocated_ = false;
+                    Base::clear();
+                    return;
+                }
+            } else {
+                Base::clear();
+            }
+
+            slots_ = other.slots_;
+            this->isAllocated_ = other_allocated;
 
             other.slots_.fill(nullptr);
             other.isAllocated_ = false;

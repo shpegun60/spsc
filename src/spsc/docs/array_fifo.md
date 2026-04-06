@@ -121,7 +121,7 @@ These wrappers inherit most of the queue-like API from `fifo` / `fifo_view`.
 
 - `claim`, `try_claim`
 - `publish`, `try_publish`
-- `publish(n)`, `try_publish(n)` when using region-based production
+- `publish(unsafe, n)`, `try_publish(unsafe, n)` when using region-based production
 
 ### Consumer
 
@@ -163,13 +163,13 @@ frame.fill(0x11);
 q.publish();
 ```
 
-### `publish()`, `publish(n)`
+### `publish()`, `publish(unsafe, n)`
 
 ```cpp
 auto regs = q.claim_write(spsc::unsafe, 2);
 if (regs.total != 0u) {
     regs.first.ptr[0].fill(0x55);
-    q.publish(1);
+    q.publish(::spsc::unsafe, 1);
 }
 ```
 

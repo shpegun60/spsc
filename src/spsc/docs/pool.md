@@ -204,7 +204,7 @@ The container gives you aligned slots on the default path, but hardware cache ma
 - `claim()` / `try_claim()` return the writable slot pointer
 - `claim_as<U>()` returns `U*` only if size and alignment fit
 - `publish()` / `try_publish()` commit one slot
-- `publish(n)` / `try_publish(n)` commit several prepared slots
+- `publish(unsafe, n)` / `try_publish(unsafe, n)` commit several prepared slots
 - `push(const U&)` / `try_push(const U&)` memcpy a trivially-copyable object into the slot
 - `push(data, size)` / `try_push(data, size)` copy raw bytes, truncating to `buffer_size()`
 - `try_write(v)` is a convenience alias for typed `try_push`
@@ -337,7 +337,7 @@ std::byte bytes[48]{};
 (void)q.try_write(Header{0x12345678u, 32u});
 ```
 
-### `publish()`, `publish(n)`
+### `publish()`, `publish(unsafe, n)`
 
 ```cpp
 auto guard = q.scoped_write(2);

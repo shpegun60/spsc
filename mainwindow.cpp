@@ -1,11 +1,13 @@
 #include "mainwindow.h"
-#include "test_suite_registry.h"
+#include "test_suite_catalog.h"
 #include "ui_mainwindow.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
 #include <QHeaderView>
@@ -20,8 +22,11 @@
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QStringList>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTextStream>
 #include <QTimer>
 #include <QUuid>
 #include <QVBoxLayout>
@@ -36,6 +41,180 @@ constexpr int kColumnSkipped = 4;
 constexpr int kColumnBlacklisted = 5;
 constexpr int kColumnDuration = 6;
 constexpr int kColumnCount = 7;
+
+constexpr int kResultColumnMode = 0;
+constexpr int kResultColumnConfig = 1;
+constexpr int kResultColumnShadow = 2;
+constexpr int kResultColumnAllow32 = 3;
+constexpr int kResultColumnHeuristic = 4;
+constexpr int kResultColumnFinished = 5;
+constexpr int kResultColumnPassed = 6;
+constexpr int kResultColumnFailed = 7;
+constexpr int kResultColumnTimeouts = 8;
+constexpr int kResultColumnStatus = 9;
+constexpr int kResultColumnCount = 10;
+
+struct TestVariant {
+    QString id;
+    QString label;
+    QString executableBaseName;
+    int     enableShadow = 0;
+    int     allow32Bit = 0;
+    int     heuristic = 0;
+};
+
+struct ParsedConfigBanner {
+    bool    valid = false;
+    QString suiteName;
+    QString variantName;
+    int     enableShadow = -1;
+    int     allow32Bit = -1;
+    int     heuristic = -1;
+    int     regBits = -1;
+    int     atomicShadow = -1;
+    int     cachedShadow = -1;
+    QString compactText;
+};
+
+QVector<TestVariant> configuredVariants()
+{
+    return {
+        {QStringLiteral("shadow_off"), QStringLiteral("Shadow Off"), QStringLiteral("spsc_test_shadow_off"), 0, 0, 0},
+        {QStringLiteral("shadow_on"), QStringLiteral("Shadow On"), QStringLiteral("spsc_test_shadow_on"), 1, 0, 0},
+        {QStringLiteral("shadow_heur"), QStringLiteral("Shadow Heuristic"), QStringLiteral("spsc_test_shadow_heur"), 1, 0, 1}
+    };
+}
+
+QString executableFileName(const QString& baseName)
+{
+#ifdef Q_OS_WIN
+    return baseName + QStringLiteral(".exe");
+#else
+    return baseName;
+#endif
+}
+
+QString displayName(const QString& variantLabel, const QString& suiteName)
+{
+    return QStringLiteral("%1 :: %2").arg(variantLabel, suiteName);
+}
+
+QString variantMacroInfo(const TestVariant& variant)
+{
+    return QStringLiteral(
+               "Runner: %1\n"
+               "SPSC_ENABLE_SHADOW_INDICES=%2\n"
+               "SPSC_SHADOW_ALLOW_32BIT=%3\n"
+               "SPSC_SHADOW_REFRESH_HEURISTIC=%4")
+        .arg(executableFileName(variant.executableBaseName))
+        .arg(variant.enableShadow)
+        .arg(variant.allow32Bit)
+        .arg(variant.heuristic);
+}
+
+ParsedConfigBanner parseConfigBanner(const QString& text)
+{
+    static const QRegularExpression re(
+        QStringLiteral(
+            R"(\[spsc-test-config\]\s+suite=([^\s]+)\s+variant=([^\s]+)\s+macros\{enable_shadow=(\d+)\s+allow_32bit=(\d+)\s+refresh_heuristic=(\d+)\}\s+effective\{reg_bits=(\d+)\s+atomic_A_shadow=(\d+)\s+cached_CA_shadow=(\d+)\})"));
+
+    ParsedConfigBanner parsed;
+    const QRegularExpressionMatch match = re.match(text);
+    if (!match.hasMatch()) {
+        return parsed;
+    }
+
+    parsed.valid = true;
+    parsed.suiteName = match.captured(1);
+    parsed.variantName = match.captured(2);
+    parsed.enableShadow = match.captured(3).toInt();
+    parsed.allow32Bit = match.captured(4).toInt();
+    parsed.heuristic = match.captured(5).toInt();
+    parsed.regBits = match.captured(6).toInt();
+    parsed.atomicShadow = match.captured(7).toInt();
+    parsed.cachedShadow = match.captured(8).toInt();
+    parsed.compactText = QStringLiteral(
+                             "variant=%1 macros{enable_shadow=%2 allow_32bit=%3 refresh_heuristic=%4} "
+                             "effective{reg_bits=%5 atomic_A_shadow=%6 cached_CA_shadow=%7}")
+                             .arg(parsed.variantName)
+                             .arg(parsed.enableShadow)
+                             .arg(parsed.allow32Bit)
+                             .arg(parsed.heuristic)
+                             .arg(parsed.regBits)
+                             .arg(parsed.atomicShadow)
+                             .arg(parsed.cachedShadow);
+    return parsed;
+}
+
+QString extractConfigErrorText(const QString& text)
+{
+    static const QRegularExpression re(
+        QStringLiteral(R"(\[spsc-test-config\]\[ERROR\][^\r\n]*)"));
+
+    QStringList lines;
+    auto it = re.globalMatch(text);
+    while (it.hasNext()) {
+        lines.push_back(it.next().captured(0));
+    }
+    return lines.join(QStringLiteral("\n"));
+}
+
+QString configMismatchReason(const ParsedConfigBanner& parsed,
+                             const TestVariant& expectedVariant,
+                             const QString& expectedSuiteName)
+{
+    if (!parsed.valid) {
+        return QStringLiteral("Missing [spsc-test-config] banner in runner output.");
+    }
+
+    QStringList reasons;
+    if (parsed.suiteName != expectedSuiteName) {
+        reasons.push_back(
+            QStringLiteral("suite=%1, expected %2")
+                .arg(parsed.suiteName, expectedSuiteName));
+    }
+    if (parsed.variantName != expectedVariant.id) {
+        reasons.push_back(
+            QStringLiteral("variant=%1, expected %2")
+                .arg(parsed.variantName, expectedVariant.id));
+    }
+    if (parsed.enableShadow != expectedVariant.enableShadow) {
+        reasons.push_back(
+            QStringLiteral("enable_shadow=%1, expected %2")
+                .arg(parsed.enableShadow)
+                .arg(expectedVariant.enableShadow));
+    }
+    if (parsed.allow32Bit != expectedVariant.allow32Bit) {
+        reasons.push_back(
+            QStringLiteral("allow_32bit=%1, expected %2")
+                .arg(parsed.allow32Bit)
+                .arg(expectedVariant.allow32Bit));
+    }
+    if (parsed.heuristic != expectedVariant.heuristic) {
+        reasons.push_back(
+            QStringLiteral("refresh_heuristic=%1, expected %2")
+                .arg(parsed.heuristic)
+                .arg(expectedVariant.heuristic));
+    }
+
+    const int expectedAtomicShadow =
+        ((expectedVariant.enableShadow != 0) &&
+         ((parsed.regBits >= 64) || (expectedVariant.allow32Bit != 0))) ? 1 : 0;
+    if (parsed.atomicShadow != expectedAtomicShadow) {
+        reasons.push_back(
+            QStringLiteral("atomic_A_shadow=%1, expected %2")
+                .arg(parsed.atomicShadow)
+                .arg(expectedAtomicShadow));
+    }
+    if (parsed.cachedShadow != expectedAtomicShadow) {
+        reasons.push_back(
+            QStringLiteral("cached_CA_shadow=%1, expected %2")
+                .arg(parsed.cachedShadow)
+                .arg(expectedAtomicShadow));
+    }
+
+    return reasons.join(QStringLiteral("; "));
+}
 
 QTableWidgetItem* ensureItem(QTableWidget* table, const int row, const int column)
 {
@@ -136,12 +315,80 @@ void MainWindow::setupDashboard()
     headerLayout->addWidget(summaryLabel_);
     headerLayout->addWidget(runButton_);
 
-    auto* splitter = new QSplitter(Qt::Vertical, ui->centralwidget);
-    splitter->setChildrenCollapsible(false);
+    layout->addLayout(headerLayout);
+    setupVariantTabs(layout);
 
-    suiteTable_ = new QTableWidget(splitter);
-    suiteTable_->setColumnCount(kColumnCount);
-    suiteTable_->setHorizontalHeaderLabels({
+    statusBar()->showMessage(QStringLiteral("Ready to run tests"));
+
+    connect(runButton_, &QPushButton::clicked, this, &MainWindow::runAllTests);
+}
+
+void MainWindow::setupVariantTabs(QVBoxLayout* layout)
+{
+    tabWidget_ = new QTabWidget(ui->centralwidget);
+    tabWidget_->setDocumentMode(true);
+
+    const QVector<TestVariant> variants = configuredVariants();
+    resultsTab_ = {};
+    variantTabs_.clear();
+    variantTabs_.reserve(variants.size());
+
+    resultsTab_.page = new QWidget(tabWidget_);
+    auto* resultsLayout = new QVBoxLayout(resultsTab_.page);
+    resultsLayout->setContentsMargins(0, 0, 0, 0);
+    resultsLayout->setSpacing(8);
+
+    resultsTab_.summaryLabel = new QLabel(QStringLiteral("No runs yet."), resultsTab_.page);
+    resultsTab_.summaryLabel->setWordWrap(true);
+
+    resultsTab_.table = new QTableWidget(resultsTab_.page);
+    configureResultsTable(resultsTab_.table);
+
+    resultsLayout->addWidget(resultsTab_.summaryLabel);
+    resultsLayout->addWidget(resultsTab_.table, 1);
+    tabWidget_->addTab(resultsTab_.page, QStringLiteral("Results"));
+
+    for (const TestVariant& variant : variants) {
+        auto* page = new QWidget(tabWidget_);
+        auto* pageLayout = new QVBoxLayout(page);
+        pageLayout->setContentsMargins(0, 0, 0, 0);
+        pageLayout->setSpacing(8);
+
+        auto* infoLabel = new QLabel(page);
+        infoLabel->setWordWrap(true);
+        infoLabel->setText(variantMacroInfo(variant));
+        infoLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+        auto* splitter = new QSplitter(Qt::Vertical, page);
+        splitter->setChildrenCollapsible(false);
+
+        auto* table = new QTableWidget(splitter);
+        configureSuiteTable(table);
+
+        auto* logOutput = new QPlainTextEdit(splitter);
+        logOutput->setReadOnly(true);
+        logOutput->setLineWrapMode(QPlainTextEdit::NoWrap);
+        logOutput->setPlaceholderText(
+            QStringLiteral("QtTest logs for this variant will appear here."));
+        logOutput->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+
+        splitter->setStretchFactor(0, 0);
+        splitter->setStretchFactor(1, 1);
+        splitter->setSizes({320, 460});
+        pageLayout->addWidget(infoLabel);
+        pageLayout->addWidget(splitter, 1);
+
+        tabWidget_->addTab(page, variant.label);
+        variantTabs_.push_back({variant.id, variant.label, page, infoLabel, table, logOutput});
+    }
+
+    layout->addWidget(tabWidget_, 1);
+}
+
+void MainWindow::configureSuiteTable(QTableWidget* table) const
+{
+    table->setColumnCount(kColumnCount);
+    table->setHorizontalHeaderLabels({
         QStringLiteral("Suite"),
         QStringLiteral("Status"),
         QStringLiteral("Passed"),
@@ -150,60 +397,93 @@ void MainWindow::setupDashboard()
         QStringLiteral("Blacklisted"),
         QStringLiteral("Duration (ms)")
     });
-    suiteTable_->setAlternatingRowColors(true);
-    suiteTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    suiteTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    suiteTable_->setSelectionMode(QAbstractItemView::SingleSelection);
-    suiteTable_->setSortingEnabled(false);
-    suiteTable_->verticalHeader()->setVisible(false);
-    suiteTable_->horizontalHeader()->setStretchLastSection(false);
-    suiteTable_->horizontalHeader()->setSectionResizeMode(kColumnSuite, QHeaderView::Stretch);
+    table->setAlternatingRowColors(true);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setSortingEnabled(false);
+    table->verticalHeader()->setVisible(false);
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(kColumnSuite, QHeaderView::Stretch);
     for (int column = kColumnStatus; column < kColumnCount; ++column) {
-        suiteTable_->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+        table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
     }
+}
 
-    logOutput_ = new QPlainTextEdit(splitter);
-    logOutput_->setReadOnly(true);
-    logOutput_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    logOutput_->setPlaceholderText(
-        QStringLiteral("QtTest logs will appear here after each suite finishes."));
-    logOutput_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-
-    splitter->setStretchFactor(0, 0);
-    splitter->setStretchFactor(1, 1);
-    splitter->setSizes({320, 460});
-
-    layout->addLayout(headerLayout);
-    layout->addWidget(splitter, 1);
-
-    statusBar()->showMessage(QStringLiteral("Ready to run tests"));
-
-    connect(runButton_, &QPushButton::clicked, this, &MainWindow::runAllTests);
+void MainWindow::configureResultsTable(QTableWidget* table) const
+{
+    table->setColumnCount(kResultColumnCount);
+    table->setHorizontalHeaderLabels({
+        QStringLiteral("Mode"),
+        QStringLiteral("Config"),
+        QStringLiteral("Shadow"),
+        QStringLiteral("Allow 32-bit"),
+        QStringLiteral("Heuristic"),
+        QStringLiteral("Finished"),
+        QStringLiteral("Passed"),
+        QStringLiteral("Failed"),
+        QStringLiteral("Timeouts"),
+        QStringLiteral("Status")
+    });
+    table->setAlternatingRowColors(true);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setSortingEnabled(false);
+    table->verticalHeader()->setVisible(false);
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(kResultColumnMode, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(kResultColumnConfig, QHeaderView::Stretch);
+    for (int column = kResultColumnShadow; column < kResultColumnCount; ++column) {
+        table->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    }
 }
 
 QVector<MainWindow::TestSuiteSpec> MainWindow::suiteSpecs() const
 {
     QVector<TestSuiteSpec> specs;
+    const QVector<TestVariant> variants = configuredVariants();
     const QVector<QString> names = all_test_suite_names();
-    specs.reserve(names.size());
-    for (const QString& name : names) {
-        specs.push_back({name});
+    specs.reserve(variants.size() * names.size());
+    for (const TestVariant& variant : variants) {
+        for (const QString& name : names) {
+            specs.push_back({
+                variant.id,
+                variant.label,
+                name,
+                executableFileName(variant.executableBaseName)
+            });
+        }
     }
     return specs;
+}
+
+QString MainWindow::resolveProgramPath(const TestSuiteSpec& spec) const
+{
+    return QDir(QCoreApplication::applicationDirPath()).filePath(spec.executableName);
 }
 
 MainWindow::TestSuiteResult MainWindow::runSuite(const TestSuiteSpec& spec, const int timeoutMs) const
 {
     TestSuiteResult result;
-    result.name = spec.name;
+    result.variantId = spec.variantId;
+    result.variantLabel = spec.variantLabel;
+    result.suiteName = spec.suiteName;
+
+    const QString programPath = resolveProgramPath(spec);
+    if (!QFileInfo::exists(programPath)) {
+        result.exitCode = 127;
+        result.log = QStringLiteral("Missing test runner executable: %1").arg(programPath);
+        return result;
+    }
 
     const QString logPath = uniqueLogPath();
     const QString outputSpec = QStringLiteral("%1,txt").arg(logPath);
     QProcess process;
-    process.setProgram(QCoreApplication::applicationFilePath());
+    process.setProgram(programPath);
     process.setArguments({
         QStringLiteral("--run-suite"),
-        spec.name,
+        spec.suiteName,
         QStringLiteral("-o"),
         outputSpec
     });
@@ -270,6 +550,41 @@ MainWindow::TestSuiteResult MainWindow::runSuite(const TestSuiteSpec& spec, cons
                          .arg(result.exitCode);
     }
 
+    const ParsedConfigBanner parsedConfig = parseConfigBanner(result.log);
+    if (parsedConfig.valid) {
+        result.configBanner = parsedConfig.compactText;
+    }
+
+    const QVector<TestVariant> variants = configuredVariants();
+    for (const TestVariant& variant : variants) {
+        if (variant.id != spec.variantId) {
+            continue;
+        }
+
+        const QString runnerConfigError = extractConfigErrorText(result.log);
+        const QString launcherMismatchReason =
+            configMismatchReason(parsedConfig, variant, spec.suiteName);
+
+        if (!runnerConfigError.isEmpty()) {
+            result.configMismatch = true;
+            result.configError = runnerConfigError;
+        } else if (parsedConfig.valid &&
+                   !launcherMismatchReason.isEmpty() &&
+                   (!result.timedOut && !result.crashed)) {
+            result.configMismatch = true;
+            result.configError = QStringLiteral("[launcher-config-check] %1")
+                                     .arg(launcherMismatchReason);
+        }
+
+        if (result.configMismatch) {
+            result.log = appendSection(
+                result.log,
+                QStringLiteral("launcher-config-check"),
+                result.configError);
+        }
+        break;
+    }
+
     const QRegularExpression totalsRe(
         QStringLiteral(
             R"(Totals:\s+(\d+)\s+passed,\s+(\d+)\s+failed,\s+(\d+)\s+skipped,\s+(\d+)\s+blacklisted,\s+(\d+)\s*ms)"));
@@ -285,44 +600,105 @@ MainWindow::TestSuiteResult MainWindow::runSuite(const TestSuiteSpec& spec, cons
     return result;
 }
 
-void MainWindow::resetTable(const QVector<TestSuiteSpec>& specs)
+MainWindow::VariantTab* MainWindow::findVariantTab(const QString& variantId)
 {
-    suiteTable_->clearContents();
-    suiteTable_->setRowCount(specs.size());
-
-    for (int row = 0; row < specs.size(); ++row) {
-        ensureItem(suiteTable_, row, kColumnSuite)->setText(specs[row].name);
-        setStatusVisual(
-            ensureItem(suiteTable_, row, kColumnStatus),
-            QStringLiteral("PENDING"),
-            QColor(216, 220, 226));
-
-        for (int column = kColumnPassed; column < kColumnCount; ++column) {
-            auto* item = ensureItem(suiteTable_, row, column);
-            item->setText(QStringLiteral("-"));
-            item->setTextAlignment(Qt::AlignCenter);
-            item->setBackground(QBrush());
+    for (VariantTab& variantTab : variantTabs_) {
+        if (variantTab.id == variantId) {
+            return &variantTab;
         }
+    }
+    return nullptr;
+}
+
+int MainWindow::suiteRowForName(const QString& suiteName) const
+{
+    const QVector<QString> suiteNames = all_test_suite_names();
+    for (int row = 0; row < suiteNames.size(); ++row) {
+        if (suiteNames[row] == suiteName) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+void MainWindow::resetTabs()
+{
+    const QVector<QString> suiteNames = all_test_suite_names();
+    lastSummaryPath_.clear();
+
+    if (resultsTab_.table != nullptr) {
+        resultsTab_.table->clearContents();
+        resultsTab_.table->setRowCount(configuredVariants().size());
+    }
+    if (resultsTab_.summaryLabel != nullptr) {
+        resultsTab_.summaryLabel->setText(
+            QStringLiteral("No completed runs yet. Summary will appear here."));
+    }
+
+    for (VariantTab& variantTab : variantTabs_) {
+        variantTab.suiteTable->clearContents();
+        variantTab.suiteTable->setRowCount(suiteNames.size());
+
+        for (int row = 0; row < suiteNames.size(); ++row) {
+            ensureItem(variantTab.suiteTable, row, kColumnSuite)->setText(suiteNames[row]);
+            setStatusVisual(
+                ensureItem(variantTab.suiteTable, row, kColumnStatus),
+                QStringLiteral("PENDING"),
+                QColor(216, 220, 226));
+
+            for (int column = kColumnPassed; column < kColumnCount; ++column) {
+                auto* item = ensureItem(variantTab.suiteTable, row, column);
+                item->setText(QStringLiteral("-"));
+                item->setTextAlignment(Qt::AlignCenter);
+                item->setBackground(QBrush());
+            }
+        }
+
+        variantTab.logOutput->clear();
+        variantTab.logOutput->appendPlainText(
+            QStringLiteral("[%1]\nWaiting for run...\n").arg(variantTab.label));
     }
 }
 
-void MainWindow::setRowRunning(const int row)
+void MainWindow::setRowRunning(const TestSuiteSpec& spec)
 {
+    VariantTab* variantTab = findVariantTab(spec.variantId);
+    if (variantTab == nullptr) {
+        return;
+    }
+
+    const int row = suiteRowForName(spec.suiteName);
+    if (row < 0) {
+        return;
+    }
+
     setStatusVisual(
-        ensureItem(suiteTable_, row, kColumnStatus),
+        ensureItem(variantTab->suiteTable, row, kColumnStatus),
         QStringLiteral("RUNNING"),
         QColor(255, 231, 153));
 }
 
-void MainWindow::setRowResult(const int row, const TestSuiteResult& result)
+void MainWindow::setRowResult(const TestSuiteResult& result)
 {
-    ensureItem(suiteTable_, row, kColumnSuite)->setText(result.name);
+    VariantTab* variantTab = findVariantTab(result.variantId);
+    if (variantTab == nullptr) {
+        return;
+    }
 
-    auto* statusItem = ensureItem(suiteTable_, row, kColumnStatus);
+    const int row = suiteRowForName(result.suiteName);
+    if (row < 0) {
+        return;
+    }
+
+    ensureItem(variantTab->suiteTable, row, kColumnSuite)->setText(result.suiteName);
+
+    auto* statusItem = ensureItem(variantTab->suiteTable, row, kColumnStatus);
     if (result.timedOut) {
         setStatusVisual(statusItem, QStringLiteral("TIMEOUT"), QColor(255, 199, 206));
     } else if (result.crashed) {
         setStatusVisual(statusItem, QStringLiteral("CRASH"), QColor(234, 153, 153));
+    } else if (result.configMismatch) {
+        setStatusVisual(statusItem, QStringLiteral("CFG MISMATCH"), QColor(255, 204, 153));
     } else if (result.exitCode == 0 && result.failed == 0) {
         setStatusVisual(statusItem, QStringLiteral("PASS"), QColor(183, 225, 205));
     } else {
@@ -338,10 +714,139 @@ void MainWindow::setRowResult(const int row, const TestSuiteResult& result)
     };
 
     for (int i = 0; i < metrics.size(); ++i) {
-        auto* item = ensureItem(suiteTable_, row, kColumnPassed + i);
+        auto* item = ensureItem(variantTab->suiteTable, row, kColumnPassed + i);
         item->setText(metrics[i]);
         item->setTextAlignment(Qt::AlignCenter);
     }
+}
+
+void MainWindow::appendLogEntry(const TestSuiteResult& result)
+{
+    VariantTab* variantTab = findVariantTab(result.variantId);
+    if (variantTab == nullptr) {
+        return;
+    }
+
+    variantTab->logOutput->appendPlainText(QStringLiteral("=== %1 ===").arg(result.suiteName));
+    variantTab->logOutput->appendPlainText(result.log.trimmed());
+    variantTab->logOutput->appendPlainText(QString());
+    variantTab->logOutput->verticalScrollBar()->setValue(
+        variantTab->logOutput->verticalScrollBar()->maximum());
+}
+
+void MainWindow::updateResultsTab()
+{
+    if (resultsTab_.table == nullptr || resultsTab_.summaryLabel == nullptr) {
+        return;
+    }
+
+    const QVector<TestVariant> variants = configuredVariants();
+    const int totalPerVariant = all_test_suite_names().size();
+
+    int totalFinished = 0;
+    int totalPassed = 0;
+    int totalFailed = 0;
+    int totalTimeouts = 0;
+
+    resultsTab_.table->setRowCount(variants.size());
+
+    for (int row = 0; row < variants.size(); ++row) {
+        const TestVariant& variant = variants[row];
+        int finished = 0;
+        int passed = 0;
+        int failed = 0;
+        int timeouts = 0;
+        bool variantConfigMismatch = false;
+        QString configBanner = QStringLiteral("-");
+
+        for (const TestSuiteResult& result : suiteResults_) {
+            if (result.variantId != variant.id) {
+                continue;
+            }
+            if (!result.configBanner.trimmed().isEmpty()) {
+                if (configBanner == QStringLiteral("-")) {
+                    configBanner = result.configBanner;
+                } else if (configBanner != result.configBanner) {
+                    variantConfigMismatch = true;
+                    configBanner = QStringLiteral("MULTIPLE CONFIG BANNERS");
+                }
+            }
+            if (result.configMismatch) {
+                variantConfigMismatch = true;
+            }
+            if (result.exitCode == -1 && !result.timedOut && !result.crashed) {
+                continue;
+            }
+
+            ++finished;
+            if (result.timedOut) {
+                ++timeouts;
+            }
+            if (!result.configMismatch &&
+                result.exitCode == 0 &&
+                result.failed == 0) {
+                ++passed;
+            } else {
+                ++failed;
+            }
+        }
+
+        totalFinished += finished;
+        totalPassed += passed;
+        totalFailed += failed;
+        totalTimeouts += timeouts;
+
+        QString statusText = QStringLiteral("PENDING");
+        QColor statusColor(216, 220, 226);
+        if (variantConfigMismatch) {
+            statusText = QStringLiteral("CFG MISMATCH");
+            statusColor = QColor(255, 204, 153);
+        } else if (finished > 0 && finished < totalPerVariant) {
+            statusText = QStringLiteral("RUNNING");
+            statusColor = QColor(255, 231, 153);
+        } else if (finished == totalPerVariant && failed == 0) {
+            statusText = QStringLiteral("PASS");
+            statusColor = QColor(183, 225, 205);
+        } else if (finished == totalPerVariant) {
+            statusText = QStringLiteral("FAIL");
+            statusColor = QColor(244, 204, 204);
+        }
+
+        ensureItem(resultsTab_.table, row, kResultColumnMode)->setText(variant.label);
+        auto* configItem = ensureItem(resultsTab_.table, row, kResultColumnConfig);
+        configItem->setText(configBanner);
+        configItem->setToolTip(configBanner);
+        ensureItem(resultsTab_.table, row, kResultColumnShadow)->setText(QString::number(variant.enableShadow));
+        ensureItem(resultsTab_.table, row, kResultColumnAllow32)->setText(QString::number(variant.allow32Bit));
+        ensureItem(resultsTab_.table, row, kResultColumnHeuristic)->setText(QString::number(variant.heuristic));
+        ensureItem(resultsTab_.table, row, kResultColumnFinished)->setText(
+            QStringLiteral("%1/%2").arg(finished).arg(totalPerVariant));
+        ensureItem(resultsTab_.table, row, kResultColumnPassed)->setText(QString::number(passed));
+        ensureItem(resultsTab_.table, row, kResultColumnFailed)->setText(QString::number(failed));
+        ensureItem(resultsTab_.table, row, kResultColumnTimeouts)->setText(QString::number(timeouts));
+        setStatusVisual(
+            ensureItem(resultsTab_.table, row, kResultColumnStatus),
+            statusText,
+            statusColor);
+
+        for (int column = kResultColumnShadow; column <= kResultColumnTimeouts; ++column) {
+            ensureItem(resultsTab_.table, row, column)->setTextAlignment(Qt::AlignCenter);
+        }
+        ensureItem(resultsTab_.table, row, kResultColumnMode)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        ensureItem(resultsTab_.table, row, kResultColumnConfig)->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    }
+
+    QString summaryText =
+        QStringLiteral("Finished: %1/%2  |  Passed: %3  |  Failed: %4  |  Timeouts: %5")
+            .arg(totalFinished)
+            .arg(variants.size() * totalPerVariant)
+            .arg(totalPassed)
+            .arg(totalFailed)
+            .arg(totalTimeouts);
+    if (!lastSummaryPath_.isEmpty()) {
+        summaryText += QStringLiteral("\nSummary file: %1").arg(lastSummaryPath_);
+    }
+    resultsTab_.summaryLabel->setText(summaryText);
 }
 
 void MainWindow::updateSummaryLabel()
@@ -357,7 +862,9 @@ void MainWindow::updateSummaryLabel()
         }
 
         ++finishedSuites;
-        if (result.exitCode == 0 && result.failed == 0) {
+        if (!result.configMismatch &&
+            result.exitCode == 0 &&
+            result.failed == 0) {
             ++passedSuites;
         } else {
             ++failedSuites;
@@ -373,6 +880,115 @@ void MainWindow::updateSummaryLabel()
                        .arg(failedSuites);
     }
     summaryLabel_->setText(summary);
+    updateResultsTab();
+}
+
+QString MainWindow::summaryReportText() const
+{
+    QString text;
+    QTextStream out(&text);
+
+    const QVector<TestVariant> variants = configuredVariants();
+    const int totalPerVariant = all_test_suite_names().size();
+
+    out << "SPSC Launcher Summary\n";
+    out << "Generated: "
+        << QDateTime::currentDateTime().toString(Qt::ISODate)
+        << '\n';
+    out << "Application dir: " << QCoreApplication::applicationDirPath() << '\n';
+    out << "Per-suite timeout: " << (timeoutSpin_->value() * 1000) << " ms\n\n";
+
+    for (const TestVariant& variant : variants) {
+        int finished = 0;
+        int passed = 0;
+        int failed = 0;
+        int timeouts = 0;
+        bool variantConfigMismatch = false;
+        QString configBanner = QStringLiteral("-");
+
+        for (const TestSuiteResult& result : suiteResults_) {
+            if (result.variantId != variant.id) {
+                continue;
+            }
+            if (!result.configBanner.trimmed().isEmpty()) {
+                if (configBanner == QStringLiteral("-")) {
+                    configBanner = result.configBanner;
+                } else if (configBanner != result.configBanner) {
+                    variantConfigMismatch = true;
+                    configBanner = QStringLiteral("MULTIPLE CONFIG BANNERS");
+                }
+            }
+            if (result.configMismatch) {
+                variantConfigMismatch = true;
+            }
+            if (result.exitCode == -1 && !result.timedOut && !result.crashed) {
+                continue;
+            }
+
+            ++finished;
+            if (result.timedOut) {
+                ++timeouts;
+            }
+            if (!result.configMismatch &&
+                result.exitCode == 0 &&
+                result.failed == 0) {
+                ++passed;
+            } else {
+                ++failed;
+            }
+        }
+
+        QString statusText = QStringLiteral("PENDING");
+        if (variantConfigMismatch) {
+            statusText = QStringLiteral("CFG MISMATCH");
+        } else if (finished > 0 && finished < totalPerVariant) {
+            statusText = QStringLiteral("RUNNING");
+        } else if (finished == totalPerVariant && failed == 0) {
+            statusText = QStringLiteral("PASS");
+        } else if (finished == totalPerVariant) {
+            statusText = QStringLiteral("FAIL");
+        }
+
+        out << variant.label << '\n';
+        out << "  Status: " << statusText << '\n';
+        out << "  Finished: " << finished << '/' << totalPerVariant << '\n';
+        out << "  Passed: " << passed << '\n';
+        out << "  Failed: " << failed << '\n';
+        out << "  Timeouts: " << timeouts << '\n';
+        out << "  Config: " << configBanner << '\n';
+        out << "  Expected macros: "
+            << "enable_shadow=" << variant.enableShadow
+            << ", allow_32bit=" << variant.allow32Bit
+            << ", refresh_heuristic=" << variant.heuristic
+            << '\n';
+
+        for (const TestSuiteResult& result : suiteResults_) {
+            if (result.variantId == variant.id && result.configMismatch) {
+                out << "  Config mismatch in " << result.suiteName << ": "
+                    << result.configError << '\n';
+            }
+        }
+        out << '\n';
+    }
+
+    return text;
+}
+
+QString MainWindow::writeSummaryReport() const
+{
+    const QString path =
+        QDir(QCoreApplication::applicationDirPath()).filePath(
+            QStringLiteral("spsc_launcher_last_summary.txt"));
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        return QString();
+    }
+
+    QTextStream out(&file);
+    out << summaryReportText();
+    file.close();
+    return path;
 }
 
 void MainWindow::runAllTests()
@@ -386,33 +1002,47 @@ void MainWindow::runAllTests()
     suiteResults_.clear();
     suiteResults_.resize(specs.size());
 
-    resetTable(specs);
+    resetTabs();
     updateSummaryLabel();
-    logOutput_->clear();
-    logOutput_->appendPlainText(
-        QStringLiteral("Starting paranoid SPSC suite run...\nPer-suite timeout: %1 ms\n")
-            .arg(timeoutMs));
+    for (VariantTab& variantTab : variantTabs_) {
+        variantTab.logOutput->clear();
+        variantTab.logOutput->appendPlainText(
+            QStringLiteral("[%1]\nStarting paranoid SPSC run for this variant...\nPer-suite timeout: %2 ms\n")
+                .arg(variantTab.label)
+                .arg(timeoutMs));
+    }
 
     isRunning_ = true;
     runButton_->setEnabled(false);
     timeoutSpin_->setEnabled(false);
+    if (resultsTab_.page != nullptr) {
+        tabWidget_->setCurrentWidget(resultsTab_.page);
+    }
 
-    for (int row = 0; row < specs.size(); ++row) {
-        setRowRunning(row);
-        statusBar()->showMessage(QStringLiteral("Running %1...").arg(specs[row].name));
-        suiteTable_->selectRow(row);
-        suiteTable_->scrollToItem(suiteTable_->item(row, kColumnSuite));
+    for (int resultIndex = 0; resultIndex < specs.size(); ++resultIndex) {
+        const TestSuiteSpec& spec = specs[resultIndex];
+        VariantTab* variantTab = findVariantTab(spec.variantId);
+        const int row = suiteRowForName(spec.suiteName);
+
+        setRowRunning(spec);
+        statusBar()->showMessage(
+            QStringLiteral("Running %1...")
+                .arg(displayName(spec.variantLabel, spec.suiteName)));
+        if (variantTab != nullptr) {
+            tabWidget_->setCurrentWidget(variantTab->page);
+            if (row >= 0) {
+                variantTab->suiteTable->selectRow(row);
+                variantTab->suiteTable->scrollToItem(
+                    variantTab->suiteTable->item(row, kColumnSuite));
+            }
+        }
         QCoreApplication::processEvents();
 
-        const TestSuiteResult result = runSuite(specs[row], timeoutMs);
-        suiteResults_[row] = result;
-        setRowResult(row, result);
+        const TestSuiteResult result = runSuite(spec, timeoutMs);
+        suiteResults_[resultIndex] = result;
+        setRowResult(result);
         updateSummaryLabel();
-
-        logOutput_->appendPlainText(QStringLiteral("=== %1 ===").arg(result.name));
-        logOutput_->appendPlainText(result.log.trimmed());
-        logOutput_->appendPlainText(QString());
-        logOutput_->verticalScrollBar()->setValue(logOutput_->verticalScrollBar()->maximum());
+        appendLogEntry(result);
 
         QCoreApplication::processEvents();
     }
@@ -427,15 +1057,24 @@ void MainWindow::runAllTests()
         if (result.timedOut) {
             ++timedOutSuites;
         }
-        if (result.timedOut || result.crashed || result.exitCode != 0 || result.failed > 0) {
+        if (result.timedOut ||
+            result.crashed ||
+            result.configMismatch ||
+            result.exitCode != 0 ||
+            result.failed > 0) {
             ++failedSuites;
         }
     }
 
     statusBar()->showMessage(
         (failedSuites == 0)
-            ? QStringLiteral("All test suites passed")
-            : QStringLiteral("%1 test suite(s) failed, %2 timed out")
+            ? QStringLiteral("All suite variants passed")
+            : QStringLiteral("%1 suite variant run(s) failed, %2 timed out")
                   .arg(failedSuites)
                   .arg(timedOutSuites));
+    lastSummaryPath_ = writeSummaryReport();
+    updateResultsTab();
+    if (resultsTab_.page != nullptr) {
+        tabWidget_->setCurrentWidget(resultsTab_.page);
+    }
 }

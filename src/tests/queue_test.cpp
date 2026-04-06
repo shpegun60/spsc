@@ -1,3 +1,7 @@
+#include "test_config.hpp"
+
+#if SPSC_TESTS_WITH_QT
+
 // queue_test.cpp
 // Paranoid API/contract test for spsc::queue.
 //
@@ -17,6 +21,8 @@
 //    tripwire.
 
 #include <QtTest/QtTest>
+
+#include "test_build_config.hpp"
 
 #include <QCoreApplication>
 #include <QProcess>
@@ -97,7 +103,7 @@
 //
 //  - bulk_regions_* suites
 //      * claim_write/claim_read splitting, max_count limiting
-//      * publish(n)/pop(n) exactly advance by N
+//      * publish(unsafe, n)/pop(n) exactly advance by N
 //
 //  - raii_guards_* suites
 //      * write_guard: no publish unless constructed+armed, no leaks
@@ -260,8 +266,10 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim()), value_type*>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish()), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish()), void>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(reg{1})), bool>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(reg{1})), void>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(::spsc::unsafe, reg{1})), bool>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(::spsc::unsafe, reg{1})), void>);
+    static_assert(!requires(Q& q) { q.try_publish(reg{1}); });
+    static_assert(!requires(Q& q) { q.publish(reg{1}); });
 
     // Consumer
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_front()), value_type*>);
@@ -492,7 +500,7 @@ static void placement_write_region(Q& q, std::uint32_t& next_seq, reg max_count)
         }
     }
 
-    q.publish(wr.total);
+    q.publish(::spsc::unsafe, wr.total);
 }
 
 template <class Q>
@@ -1279,7 +1287,7 @@ static void run_state_machine_fuzz(bool dynamic) {
                     model.push_back(x);
                 }
             }
-            q.publish(wr.total);
+            q.publish(::spsc::unsafe, wr.total);
             break;
         }
         case Op::TryPop: {
@@ -1385,7 +1393,7 @@ static void run_state_machine_fuzz(bool dynamic) {
 //  - RAII guards (write_guard/read_guard) semantics
 //  - Iterator/indexing contracts under wrap-around
 //  - Snapshot iteration and stability checks
-//  - Bulk regions with max_count + publish(n)/pop(n) correctness
+//  - Bulk regions with max_count + publish(unsafe, n)/pop(n) correctness
 //  - Threaded bulk-region producer/consumer stress (atomic/cached)
 // =====================================================================================
 
@@ -1685,8 +1693,8 @@ static void bulk_regions_max_count_suite(Q& q) {
         }
     }
 
-    // publish(n) must advance by exactly want.
-    q.publish(wr.total);
+    // publish(unsafe, n) must advance by exactly want.
+    q.publish(::spsc::unsafe, wr.total);
     QCOMPARE(q.size(), want);
 
     // claim_read with smaller max_count must limit.
@@ -1698,9 +1706,9 @@ static void bulk_regions_max_count_suite(Q& q) {
     q.pop(rr.total);
     QCOMPARE(q.size(), reg{want - 3u});
 
-    // try_publish(n) must fail if not enough free.
+    // try_publish(unsafe, n) must fail if not enough free.
     const reg free_now = q.free();
-    QVERIFY(!q.try_publish(static_cast<reg>(free_now + 1u)));
+    QVERIFY(!q.try_publish(::spsc::unsafe, static_cast<reg>(free_now + 1u)));
 
     q.clear();
     QVERIFY(q.empty());
@@ -2042,7 +2050,7 @@ static void run_threaded_bulk_regions_suite(const char* name) {
             }
 
             // Publish exactly what we constructed.
-            q.publish(constructed);
+            q.publish(::spsc::unsafe, constructed);
         }
 
         done.store(true, std::memory_order_release);
@@ -2112,6 +2120,7 @@ class tst_queue_api_paranoid : public QObject {
 
 private slots:
     void initTestCase() {
+        SPSC_TEST_VERIFY_BUILD_CONFIG("queue");
         // Compile-time smoke for representative instantiations.
         api_smoke_compile<spsc::queue<Blob, kSmallCap, spsc::policy::P>>();
         api_smoke_compile<spsc::queue<Tracked, 0, spsc::policy::A<>>>();
@@ -2664,3 +2673,5 @@ int run_tst_queue_api_paranoid(int argc, char** argv) {
 }
 
 #include "queue_test.moc"
+
+#endif // SPSC_TESTS_WITH_QT

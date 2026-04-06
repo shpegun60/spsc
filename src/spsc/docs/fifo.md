@@ -278,7 +278,7 @@ Use `try_consume()` when snapshots may outlive intermediate consumer logic.
 - `try_claim()` returns `nullptr` when full.
 - `publish()` commits one claimed slot.
 - `try_publish()` returns `false` when full.
-- `publish(n)` and `try_publish(n)` commit several previously prepared slots.
+- `publish(unsafe, n)` and `try_publish(unsafe, n)` commit several previously prepared slots.
 
 Claim/publish example:
 
@@ -466,7 +466,7 @@ if (slot) {
 }
 ```
 
-### `publish(n)`
+### `publish(unsafe, n)`
 
 ```cpp
 auto guard = q.scoped_write(3);
@@ -556,7 +556,7 @@ auto regs = q.claim_write(spsc::unsafe, 8);
 for (std::size_t i = 0; i < static_cast<std::size_t>(regs.first.count); ++i) {
     regs.first.ptr[i] = make_value();
 }
-q.publish(regs.total);
+q.publish(::spsc::unsafe, regs.total);
 ```
 
 ### `claim_read()`

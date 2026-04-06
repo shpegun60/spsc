@@ -182,7 +182,7 @@ Important: `data()` points at storage, but not every slot currently holds a live
 - `try_emplace(args...)` returns `nullptr` when full
 - `claim()` / `try_claim()` return raw uninitialized storage for manual placement new
 - `publish()` / `try_publish()` commit one slot
-- `publish(n)` / `try_publish(n)` commit several prepared slots
+- `publish(unsafe, n)` / `try_publish(unsafe, n)` commit several prepared slots
 
 Manual construction example:
 
@@ -403,7 +403,7 @@ auto regs = q.claim_write(spsc::unsafe, 2);
 if (regs.first.count != 0u) {
     auto* slots = regs.first.ptr_uninit();
     new (&slots[0]) Message(10, "bulk");
-    q.publish(1);
+    q.publish(::spsc::unsafe, 1);
 }
 ```
 

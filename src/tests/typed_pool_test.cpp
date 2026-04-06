@@ -1,3 +1,7 @@
+#include "test_config.hpp"
+
+#if SPSC_TESTS_WITH_QT
+
 
 /*
  * typed_pool_test.cpp
@@ -14,6 +18,8 @@
  */
 
 #include <QtTest/QtTest>
+
+#include "test_build_config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -36,6 +42,10 @@
 #include <QCoreApplication>
 #include <QProcess>
 #include <QProcessEnvironment>
+
+#if !defined(SPSC_ASSERT) && !defined(NDEBUG)
+#  define SPSC_ASSERT(expr) do { if(!(expr)) { std::abort(); } } while(0)
+#endif
 
 #include "typed_pool.hpp"
 
@@ -191,8 +201,10 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim()), value_type>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish()), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish()), void>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(reg{1})), bool>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(reg{1})), void>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(::spsc::unsafe, reg{1})), bool>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(::spsc::unsafe, reg{1})), void>);
+    static_assert(!requires(Q& q) { q.try_publish(reg{1}); });
+    static_assert(!requires(Q& q) { q.publish(reg{1}); });
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe)), typename Q::regions>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe, reg{1})), typename Q::regions>);
 
@@ -540,7 +552,7 @@ static void bulk_regions_wraparound_suite(Q& q) {
         T* dst = wr.second.ptr[i];
         ::new (static_cast<void*>(dst)) T(seq++);
     }
-    q.publish(wr.total);
+    q.publish(::spsc::unsafe, wr.total);
 
     // Step 3: snapshot the final order, then drain and compare.
     auto snap = q.make_snapshot();
@@ -579,7 +591,7 @@ static void bulk_regions_max_count_suite(Q& q) {
     for (reg i = 0; i < wr.second.count; ++i) {
         ::new (static_cast<void*>(wr.second.ptr[i])) T(seq++);
     }
-    q.publish(wr.total);
+    q.publish(::spsc::unsafe, wr.total);
 
     QVERIFY(q.full());
     QCOMPARE(q.size(), cap);
@@ -1282,7 +1294,7 @@ static void state_machine_fuzz_sweep_suite() {
                     ref.push_back(next++);
                 }
                 QCOMPARE(filled, wr.total);
-                q.publish(wr.total);
+                q.publish(::spsc::unsafe, wr.total);
             }
             break;
         }
@@ -1475,7 +1487,7 @@ static void run_threaded_bulk_regions_suite(const char* /*name*/) {
             for (reg i = 0; i < wr.second.count; ++i) {
                 ::new (static_cast<void*>(wr.second.ptr[i])) Blob(local++);
             }
-            q.publish(wr.total);
+            q.publish(::spsc::unsafe, wr.total);
             seq = local;
         }
 
@@ -1661,7 +1673,8 @@ static void death_tests_debug_only_suite() {
         }
 
         const int code = p.exitCode();
-        QVERIFY2(code != 0, "Expected non-zero exit code from death child.");
+        QVERIFY2(code == spsc_typed_pool_death_detail::kDeathExitCode,
+                 "Expected assertion death (SIGABRT -> kDeathExitCode)." );
     };
 
     expect_death("pop_empty");
@@ -1778,7 +1791,7 @@ static void no_double_claim_without_publish_suite(Q& q)
     q.pop();
     QVERIFY(q.empty());
 
-    // Bulk claim_write must also not reserve until publish(n).
+    // Bulk claim_write must also not reserve until publish(unsafe, n).
     if (q.capacity() >= 8u) {
         q.clear();
         QCOMPARE(q.size(), reg{0});
@@ -1811,7 +1824,7 @@ static void no_double_claim_without_publish_suite(Q& q)
         }
 
         QCOMPARE(done, k);
-        q.publish(k);
+        q.publish(::spsc::unsafe, k);
 
         QCOMPARE(q.size(), k);
         QCOMPARE(q.front()->seq, std::uint32_t{1});
@@ -1872,7 +1885,7 @@ static void bulk_regions_partial_publish_suite(Q& q)
     }
     QCOMPARE(constructed, k);
 
-    q.publish(k);
+    q.publish(::spsc::unsafe, k);
 
     // Validate order: old items first, then published prefix.
     QCOMPARE(q.size(), reg{2 + k});
@@ -1932,7 +1945,7 @@ static void bulk_regions_staggered_wrap_suite(Q& q)
     for (reg i = 0; i < n1; ++i) {
         ::new (static_cast<void*>(wr.first.ptr[i])) T(seq++);
     }
-    q.publish(n1);
+    q.publish(::spsc::unsafe, n1);
 
     // Next claim should start at 0 and match the second region pointers.
     auto wr2 = q.claim_write(::spsc::unsafe, n2);
@@ -1947,7 +1960,7 @@ static void bulk_regions_staggered_wrap_suite(Q& q)
     for (reg i = 0; i < n2; ++i) {
         ::new (static_cast<void*>(wr2.first.ptr[i])) T(seq++);
     }
-    q.publish(n2);
+    q.publish(::spsc::unsafe, n2);
 
     // Drain and validate that the wrap inserted items are in strict FIFO order.
     // First drain the 2 survivors from the pre-fill:
@@ -2015,7 +2028,7 @@ static void bulk_regions_partial_publish_matrix_suite(Q& q)
                 ++done;
             }
             QCOMPARE(done, k);
-            q.publish(k);
+            q.publish(::spsc::unsafe, k);
 
             // Drain survivors first (their exact values are deterministic).
             for (reg i = 0; i < 4u; ++i) {
@@ -2164,7 +2177,7 @@ static void regression_matrix_suite(Q& q, const char* tag)
         for (reg i = 0; i < wr.second.count; ++i) {
             ::new (static_cast<void*>(wr.second.ptr[i])) T(seq++);
         }
-        q.publish(n);
+        q.publish(::spsc::unsafe, n);
 
         for (reg i = 0; i < n; ++i) {
             model.push_back(base + static_cast<std::uint32_t>(i));
@@ -2189,7 +2202,7 @@ static void regression_matrix_suite(Q& q, const char* tag)
             ++done;
         }
         QCOMPARE(done, k);
-        q.publish(k);
+        q.publish(::spsc::unsafe, k);
 
         for (reg i = 0; i < k; ++i) {
             model.push_back(base + static_cast<std::uint32_t>(i));
@@ -2630,7 +2643,10 @@ static void run_threaded_snapshot_try_consume_suite() {
 class tst_typed_pool_api_paranoid final : public QObject {
     Q_OBJECT
 private slots:
-    void initTestCase() { api_compile_smoke_all(); }
+    void initTestCase() {
+        SPSC_TEST_VERIFY_BUILD_CONFIG("typed_pool");
+        api_compile_smoke_all();
+    }
 
     void copy_semantics_static()  { copy_semantics_static_suite(); }
     void copy_semantics_dynamic() { copy_semantics_dynamic_suite(); }
@@ -2842,3 +2858,5 @@ int run_tst_typed_pool_api_paranoid(int argc, char** argv)
 }
 
 #include "typed_pool_test.moc"
+
+#endif // SPSC_TESTS_WITH_QT

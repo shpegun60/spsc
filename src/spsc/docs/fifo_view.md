@@ -183,7 +183,7 @@ q.attach(buffer, capacity, st);
 - `emplace`, `try_emplace`
 - `claim`, `try_claim`
 - `publish`, `try_publish`
-- `publish(n)`, `try_publish(n)`
+- `publish(unsafe, n)`, `try_publish(unsafe, n)`
 
 Use the same producer patterns as `fifo`, but remember that the storage lifetime is external.
 

@@ -1,3 +1,7 @@
+#include "test_config.hpp"
+
+#if SPSC_TESTS_WITH_QT
+
 /*
  * pool_test.cpp
  *
@@ -13,6 +17,8 @@
  */
 
 #include <QtTest/QtTest>
+
+#include "test_build_config.hpp"
 
 #include <QCoreApplication>
 #include <QProcess>
@@ -137,7 +143,7 @@ static void sigabrt_handler_(int) noexcept {
     } else if (std::strcmp(mode, "publish_n_too_many") == 0) {
         Q q(reg{64u});
         require_valid(q);
-        q.publish(static_cast<reg>(q.capacity() + 1u)); // Must assert: can_write(n) is false.
+        q.publish(::spsc::unsafe, static_cast<reg>(q.capacity() + 1u)); // Must assert: can_write(n) is false.
     } else {
         std::_Exit(0xEF);
     }
@@ -273,8 +279,10 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_write(std::declval<std::uint32_t>())), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish()), void>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish()), bool>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(reg{1})), void>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(reg{1})), bool>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(::spsc::unsafe, reg{1})), void>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(::spsc::unsafe, reg{1})), bool>);
+    static_assert(!requires(Q& q) { q.publish(reg{1}); });
+    static_assert(!requires(Q& q) { q.try_publish(reg{1}); });
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe)), typename Q::regions>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe, reg{1})), typename Q::regions>);
 
@@ -835,8 +843,8 @@ static void test_zero_count_contracts(Q& q) {
     const reg before_free = q.free();
 
     // Zero-count variants must be no-ops and always valid.
-    QVERIFY(q.try_publish(0u));
-    q.publish(0u);
+    QVERIFY(q.try_publish(::spsc::unsafe, 0u));
+    q.publish(::spsc::unsafe, 0u);
     QVERIFY(q.try_pop(0u));
     q.pop(0u);
 
@@ -1400,7 +1408,7 @@ static void test_api_coverage_smoke(Q& q) {
         }
     }
 
-    // Bulk regions + try_publish(count) / try_pop(count).
+    // Bulk regions + try_publish(unsafe, count) / try_pop(count).
     {
         q.consume_all();
         QVERIFY(q.empty());
@@ -1422,12 +1430,12 @@ static void test_api_coverage_smoke(Q& q) {
         fill(wr.first);
         fill(wr.second);
 
-        QVERIFY(q.try_publish(wr.total));
+        QVERIFY(q.try_publish(::spsc::unsafe, wr.total));
         QCOMPARE(q.size(), wr.total);
 
         // try_publish too much must fail.
         if (q.free() != 0u) {
-            QVERIFY(!q.try_publish(static_cast<reg>(q.free() + 1u)));
+            QVERIFY(!q.try_publish(::spsc::unsafe, static_cast<reg>(q.free() + 1u)));
         }
 
         auto rd = q.claim_read(::spsc::unsafe, want);
@@ -1514,7 +1522,7 @@ static void test_wraparound_bulk_regions() {
             store_blob_to_slot(p2[i], make_blob(0xF000u + static_cast<std::uint32_t>(seq++), rng));
         }
 
-        q.publish(wr.total);
+        q.publish(::spsc::unsafe, wr.total);
         QCOMPARE(q.size(), reg{4u});
     }
 
@@ -1657,7 +1665,7 @@ static void fuzz_ops(Q& q) {
             fill(wr.second);
 
             if (wr.total != 0u) {
-                q.publish(wr.total);
+                q.publish(::spsc::unsafe, wr.total);
             }
         } break;
 
@@ -2226,7 +2234,7 @@ static void test_two_thread_spsc(Q& q, const reg iters = kThreadIters, const int
                 write_region(wr.first);
                 write_region(wr.second);
 
-                if (!q.try_publish(wr.total)) {
+                if (!q.try_publish(::spsc::unsafe, wr.total)) {
                     record_fail(1, seq);
                     break;
                 }
@@ -2493,7 +2501,10 @@ class tst_pool_api_paranoid final : public QObject {
     Q_OBJECT
 
 private slots:
-    void initTestCase() { api_compile_smoke_all(); }
+    void initTestCase() {
+        SPSC_TEST_VERIFY_BUILD_CONFIG("pool");
+        api_compile_smoke_all();
+    }
 
     void static_plain_P();
     void static_volatile_V();
@@ -2881,3 +2892,5 @@ void run_tst_pool_api_paranoid(bool verbose) {
 }
 
 #include "pool_test.moc"
+
+#endif // SPSC_TESTS_WITH_QT

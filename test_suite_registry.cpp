@@ -1,13 +1,13 @@
 #include "test_suite_registry.h"
 
-#include "src/chunk_test.h"
-#include "src/fifo_test.h"
-#include "src/fifo_view_test.h"
-#include "src/latest_test.h"
-#include "src/pool_test.h"
-#include "src/pool_view_test.h"
-#include "src/queue_test.h"
-#include "src/typed_pool_test.h"
+#include "src/tests/chunk_test.h"
+#include "src/tests/fifo_test.h"
+#include "src/tests/fifo_view_test.h"
+#include "src/tests/latest_test.h"
+#include "src/tests/pool_test.h"
+#include "src/tests/pool_view_test.h"
+#include "src/tests/queue_test.h"
+#include "src/tests/typed_pool_test.h"
 
 #include <array>
 
@@ -32,16 +32,6 @@ constexpr std::array<SuiteEntry, 8> kSuites{{
 }};
 
 } // namespace
-
-QVector<QString> all_test_suite_names()
-{
-    QVector<QString> names;
-    names.reserve(static_cast<qsizetype>(kSuites.size()));
-    for (const SuiteEntry& suite : kSuites) {
-        names.push_back(QString::fromLatin1(suite.name));
-    }
-    return names;
-}
 
 int run_named_test_suite(const QString& suiteName, int argc, char** argv)
 {

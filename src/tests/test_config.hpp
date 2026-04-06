@@ -1,0 +1,8 @@
+#ifndef SPSC_TEST_CONFIG_HPP
+#define SPSC_TEST_CONFIG_HPP
+
+#ifndef SPSC_TESTS_WITH_QT
+#  define SPSC_TESTS_WITH_QT 0
+#endif
+
+#endif // SPSC_TEST_CONFIG_HPP

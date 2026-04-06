@@ -169,7 +169,7 @@ q.consume(snap);
 - `try_push(...)`
 - `claim()` / `try_claim()` for manual construction into slot storage
 - `publish()` / `try_publish()`
-- `publish(n)` / `try_publish(n)`
+- `publish(unsafe, n)` / `try_publish(unsafe, n)`
 
 Manual path:
 
@@ -309,7 +309,7 @@ if (Frame* slot = q.try_claim()) {
 }
 ```
 
-### `publish()`, `publish(n)`
+### `publish()`, `publish(unsafe, n)`
 
 ```cpp
 auto guard = q.scoped_write(2);

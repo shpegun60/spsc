@@ -1,7 +1,13 @@
+#include "test_config.hpp"
+
+#if SPSC_TESTS_WITH_QT
+
 // chunk_test.cpp
 // Paranoid API/contract tests for spsc::chunk.
 
 #include <QtTest/QtTest>
+
+#include "test_build_config.hpp"
 
 #include <QCoreApplication>
 #include <QProcess>
@@ -711,6 +717,7 @@ class tst_chunk_api_paranoid final : public QObject {
 
 private slots:
     void initTestCase() {
+        SPSC_TEST_VERIFY_BUILD_CONFIG("chunk");
         api_smoke_compile();
     }
 
@@ -799,3 +806,5 @@ int run_tst_chunk_api_paranoid(int argc, char** argv) {
 }
 
 #include "chunk_test.moc"
+
+#endif // SPSC_TESTS_WITH_QT

@@ -122,7 +122,7 @@ for (std::size_t i = 0; i < static_cast<std::size_t>(regs.second.count); ++i) {
     fill(regs.second.ptr[i]);
 }
 
-q.publish(regs.total);
+q.publish(::spsc::unsafe, regs.total);
 ```
 
 ## 5. Raw-Storage Producer: `queue` / `typed_pool` Construction Path
@@ -414,7 +414,7 @@ if (regs.first.count != 0u) {
     new (&slots[0]) Message(1, "hello");
 }
 
-q.publish(1);
+q.publish(::spsc::unsafe, 1);
 ```
 
 This path is powerful, but easier to misuse than `emplace()` or `scoped_write()`.

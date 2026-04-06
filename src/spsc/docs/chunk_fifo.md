@@ -155,7 +155,7 @@ These wrappers inherit most of their API from `fifo` / `fifo_view`, but the payl
 
 - `claim`, `try_claim`
 - `publish`, `try_publish`
-- `publish(n)`, `try_publish(n)` for region-style production
+- `publish(unsafe, n)`, `try_publish(unsafe, n)` for region-style production
 
 The producer usually:
 

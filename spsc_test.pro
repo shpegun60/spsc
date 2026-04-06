@@ -1,49 +1,14 @@
-QT       += core gui
-QT += testlib
-CONFIG += console c++20
-TEMPLATE = app
+TEMPLATE = subdirs
+CONFIG += ordered
 
-greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
+SUBDIRS += \
+    test_shadow_off \
+    test_shadow_on \
+    test_shadow_heur \
+    launcher
 
-CONFIG += c++17
-
-# You can make your code fail to compile if it uses deprecated APIs.
-# In order to do so, uncomment the following line.
-#DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
-
-include(src/spsc/spsc.pri)
-
-SOURCES += \
-    main.cpp \
-    mainwindow.cpp \
-    test_suite_registry.cpp \
-    src/chunk_test.cpp \
-    src/latest_test.cpp \
-    src/pool_view_test.cpp \
-    src/fifo_test.cpp \
-    src/fifo_view_test.cpp \
-    src/pool_test.cpp \
-    src/queue_test.cpp \
-    src/typed_pool_test.cpp
-
-HEADERS += \
-    mainwindow.h \
-    test_suite_registry.h \
-    basic_types.h \
-    macro.h \
-    src/chunk_test.h \
-    src/queue_test.h \
-    src/latest_test.h \
-    src/pool_view_test.h \
-    src/fifo_test.h \
-    src/fifo_view_test.h \
-    src/pool_test.h \
-    src/typed_pool_test.h
-
-FORMS += \
-    mainwindow.ui
-
-# Default rules for deployment.
-qnx: target.path = /tmp/$${TARGET}/bin
-else: unix:!android: target.path = /opt/$${TARGET}/bin
-!isEmpty(target.path): INSTALLS += target
+test_shadow_off.file = qmake/test_shadow_off.pro
+test_shadow_on.file = qmake/test_shadow_on.pro
+test_shadow_heur.file = qmake/test_shadow_heur.pro
+launcher.file = qmake/launcher.pro
+launcher.depends = test_shadow_off test_shadow_on test_shadow_heur

@@ -661,16 +661,18 @@ public:
         return true;
     }
 
-    RB_FORCEINLINE void publish(const size_type n) noexcept {
+    RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(can_write(n));
         Base::advance_head(n);
     }
 
-    [[nodiscard]] RB_FORCEINLINE bool try_publish(const size_type n) noexcept {
+    [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!can_write(n))) { return false; }
         Base::advance_head(n);
         return true;
     }
+    void publish(const size_type) noexcept = delete;
+    [[nodiscard]] bool try_publish(const size_type) noexcept = delete;
 
     // --------------------------------------------------------------------------
     // Raw Buffer Push API
@@ -887,7 +889,7 @@ public:
 
         ~bulk_write_guard() noexcept {
             if (p_ != nullptr && written_ != 0u && publish_on_destroy_) {
-                p_->publish(written_);
+                p_->publish(::spsc::unsafe, written_);
             }
         }
 
@@ -963,7 +965,7 @@ public:
 
         void commit() noexcept {
             if (p_ != nullptr && written_ != 0u) {
-                p_->publish(written_);
+                p_->publish(::spsc::unsafe, written_);
             }
             reset_();
         }

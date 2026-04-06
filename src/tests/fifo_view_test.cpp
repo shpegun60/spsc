@@ -1,4 +1,10 @@
+#include "test_config.hpp"
+
+#if SPSC_TESTS_WITH_QT
+
 #include <QtTest>
+
+#include "test_build_config.hpp"
 
 #include <array>
 #include <atomic>
@@ -304,10 +310,10 @@ static void api_compile_smoke() {
 
         decltype(std::declval<Q&>().claim()),
         decltype(std::declval<Q&>().publish()),
-        decltype(std::declval<Q&>().publish(reg{1u})),
+        decltype(std::declval<Q&>().publish(::spsc::unsafe, reg{1u})),
         decltype(std::declval<Q&>().try_claim()),
         decltype(std::declval<Q&>().try_publish()),
-        decltype(std::declval<Q&>().try_publish(reg{1u})),
+        decltype(std::declval<Q&>().try_publish(::spsc::unsafe, reg{1u})),
         decltype(std::declval<Q&>().claim_write()),
         decltype(std::declval<Q&>().claim_write(reg{1u})),
         decltype(std::declval<Q&>().claim_write(::spsc::unsafe)),
@@ -331,6 +337,8 @@ static void api_compile_smoke() {
 
         state_t
         > _api{};
+    static_assert(!requires(Q& q) { q.publish(reg{1u}); });
+    static_assert(!requires(Q& q) { q.try_publish(reg{1u}); });
 
     using WG = decltype(std::declval<Q&>().scoped_write());
     using RG = decltype(std::declval<Q&>().scoped_read());
@@ -519,7 +527,7 @@ static void test_claim_publish(Q& q) {
 
     {
         const reg too_big = q.free() + reg{1u};
-        QVERIFY(!q.try_publish(too_big));
+        QVERIFY(!q.try_publish(::spsc::unsafe, too_big));
         QVERIFY(q.empty());
     }
 
@@ -534,7 +542,7 @@ static void test_claim_publish(Q& q) {
         for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
 
-        QVERIFY(q.try_publish(wr.total));
+        QVERIFY(q.try_publish(::spsc::unsafe, wr.total));
         QCOMPARE(q.size(), n);
 
         auto rr = q.claim_read(reg{10u});
@@ -627,7 +635,7 @@ static void test_bulk_regions(Q& q) {
         for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
 
-        q.publish(wr.total);
+        q.publish(::spsc::unsafe, wr.total);
         QCOMPARE(q.size(), wr.total);
     }
 
@@ -677,10 +685,10 @@ static void test_bulk_regions(Q& q) {
         for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
 
-        q.publish(reg{0u});
+        q.publish(::spsc::unsafe, reg{0u});
         QCOMPARE(q.size(), reg{0u});
 
-        q.publish(K);
+        q.publish(::spsc::unsafe, K);
         QCOMPARE(q.size(), K);
 
         auto rr = q.claim_read(reg{10u});
@@ -711,7 +719,7 @@ static void test_bulk_regions(Q& q) {
         int v = 700;
         for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
-        q.publish(N);
+        q.publish(::spsc::unsafe, N);
         QCOMPARE(q.size(), N);
 
         auto rr = q.claim_read(N);
@@ -1077,7 +1085,7 @@ static void paranoid_random_fuzz(Q& q, int seed, int iters) {
             for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
             for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
 
-            q.publish(wr.total);
+            q.publish(::spsc::unsafe, wr.total);
             for (reg i = 0; i < wr.total; ++i) model.push_back(base + static_cast<int>(i));
         } break;
 
@@ -2445,7 +2453,7 @@ static void run_threaded_bulk_regions_suite(const char* name) {
             }
 
             if (written != 0u) {
-                q.publish(written);
+                q.publish(::spsc::unsafe, written);
             }
         }
 
@@ -3040,7 +3048,10 @@ static void death_tests_debug_only_suite() {
 class tst_fifo_view_api_paranoid final : public QObject {
     Q_OBJECT
 private slots:
-    void initTestCase() { api_compile_smoke_all(); }
+    void initTestCase() {
+        SPSC_TEST_VERIFY_BUILD_CONFIG("fifo_view");
+        api_compile_smoke_all();
+    }
 
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
@@ -3196,3 +3207,5 @@ int run_tst_fifo_view_api_paranoid(int argc, char** argv)
 }
 
 #include "fifo_view_test.moc"
+
+#endif // SPSC_TESTS_WITH_QT

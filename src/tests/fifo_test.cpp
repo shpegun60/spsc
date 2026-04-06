@@ -1,3 +1,7 @@
+#include "test_config.hpp"
+
+#if SPSC_TESTS_WITH_QT
+
 /*
  * fifo_test.cpp
  *
@@ -15,6 +19,8 @@
  */
 
 #include <QtTest/QtTest>
+
+#include "test_build_config.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -419,8 +425,8 @@ static void api_compile_smoke() {
         decltype(std::declval<Q&>().try_claim()),
         decltype(std::declval<Q&>().publish()),
         decltype(std::declval<Q&>().try_publish()),
-        decltype(std::declval<Q&>().publish(size_type{1u})),
-        decltype(std::declval<Q&>().try_publish(size_type{1u})),
+        decltype(std::declval<Q&>().publish(::spsc::unsafe, size_type{1u})),
+        decltype(std::declval<Q&>().try_publish(::spsc::unsafe, size_type{1u})),
 
         decltype(std::declval<Q&>().front()),
         decltype(std::declval<const Q&>().front()),
@@ -464,6 +470,8 @@ static void api_compile_smoke() {
         decltype(std::declval<const Q&>().crbegin()),
         decltype(std::declval<const Q&>().crend())
         > _api{};
+    static_assert(!requires(Q& q) { q.publish(size_type{1u}); });
+    static_assert(!requires(Q& q) { q.try_publish(size_type{1u}); });
 
     if constexpr (has_resize<Q>::value) {
         [[maybe_unused]] type_pack<decltype(std::declval<Q&>().resize(size_type{2u}))> _resize{};
@@ -902,14 +910,14 @@ static void test_claim_publish(Q& q) {
     // publish(0) must be a no-op
     {
         const auto sz = q.size();
-        q.publish(reg{0u});
+        q.publish(::spsc::unsafe, reg{0u});
         QCOMPARE(q.size(), sz);
     }
 
     // try_publish(0) must succeed and be a no-op
     {
         const auto sz = q.size();
-        QVERIFY(q.try_publish(reg{0u}));
+        QVERIFY(q.try_publish(::spsc::unsafe, reg{0u}));
         QCOMPARE(q.size(), sz);
     }
 
@@ -934,14 +942,14 @@ static void test_claim_publish(Q& q) {
     q.pop();
     QVERIFY(q.empty());
 
-    // try_publish(n) failure path
+    // try_publish(unsafe, n) failure path
     {
         const reg too_big = q.free() + reg{1u};
-        QVERIFY(!q.try_publish(too_big));
+        QVERIFY(!q.try_publish(::spsc::unsafe, too_big));
         QVERIFY(q.empty());
     }
 
-    // try_publish(n) runtime path via bulk claim_write
+    // try_publish(unsafe, n) runtime path via bulk claim_write
     {
         const reg n = reg{4u};
         QVERIFY(q.free() >= n);
@@ -953,7 +961,7 @@ static void test_claim_publish(Q& q) {
         for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
 
-        QVERIFY(q.try_publish(wr.total));
+        QVERIFY(q.try_publish(::spsc::unsafe, wr.total));
         QCOMPARE(q.size(), n);
 
         auto rr = q.claim_read(::spsc::unsafe, reg{10u});
@@ -1086,7 +1094,7 @@ static void test_bulk_regions(Q& q) {
         for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
 
-        q.publish(wr.total);
+        q.publish(::spsc::unsafe, wr.total);
         QCOMPARE(q.size(), wr.total);
     }
 
@@ -1141,10 +1149,10 @@ static void test_bulk_regions(Q& q) {
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
 
         // publish(0) must not change size
-        q.publish(reg{0u});
+        q.publish(::spsc::unsafe, reg{0u});
         QCOMPARE(q.size(), reg{0u});
 
-        q.publish(K);
+        q.publish(::spsc::unsafe, K);
         QCOMPARE(q.size(), K);
 
         auto rr = q.claim_read(::spsc::unsafe, reg{10u});
@@ -1177,7 +1185,7 @@ static void test_bulk_regions(Q& q) {
         int v = 700;
         for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
         for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
-        q.publish(N);
+        q.publish(::spsc::unsafe, N);
         QCOMPARE(q.size(), N);
 
         auto rr = q.claim_read(::spsc::unsafe, N);
@@ -1584,7 +1592,7 @@ static void paranoid_random_fuzz(Q& q, int seed, int iters) {
             for (reg i = 0; i < wr.first.count; ++i) wr.first.ptr[i] = Traced{v++};
             for (reg i = 0; i < wr.second.count; ++i) wr.second.ptr[i] = Traced{v++};
 
-            q.publish(wr.total);
+            q.publish(::spsc::unsafe, wr.total);
             for (reg i = 0; i < wr.total; ++i) model.push_back(base + static_cast<int>(i));
         } break;
 
@@ -2362,7 +2370,7 @@ static void run_threaded_bulk_regions_suite(const char* name) {
             }
 
             if (written != 0u) {
-                q.publish(written);
+                q.publish(::spsc::unsafe, written);
             }
         }
 
@@ -2616,7 +2624,7 @@ static void run_state_machine_fuzz(const bool dynamic) {
                 wr.second.ptr[i] = Tracked{x};
                 model.push_back(x);
             }
-            q.publish(wr.total);
+            q.publish(::spsc::unsafe, wr.total);
             break;
         }
         case FuzzOp::TryPop: {
@@ -2795,7 +2803,7 @@ static void bulk_regions_max_count_suite(Q& q) {
         wr.second.ptr[i] = v++;
     }
 
-    q.publish(wr.total);
+    q.publish(::spsc::unsafe, wr.total);
     QCOMPARE(q.size(), limit);
     check_fifo_exact_u32(q, 1u, static_cast<std::uint32_t>(limit));
 }
@@ -3258,7 +3266,7 @@ static void regression_matrix_one_policy() {
                 wr.second.ptr[i] = v++;
             }
 
-            q.publish(wr.total);
+            q.publish(::spsc::unsafe, wr.total);
             QCOMPARE(q.size(), cap);
             QVERIFY(q.full());
 
@@ -3333,7 +3341,7 @@ static void api_compile_smoke_one() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_pop()), bool>);
 
     static_assert(std::is_void_v<decltype(std::declval<Q&>().publish())>);
-    static_assert(std::is_void_v<decltype(std::declval<Q&>().publish(size_type{1u}))>);
+    static_assert(std::is_void_v<decltype(std::declval<Q&>().publish(::spsc::unsafe, size_type{1u}))>);
     static_assert(std::is_void_v<decltype(std::declval<Q&>().pop())>);
     static_assert(std::is_void_v<decltype(std::declval<Q&>().pop(size_type{1u}))>);
 
@@ -3421,7 +3429,10 @@ static void death_tests_debug_only_suite() {
 class tst_fifo_api_paranoid final : public QObject {
     Q_OBJECT
 private slots:
-    void initTestCase() { api_compile_smoke_all(); }
+    void initTestCase() {
+        SPSC_TEST_VERIFY_BUILD_CONFIG("fifo");
+        api_compile_smoke_all();
+    }
 
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
@@ -3574,3 +3585,5 @@ int run_tst_fifo_api_paranoid(int argc, char** argv)
 }
 
 #include "fifo_test.moc"
+
+#endif // SPSC_TESTS_WITH_QT

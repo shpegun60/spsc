@@ -1,3 +1,7 @@
+#include "test_config.hpp"
+
+#if SPSC_TESTS_WITH_QT
+
 /*
  * pool_view_test.cpp
  *
@@ -14,6 +18,8 @@
  */
 
 #include <QtTest/QtTest>
+
+#include "test_build_config.hpp"
 
 #include <algorithm>
 #include <array>
@@ -309,8 +315,8 @@ static void api_compile_smoke() {
         decltype(std::declval<Q&>().claim()),
         decltype(std::declval<Q&>().try_publish()),
         decltype(std::declval<Q&>().publish()),
-        decltype(std::declval<Q&>().try_publish(reg{1u})),
-        decltype(std::declval<Q&>().publish(reg{1u})),
+        decltype(std::declval<Q&>().try_publish(::spsc::unsafe, reg{1u})),
+        decltype(std::declval<Q&>().publish(::spsc::unsafe, reg{1u})),
         decltype(std::declval<Q&>().try_front()),
         decltype(std::declval<const Q&>().try_front()),
         decltype(std::declval<Q&>().front()),
@@ -359,6 +365,8 @@ static void api_compile_smoke() {
         >;
 
     [[maybe_unused]] smoke_pack smoke{};
+    static_assert(!requires(Q& q) { q.publish(reg{1u}); });
+    static_assert(!requires(Q& q) { q.try_publish(reg{1u}); });
     [[maybe_unused]] state_t st{};
     [[maybe_unused]] snapshot_t s1{};
     [[maybe_unused]] const_snapshot_t s2{};
@@ -933,7 +941,7 @@ static void test_bulk_regions(spsc::pool_view<Cap, Policy>& q, void** slots_base
             store_to_slot(dst, b);
         }
 
-        QVERIFY(q.try_publish(wr.total));
+        QVERIFY(q.try_publish(::spsc::unsafe, wr.total));
         verify_invariants(q);
     }
 
@@ -1040,7 +1048,7 @@ static void test_bulk_regions(spsc::pool_view<0, Policy>& q, void** slots_base, 
             store_to_slot(dst, b);
         }
 
-        QVERIFY(q.try_publish(wr.total));
+        QVERIFY(q.try_publish(::spsc::unsafe, wr.total));
         verify_invariants(q);
     }
 
@@ -1366,7 +1374,7 @@ static void paranoid_random_fuzz(Q& q, std::uint32_t seed, int iters) {
             QCOMPARE(wr.total, reg{1u});
             void* dst = wr.first.ptr[0];
             store_to_slot(dst, b);
-            QVERIFY(q.try_publish(1u));
+            QVERIFY(q.try_publish(::spsc::unsafe, 1u));
         }
         ref.push_back(b);
     };
@@ -1528,7 +1536,7 @@ static void test_two_thread_spsc_pool_view(Q& q,
                         store_to_slot(dst, &m, sizeof(SeqMsg));
                     }
 
-                    if (!q.try_publish(wr.total)) {
+                    if (!q.try_publish(::spsc::unsafe, wr.total)) {
                         record_fail(1, seq);
                         break;
                     }
@@ -1854,7 +1862,7 @@ static void test_null_slot_pointer_defense_static() {
     std::mt19937 rng(0x1111u);
     QVERIFY(!q.try_push(make_blob(1u, rng)));
     QVERIFY(!q.try_publish());
-    QVERIFY(!q.try_publish(reg{1u}));
+    QVERIFY(!q.try_publish(::spsc::unsafe, reg{1u}));
     verify_invariants(q);
     QVERIFY(q.empty());
 
@@ -1888,7 +1896,7 @@ static void test_null_slot_pointer_defense_dynamic() {
     std::mt19937 rng(0x2222u);
     QVERIFY(!q.try_push(make_blob(2u, rng)));
     QVERIFY(!q.try_publish());
-    QVERIFY(!q.try_publish(reg{1u}));
+    QVERIFY(!q.try_publish(::spsc::unsafe, reg{1u}));
 
     const auto wr = q.claim_write(1u);
     QCOMPARE(wr.total, reg{1u});
@@ -2303,6 +2311,10 @@ static void run_threaded_suite() {
 class tst_pool_view_api_paranoid final : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase() {
+        SPSC_TEST_VERIFY_BUILD_CONFIG("pool_view");
+    }
+
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
     void static_atomic_A()   { run_static_suite<spsc::policy::A<>>(); }
@@ -2324,3 +2336,5 @@ int run_tst_pool_view_api_paranoid(int argc, char** argv)
 }
 
 #include "pool_view_test.moc"
+
+#endif // SPSC_TESTS_WITH_QT

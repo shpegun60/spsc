@@ -1,3 +1,7 @@
+#include "test_config.hpp"
+
+#if SPSC_TESTS_WITH_QT
+
 // latest_test.cpp
 // Paranoid API/contract test for spsc::latest.
 //
@@ -14,6 +18,8 @@
 //  - The test intentionally does a lot of redundant checking; it's a contract tripwire.
 
 #include <QtTest/QtTest>
+
+#include "test_build_config.hpp"
 
 #include <QCoreApplication>
 #include <QProcess>
@@ -2269,6 +2275,7 @@ class tst_latest_api_paranoid : public QObject {
 
 private slots:
     void initTestCase() {
+        SPSC_TEST_VERIFY_BUILD_CONFIG("latest");
         // Basic compile-time sanity.
         static_assert(std::is_same_v<decltype(std::declval<spsc::latest<Blob, 0u>&>().try_pop()), bool>);
         static_assert(std::is_same_v<decltype(std::declval<spsc::latest<void, 0u>&>().try_pop()), bool>);
@@ -2513,3 +2520,5 @@ int run_tst_latest_api_paranoid(int argc, char** argv) {
 }
 
 #include "latest_test.moc"
+
+#endif // SPSC_TESTS_WITH_QT
