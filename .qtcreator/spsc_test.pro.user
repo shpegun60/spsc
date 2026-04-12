@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 18.0.2, 2026-04-06T15:51:25. -->
+<!-- Written by QtCreator 18.0.2, 2026-04-12T20:17:35. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -71,20 +71,7 @@
     <value type="bool" key="AutoTest.Framework.QtTest">true</value>
    </valuemap>
    <value type="bool" key="AutoTest.ApplyFilter">false</value>
-   <valuemap type="QVariantMap" key="AutoTest.CheckStates">
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/chunk_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/fifo_test.cpp:cleanupTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/fifo_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/fifo_view_test.cpp:cleanupTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/fifo_view_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/latest_test.cpp:cleanupTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/latest_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/pool_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/pool_view_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/queue_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/typed_pool_test.cpp:cleanupTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/typed_pool_test.cpp:initTestCase">Unchecked</value>
-   </valuemap>
+   <valuemap type="QVariantMap" key="AutoTest.CheckStates"/>
    <valuelist type="QVariantList" key="AutoTest.PathFilters"/>
    <value type="int" key="AutoTest.RunAfterBuild">0</value>
    <value type="bool" key="AutoTest.UseGlobal">true</value>
