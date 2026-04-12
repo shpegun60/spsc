@@ -31,6 +31,8 @@
 #  define SPSC_ASSERT(expr) do { if(!(expr)) { std::abort(); } } while(0)
 #endif
 
+#include "test_policy_matrix.hpp"
+
 #include "fifo_view.hpp"
 
 // This test intentionally instantiates/uses the entire public API surface of
@@ -113,6 +115,7 @@ struct Runner_ {
     Runner_() {
         const char* mode = std::getenv("SPSC_FIFO_VIEW_DEATH");
         if (mode && *mode) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
             run_case_(mode);
         }
     }
@@ -2525,6 +2528,35 @@ static void api_compile_smoke_all() {
     api_compile_smoke<QA>();
     api_compile_smoke<QCA>();
     api_compile_smoke<QD>();
+
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        api_compile_smoke<spsc::fifo_view<Traced, 16u, Policy>>();
+        api_compile_smoke<spsc::fifo_view<Traced, 0u, Policy>>();
+    });
+}
+
+static void extended_policy_smoke_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        run_static_suite<Policy>();
+        run_dynamic_suite<Policy>();
+    });
+}
+
+static void extended_policy_threaded_atomic_like_suite() {
+    run_threaded_suite<spsc::policy::FA<>>();
+    run_threaded_suite<spsc::policy::AA<>>();
+    run_threaded_suite<spsc::policy::CFA<>>();
+    run_threaded_suite<spsc::policy::CAA<>>();
+
+    run_threaded_snapshot_suite<spsc::policy::FA<>>("threaded_snapshot_fast_atomic");
+    run_threaded_snapshot_suite<spsc::policy::AA<>>("threaded_snapshot_atomic_atomic");
+    run_threaded_snapshot_suite<spsc::policy::CFA<>>("threaded_snapshot_cached_fast_atomic");
+    run_threaded_snapshot_suite<spsc::policy::CAA<>>("threaded_snapshot_cached_atomic_atomic");
+
+    run_threaded_bulk_regions_suite<spsc::policy::FA<>>("threaded_fifo_view_bulk_fast_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::AA<>>("threaded_fifo_view_bulk_atomic_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::CFA<>>("threaded_fifo_view_bulk_cached_fast_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::CAA<>>("threaded_fifo_view_bulk_cached_atomic_atomic");
 }
 
 static void allocator_accounting_suite() {
@@ -2903,9 +2935,10 @@ static void dynamic_move_contract_suite() {
     QVERIFY(dst.empty());
 }
 
-static void stress_cached_ca_transitions_suite() {
-    using QD = spsc::fifo_view<std::uint32_t, 0u, spsc::policy::CA<>>;
-    using QS = spsc::fifo_view<std::uint32_t, 64u, spsc::policy::CA<>>;
+template <class Policy>
+static void stress_cached_policy_transitions_suite() {
+    using QD = spsc::fifo_view<std::uint32_t, 0u, Policy>;
+    using QS = spsc::fifo_view<std::uint32_t, 64u, Policy>;
 
     {
         std::array<std::uint32_t, 64u> a_buf{};
@@ -2941,33 +2974,29 @@ static void stress_cached_ca_transitions_suite() {
     }
 }
 
+template <class Policy>
+static void regression_matrix_one_policy() {
+    test_shadow_sync_regressions<spsc::fifo_view<Traced, 16u, Policy>>();
+    test_shadow_sync_regressions<spsc::fifo_view<Traced, 0u, Policy>>();
+
+    test_shadow_full_swap_move_claim_regression_static<Policy>();
+    test_shadow_full_swap_move_claim_regression_dynamic<Policy>();
+
+    test_shadow_adopt_overwrite_regression_static<Policy>();
+    test_shadow_adopt_overwrite_regression_dynamic<Policy>();
+}
+
 static void regression_matrix_all() {
-    test_shadow_sync_regressions<spsc::fifo_view<Traced, 16u, spsc::policy::P>>();
-    test_shadow_sync_regressions<spsc::fifo_view<Traced, 16u, spsc::policy::V>>();
-    test_shadow_sync_regressions<spsc::fifo_view<Traced, 16u, spsc::policy::A<>>>();
-    test_shadow_sync_regressions<spsc::fifo_view<Traced, 16u, spsc::policy::CA<>>>();
-    test_shadow_sync_regressions<spsc::fifo_view<Traced, 0u, spsc::policy::P>>();
-    test_shadow_sync_regressions<spsc::fifo_view<Traced, 0u, spsc::policy::V>>();
-    test_shadow_sync_regressions<spsc::fifo_view<Traced, 0u, spsc::policy::A<>>>();
-    test_shadow_sync_regressions<spsc::fifo_view<Traced, 0u, spsc::policy::CA<>>>();
+    regression_matrix_one_policy<spsc::policy::P>();
+    regression_matrix_one_policy<spsc::policy::V>();
+    regression_matrix_one_policy<spsc::policy::A<>>();
+    regression_matrix_one_policy<spsc::policy::CA<>>();
+}
 
-    test_shadow_full_swap_move_claim_regression_static<spsc::policy::P>();
-    test_shadow_full_swap_move_claim_regression_static<spsc::policy::V>();
-    test_shadow_full_swap_move_claim_regression_static<spsc::policy::A<>>();
-    test_shadow_full_swap_move_claim_regression_static<spsc::policy::CA<>>();
-    test_shadow_full_swap_move_claim_regression_dynamic<spsc::policy::P>();
-    test_shadow_full_swap_move_claim_regression_dynamic<spsc::policy::V>();
-    test_shadow_full_swap_move_claim_regression_dynamic<spsc::policy::A<>>();
-    test_shadow_full_swap_move_claim_regression_dynamic<spsc::policy::CA<>>();
-
-    test_shadow_adopt_overwrite_regression_static<spsc::policy::P>();
-    test_shadow_adopt_overwrite_regression_static<spsc::policy::V>();
-    test_shadow_adopt_overwrite_regression_static<spsc::policy::A<>>();
-    test_shadow_adopt_overwrite_regression_static<spsc::policy::CA<>>();
-    test_shadow_adopt_overwrite_regression_dynamic<spsc::policy::P>();
-    test_shadow_adopt_overwrite_regression_dynamic<spsc::policy::V>();
-    test_shadow_adopt_overwrite_regression_dynamic<spsc::policy::A<>>();
-    test_shadow_adopt_overwrite_regression_dynamic<spsc::policy::CA<>>();
+static void extended_policy_regression_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        regression_matrix_one_policy<Policy>();
+    });
 }
 
 static void lifecycle_traced_suite() {
@@ -3008,6 +3037,7 @@ static void state_machine_fuzz_sweep_suite() {
 
 static void death_tests_debug_only_suite() {
 #if !defined(NDEBUG)
+    QString blockedReason;
     auto expect_death = [&](const char* mode) {
         QProcess p;
         p.setProgram(QCoreApplication::applicationFilePath());
@@ -3018,26 +3048,57 @@ static void death_tests_debug_only_suite() {
         p.setProcessEnvironment(env);
 
         p.start();
-        QVERIFY2(p.waitForStarted(1500), "Death child failed to start.");
-
+        const bool started = p.waitForStarted(1500);
+#if defined(Q_OS_WIN)
+        if (!started) {
+            const QString err = p.errorString();
+            if (p.error() == QProcess::FailedToStart
+                || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                return;
+            }
+            QVERIFY2(false, qPrintable(QStringLiteral("Death child failed to start: %1").arg(err)));
+        }
+#else
+        QVERIFY2(started, "Death child failed to start.");
+#endif
         if (!p.waitForFinished(8000)) {
+#if defined(Q_OS_WIN)
+            const QString err = p.errorString();
+            if (p.error() == QProcess::FailedToStart
+                || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                return;
+            }
+#endif
             p.kill();
             QVERIFY2(false, "Death child did not finish (possible crash dialog)." );
         }
 
         const int code = p.exitCode();
-        QVERIFY2(code == spsc_fifo_view_death_detail::kDeathExitCode,
-                 "Expected assertion death (SIGABRT -> kDeathExitCode)." );
+        const QString detail =
+            QStringLiteral("Expected assertion death (SIGABRT -> kDeathExitCode). exit=%1 status=%2 error=%3")
+                .arg(code)
+                .arg(static_cast<int>(p.exitStatus()))
+                .arg(p.errorString());
+        QVERIFY2(code == spsc_fifo_view_death_detail::kDeathExitCode, qPrintable(detail));
     };
 
-    expect_death("pop_empty");
-    expect_death("front_empty");
-    expect_death("publish_full");
-    expect_death("claim_full");
-    expect_death("bulk_double_emplace_next");
-    expect_death("bulk_arm_publish_unwritten");
-    expect_death("consume_foreign_snapshot");
-    expect_death("pop_n_too_many");
+#define SPSC_EXPECT_DEATH_CASE(mode_literal) \
+    do { expect_death(mode_literal); if (!blockedReason.isEmpty()) { QSKIP(qPrintable(blockedReason)); } } while (0)
+
+    SPSC_EXPECT_DEATH_CASE("pop_empty");
+    SPSC_EXPECT_DEATH_CASE("front_empty");
+    SPSC_EXPECT_DEATH_CASE("publish_full");
+    SPSC_EXPECT_DEATH_CASE("claim_full");
+    SPSC_EXPECT_DEATH_CASE("bulk_double_emplace_next");
+    SPSC_EXPECT_DEATH_CASE("bulk_arm_publish_unwritten");
+    SPSC_EXPECT_DEATH_CASE("consume_foreign_snapshot");
+    SPSC_EXPECT_DEATH_CASE("pop_n_too_many");
+
+#undef SPSC_EXPECT_DEATH_CASE
 #else
     QSKIP("Death tests are debug-only (assertions disabled)." );
 #endif
@@ -3057,6 +3118,7 @@ private slots:
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
     void static_atomic_A()   { run_static_suite<spsc::policy::A<>>(); }
     void static_cached_CA()  { run_static_suite<spsc::policy::CA<>>(); }
+    void extended_policy_smoke() { extended_policy_smoke_suite(); }
 
     void dynamic_plain_P()    { run_dynamic_suite<spsc::policy::P>(); }
     void dynamic_volatile_V() { run_dynamic_suite<spsc::policy::V>(); }
@@ -3078,6 +3140,7 @@ private slots:
     void threaded_snapshot_cached_CA() {
         run_threaded_snapshot_suite<spsc::policy::CA<>>("threaded_snapshot_cached");
     }
+    void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }
 
     void allocator_accounting() { allocator_accounting_suite(); }
 
@@ -3192,7 +3255,13 @@ private slots:
     }
 
     void alignment_sweep() { alignment_sweep_all(); }
-    void stress_cached_ca_transitions() { stress_cached_ca_transitions_suite(); }
+    void stress_cached_ca_transitions() { stress_cached_policy_transitions_suite<spsc::policy::CA<>>(); }
+    void extended_policy_regression() {
+        extended_policy_regression_suite();
+        ::spsc::test::for_each_extended_cached_policy([]<class Policy>() {
+            stress_cached_policy_transitions_suite<Policy>();
+        });
+    }
     void regression_matrix() { regression_matrix_all(); }
     void api_smoke() { api_compile_smoke_all(); }
     void death_tests_debug_only() { death_tests_debug_only_suite(); }

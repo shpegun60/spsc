@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 18.0.2, 2026-02-10T00:07:00. -->
+<!-- Written by QtCreator 18.0.2, 2026-04-06T15:51:25. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -72,34 +72,18 @@
    </valuemap>
    <value type="bool" key="AutoTest.ApplyFilter">false</value>
    <valuemap type="QVariantMap" key="AutoTest.CheckStates">
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/fifo_test.cpp:cleanupTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/fifo_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/fifo_view_test.cpp:cleanupTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/fifo_view_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/latest_test.cpp:cleanupTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/latest_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_128">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_256">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_32">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_align_alloc_64">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:alignment_default_alloc">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:death_tests_debug_only">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_atomic_A">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_cached_CA">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_capacity_sweep">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_plain_P">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:dynamic_volatile_V">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:static_atomic_A">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:static_cached_CA">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:static_plain_P">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:static_volatile_V">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:threaded_atomic_A">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:threaded_cached_CA">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/pool_test.cpp:tst_pool_api_paranoid">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/queue_test.cpp:initTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/typed_pool_test.cpp:cleanupTestCase">Unchecked</value>
-    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/typed_pool_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/chunk_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/fifo_test.cpp:cleanupTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/fifo_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/fifo_view_test.cpp:cleanupTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/fifo_view_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/latest_test.cpp:cleanupTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/latest_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/pool_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/pool_view_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/queue_test.cpp:initTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/typed_pool_test.cpp:cleanupTestCase">Unchecked</value>
+    <value type="Qt::CheckState" key="1@C:/Users/admin/Documents/my_workspace/Qt/spsc_test/src/tests/typed_pool_test.cpp:initTestCase">Unchecked</value>
    </valuemap>
    <valuelist type="QVariantList" key="AutoTest.PathFilters"/>
    <value type="int" key="AutoTest.RunAfterBuild">0</value>
@@ -194,7 +178,7 @@
      <value type="QString" key="PerfRecordArgsId">-e cpu-cycles --call-graph &quot;dwarf,4096&quot; -F 250</value>
      <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
      <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:</value>
-     <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/spsc_test.pro</value>
+     <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/qmake/launcher.pro</value>
      <value type="bool" key="ProjectExplorer.RunConfiguration.Customized">false</value>
      <value type="QString" key="ProjectExplorer.RunConfiguration.UniqueId"></value>
      <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
@@ -202,7 +186,67 @@
      <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
      <value type="QString" key="RunConfiguration.WorkingDirectory.default">%{RunConfig:Executable:Path}</value>
     </valuemap>
-    <value type="qlonglong" key="ProjectExplorer.Target.RunConfigurationCount">1</value>
+    <valuemap type="QVariantMap" key="ProjectExplorer.Target.RunConfiguration.1">
+     <value type="bool" key="Analyzer.Perf.Settings.UseGlobalSettings">true</value>
+     <value type="bool" key="Analyzer.QmlProfiler.Settings.UseGlobalSettings">true</value>
+     <value type="int" key="Analyzer.Valgrind.Callgrind.CostFormat">0</value>
+     <value type="bool" key="Analyzer.Valgrind.Settings.UseGlobalSettings">true</value>
+     <valuelist type="QVariantList" key="CustomOutputParsers"/>
+     <value type="int" key="PE.EnvironmentAspect.Base">2</value>
+     <valuelist type="QVariantList" key="PE.EnvironmentAspect.Changes"/>
+     <value type="bool" key="PE.EnvironmentAspect.PrintOnRun">false</value>
+     <value type="QString" key="PerfRecordArgsId">-e cpu-cycles --call-graph &quot;dwarf,4096&quot; -F 250</value>
+     <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
+     <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:</value>
+     <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/qmake/test_shadow_heur.pro</value>
+     <value type="bool" key="ProjectExplorer.RunConfiguration.Customized">false</value>
+     <value type="QString" key="ProjectExplorer.RunConfiguration.UniqueId"></value>
+     <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
+     <value type="bool" key="RunConfiguration.UseLibrarySearchPath">true</value>
+     <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
+     <value type="QString" key="RunConfiguration.WorkingDirectory.default">%{RunConfig:Executable:Path}</value>
+    </valuemap>
+    <valuemap type="QVariantMap" key="ProjectExplorer.Target.RunConfiguration.2">
+     <value type="bool" key="Analyzer.Perf.Settings.UseGlobalSettings">true</value>
+     <value type="bool" key="Analyzer.QmlProfiler.Settings.UseGlobalSettings">true</value>
+     <value type="int" key="Analyzer.Valgrind.Callgrind.CostFormat">0</value>
+     <value type="bool" key="Analyzer.Valgrind.Settings.UseGlobalSettings">true</value>
+     <valuelist type="QVariantList" key="CustomOutputParsers"/>
+     <value type="int" key="PE.EnvironmentAspect.Base">2</value>
+     <valuelist type="QVariantList" key="PE.EnvironmentAspect.Changes"/>
+     <value type="bool" key="PE.EnvironmentAspect.PrintOnRun">false</value>
+     <value type="QString" key="PerfRecordArgsId">-e cpu-cycles --call-graph &quot;dwarf,4096&quot; -F 250</value>
+     <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
+     <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:</value>
+     <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/qmake/test_shadow_off.pro</value>
+     <value type="bool" key="ProjectExplorer.RunConfiguration.Customized">false</value>
+     <value type="QString" key="ProjectExplorer.RunConfiguration.UniqueId"></value>
+     <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
+     <value type="bool" key="RunConfiguration.UseLibrarySearchPath">true</value>
+     <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
+     <value type="QString" key="RunConfiguration.WorkingDirectory.default">%{RunConfig:Executable:Path}</value>
+    </valuemap>
+    <valuemap type="QVariantMap" key="ProjectExplorer.Target.RunConfiguration.3">
+     <value type="bool" key="Analyzer.Perf.Settings.UseGlobalSettings">true</value>
+     <value type="bool" key="Analyzer.QmlProfiler.Settings.UseGlobalSettings">true</value>
+     <value type="int" key="Analyzer.Valgrind.Callgrind.CostFormat">0</value>
+     <value type="bool" key="Analyzer.Valgrind.Settings.UseGlobalSettings">true</value>
+     <valuelist type="QVariantList" key="CustomOutputParsers"/>
+     <value type="int" key="PE.EnvironmentAspect.Base">2</value>
+     <valuelist type="QVariantList" key="PE.EnvironmentAspect.Changes"/>
+     <value type="bool" key="PE.EnvironmentAspect.PrintOnRun">false</value>
+     <value type="QString" key="PerfRecordArgsId">-e cpu-cycles --call-graph &quot;dwarf,4096&quot; -F 250</value>
+     <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
+     <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:</value>
+     <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/qmake/test_shadow_on.pro</value>
+     <value type="bool" key="ProjectExplorer.RunConfiguration.Customized">false</value>
+     <value type="QString" key="ProjectExplorer.RunConfiguration.UniqueId"></value>
+     <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
+     <value type="bool" key="RunConfiguration.UseLibrarySearchPath">true</value>
+     <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
+     <value type="QString" key="RunConfiguration.WorkingDirectory.default">%{RunConfig:Executable:Path}</value>
+    </valuemap>
+    <value type="qlonglong" key="ProjectExplorer.Target.RunConfigurationCount">4</value>
     <value type="int" key="Qt4ProjectManager.Qt4BuildConfiguration.BuildConfiguration">2</value>
    </valuemap>
    <value type="qlonglong" key="ProjectExplorer.Target.BuildConfigurationCount">1</value>
@@ -231,7 +275,7 @@
     <value type="QString" key="PerfRecordArgsId">-e cpu-cycles --call-graph &quot;dwarf,4096&quot; -F 250</value>
     <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
     <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:</value>
-    <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/spsc_test.pro</value>
+    <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/qmake/launcher.pro</value>
     <value type="bool" key="ProjectExplorer.RunConfiguration.Customized">false</value>
     <value type="QString" key="ProjectExplorer.RunConfiguration.UniqueId"></value>
     <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
@@ -239,7 +283,67 @@
     <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
     <value type="QString" key="RunConfiguration.WorkingDirectory.default">%{RunConfig:Executable:Path}</value>
    </valuemap>
-   <value type="qlonglong" key="ProjectExplorer.Target.RunConfigurationCount">1</value>
+   <valuemap type="QVariantMap" key="ProjectExplorer.Target.RunConfiguration.1">
+    <value type="bool" key="Analyzer.Perf.Settings.UseGlobalSettings">true</value>
+    <value type="bool" key="Analyzer.QmlProfiler.Settings.UseGlobalSettings">true</value>
+    <value type="int" key="Analyzer.Valgrind.Callgrind.CostFormat">0</value>
+    <value type="bool" key="Analyzer.Valgrind.Settings.UseGlobalSettings">true</value>
+    <valuelist type="QVariantList" key="CustomOutputParsers"/>
+    <value type="int" key="PE.EnvironmentAspect.Base">2</value>
+    <valuelist type="QVariantList" key="PE.EnvironmentAspect.Changes"/>
+    <value type="bool" key="PE.EnvironmentAspect.PrintOnRun">false</value>
+    <value type="QString" key="PerfRecordArgsId">-e cpu-cycles --call-graph &quot;dwarf,4096&quot; -F 250</value>
+    <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
+    <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:</value>
+    <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/qmake/test_shadow_heur.pro</value>
+    <value type="bool" key="ProjectExplorer.RunConfiguration.Customized">false</value>
+    <value type="QString" key="ProjectExplorer.RunConfiguration.UniqueId"></value>
+    <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
+    <value type="bool" key="RunConfiguration.UseLibrarySearchPath">true</value>
+    <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
+    <value type="QString" key="RunConfiguration.WorkingDirectory.default">%{RunConfig:Executable:Path}</value>
+   </valuemap>
+   <valuemap type="QVariantMap" key="ProjectExplorer.Target.RunConfiguration.2">
+    <value type="bool" key="Analyzer.Perf.Settings.UseGlobalSettings">true</value>
+    <value type="bool" key="Analyzer.QmlProfiler.Settings.UseGlobalSettings">true</value>
+    <value type="int" key="Analyzer.Valgrind.Callgrind.CostFormat">0</value>
+    <value type="bool" key="Analyzer.Valgrind.Settings.UseGlobalSettings">true</value>
+    <valuelist type="QVariantList" key="CustomOutputParsers"/>
+    <value type="int" key="PE.EnvironmentAspect.Base">2</value>
+    <valuelist type="QVariantList" key="PE.EnvironmentAspect.Changes"/>
+    <value type="bool" key="PE.EnvironmentAspect.PrintOnRun">false</value>
+    <value type="QString" key="PerfRecordArgsId">-e cpu-cycles --call-graph &quot;dwarf,4096&quot; -F 250</value>
+    <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
+    <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:</value>
+    <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/qmake/test_shadow_off.pro</value>
+    <value type="bool" key="ProjectExplorer.RunConfiguration.Customized">false</value>
+    <value type="QString" key="ProjectExplorer.RunConfiguration.UniqueId"></value>
+    <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
+    <value type="bool" key="RunConfiguration.UseLibrarySearchPath">true</value>
+    <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
+    <value type="QString" key="RunConfiguration.WorkingDirectory.default">%{RunConfig:Executable:Path}</value>
+   </valuemap>
+   <valuemap type="QVariantMap" key="ProjectExplorer.Target.RunConfiguration.3">
+    <value type="bool" key="Analyzer.Perf.Settings.UseGlobalSettings">true</value>
+    <value type="bool" key="Analyzer.QmlProfiler.Settings.UseGlobalSettings">true</value>
+    <value type="int" key="Analyzer.Valgrind.Callgrind.CostFormat">0</value>
+    <value type="bool" key="Analyzer.Valgrind.Settings.UseGlobalSettings">true</value>
+    <valuelist type="QVariantList" key="CustomOutputParsers"/>
+    <value type="int" key="PE.EnvironmentAspect.Base">2</value>
+    <valuelist type="QVariantList" key="PE.EnvironmentAspect.Changes"/>
+    <value type="bool" key="PE.EnvironmentAspect.PrintOnRun">false</value>
+    <value type="QString" key="PerfRecordArgsId">-e cpu-cycles --call-graph &quot;dwarf,4096&quot; -F 250</value>
+    <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
+    <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:</value>
+    <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">C:/Users/admin/Documents/my_workspace/Qt/spsc_test/qmake/test_shadow_on.pro</value>
+    <value type="bool" key="ProjectExplorer.RunConfiguration.Customized">false</value>
+    <value type="QString" key="ProjectExplorer.RunConfiguration.UniqueId"></value>
+    <value type="bool" key="RunConfiguration.UseCppDebuggerAuto">true</value>
+    <value type="bool" key="RunConfiguration.UseLibrarySearchPath">true</value>
+    <value type="bool" key="RunConfiguration.UseQmlDebuggerAuto">true</value>
+    <value type="QString" key="RunConfiguration.WorkingDirectory.default">%{RunConfig:Executable:Path}</value>
+   </valuemap>
+   <value type="qlonglong" key="ProjectExplorer.Target.RunConfigurationCount">4</value>
   </valuemap>
  </data>
  <data>

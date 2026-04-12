@@ -48,6 +48,8 @@
 #  define SPSC_ASSERT(expr) do { if(!(expr)) { std::abort(); } } while(0)
 #endif
 
+#include "test_policy_matrix.hpp"
+
 #include "queue.hpp"
 
 
@@ -209,6 +211,7 @@ struct Runner_ {
     Runner_() {
         const char* mode = std::getenv("SPSC_QUEUE_DEATH");
         if (mode && *mode) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
             run_case_(mode);
         }
     }
@@ -2115,6 +2118,119 @@ static void run_threaded_bulk_regions_suite(const char* name) {
     q.destroy();
 }
 
+static void extended_policy_compile_smoke_all() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        api_smoke_compile<spsc::queue<Blob, kSmallCap, Policy>>();
+        api_smoke_compile<spsc::queue<Tracked, 0u, Policy>>();
+    });
+}
+
+static void extended_policy_smoke_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        run_static_suite<Policy>();
+        run_dynamic_suite<Policy>();
+    });
+}
+
+static void extended_policy_regression_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        run_state_machine_fuzz<Policy>(false);
+        run_state_machine_fuzz<Policy>(true);
+    });
+}
+
+static void extended_policy_threaded_atomic_like_suite() {
+    run_threaded_suite<spsc::policy::FA<>>("threaded_queue_fast_atomic");
+    run_threaded_suite<spsc::policy::AA<>>("threaded_queue_atomic_atomic");
+    run_threaded_suite<spsc::policy::CFA<>>("threaded_queue_cached_fast_atomic");
+    run_threaded_suite<spsc::policy::CAA<>>("threaded_queue_cached_atomic_atomic");
+
+    run_threaded_snapshot_suite<spsc::policy::FA<>>("threaded_snapshot_fast_atomic");
+    run_threaded_snapshot_suite<spsc::policy::AA<>>("threaded_snapshot_atomic_atomic");
+    run_threaded_snapshot_suite<spsc::policy::CFA<>>("threaded_snapshot_cached_fast_atomic");
+    run_threaded_snapshot_suite<spsc::policy::CAA<>>("threaded_snapshot_cached_atomic_atomic");
+
+    run_threaded_bulk_regions_suite<spsc::policy::FA<>>("threaded_queue_bulk_fast_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::AA<>>("threaded_queue_bulk_atomic_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::CFA<>>("threaded_queue_bulk_cached_fast_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::CAA<>>("threaded_queue_bulk_cached_atomic_atomic");
+}
+
+template <class Policy>
+static void stress_cached_policy_transitions_suite() {
+    using QS = spsc::queue<std::uint32_t, 64u, Policy>;
+    using QD = spsc::queue<std::uint32_t, 0u, Policy>;
+
+    {
+        QS a;
+        QS b;
+
+        for (std::uint32_t i = 1; i <= 17; ++i) {
+            QVERIFY(a.try_push(i));
+        }
+        for (std::uint32_t i = 100; i < 121; ++i) {
+            QVERIFY(b.try_push(i));
+        }
+
+        a.swap(b);
+
+        QCOMPARE(a.front(), std::uint32_t{100});
+        QCOMPARE(b.front(), std::uint32_t{1});
+
+        full_empty_cycle_u32(a, 1000u);
+        full_empty_cycle_u32(b, 2000u);
+    }
+
+    {
+        QS src;
+        for (std::uint32_t i = 1; i <= 33; ++i) {
+            QVERIFY(src.try_push(i));
+        }
+
+        QS dst(std::move(src));
+        QCOMPARE(dst.size(), reg{33});
+
+        full_empty_cycle_u32(dst, 3000u);
+    }
+
+    {
+        QS a;
+        QS b;
+
+        for (std::uint32_t i = 10; i < 30; ++i) {
+            QVERIFY(a.try_push(i));
+        }
+        for (std::uint32_t i = 200; i < 210; ++i) {
+            QVERIFY(b.try_push(i));
+        }
+
+        a = std::move(b);
+
+        QCOMPARE(a.front(), std::uint32_t{200});
+        full_empty_cycle_u32(a, 4000u);
+    }
+
+    {
+        QD q;
+
+        QVERIFY(q.resize(64));
+        for (std::uint32_t i = 1; i <= 48; ++i) {
+            QVERIFY(q.try_push(i));
+        }
+
+        QVERIFY(q.resize(128));
+        full_empty_cycle_u32(q, 5000u);
+
+        QVERIFY(q.resize(64));
+        for (std::uint32_t i = 1; i <= 10; ++i) {
+            QVERIFY(q.try_push(6000u + i));
+        }
+
+        QVERIFY(q.resize(16));
+        full_empty_cycle_u32(q, 7000u);
+    }
+}
+
 class tst_queue_api_paranoid : public QObject {
     Q_OBJECT
 
@@ -2124,6 +2240,7 @@ private slots:
         // Compile-time smoke for representative instantiations.
         api_smoke_compile<spsc::queue<Blob, kSmallCap, spsc::policy::P>>();
         api_smoke_compile<spsc::queue<Tracked, 0, spsc::policy::A<>>>();
+        extended_policy_compile_smoke_all();
     }
 
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
@@ -2135,6 +2252,8 @@ private slots:
     void dynamic_volatile_V() { run_dynamic_suite<spsc::policy::V>(); }
     void dynamic_atomic_A()   { run_dynamic_suite<spsc::policy::A<>>(); }
     void dynamic_cached_CA()  { run_dynamic_suite<spsc::policy::CA<>>(); }
+
+    void extended_policy_smoke() { extended_policy_smoke_suite(); }
 
     void deterministic_interleaving() {
         spsc::queue<Tracked, 64, spsc::policy::P> q;
@@ -2149,6 +2268,7 @@ private slots:
 
     void threaded_snapshot_atomic_A()  { run_threaded_snapshot_suite<spsc::policy::A<>>("threaded_snapshot_atomic"); }
     void threaded_snapshot_cached_CA() { run_threaded_snapshot_suite<spsc::policy::CA<>>("threaded_snapshot_cached"); }
+    void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }
 
     void allocator_accounting() {
         using Q = spsc::queue<Tracked, 0, spsc::policy::P, CountingAlignedAlloc<std::byte, alignof(Tracked)>>;
@@ -2261,6 +2381,7 @@ private slots:
         run_state_machine_fuzz<spsc::policy::P>(true);
         run_state_machine_fuzz<spsc::policy::CA<>>(true);
     }
+    void extended_policy_regression() { extended_policy_regression_suite(); }
 
     void resize_migration_order() {
         using Q = spsc::queue<Tracked, 0, spsc::policy::P>;
@@ -2560,86 +2681,11 @@ private slots:
     }
 
 
-    void stress_cached_ca_transitions() {
-        using QS = spsc::queue<std::uint32_t, 64u, spsc::policy::CA<>>;
-        using QD = spsc::queue<std::uint32_t, 0u, spsc::policy::CA<>>;
-
-        // Swap: non-empty <-> non-empty, then immediately: push-to-full + pop-to-empty.
-        {
-            QS a;
-            QS b;
-
-            for (std::uint32_t i = 1; i <= 17; ++i) {
-                QVERIFY(a.try_push(i));
-            }
-            for (std::uint32_t i = 100; i < 121; ++i) {
-                QVERIFY(b.try_push(i));
-            }
-
-            a.swap(b);
-
-            QCOMPARE(a.front(), std::uint32_t{100});
-            QCOMPARE(b.front(), std::uint32_t{1});
-
-            full_empty_cycle_u32(a, 1000u);
-            full_empty_cycle_u32(b, 2000u);
-        }
-
-        // Move ctor: source non-empty.
-        {
-            QS src;
-            for (std::uint32_t i = 1; i <= 33; ++i) {
-                QVERIFY(src.try_push(i));
-            }
-
-            QS dst(std::move(src));
-            QCOMPARE(dst.size(), reg{33});
-
-            full_empty_cycle_u32(dst, 3000u);
-        }
-
-        // Move assign into non-empty.
-        {
-            QS a;
-            QS b;
-
-            for (std::uint32_t i = 10; i < 30; ++i) {
-                QVERIFY(a.try_push(i));
-            }
-            for (std::uint32_t i = 200; i < 210; ++i) {
-                QVERIFY(b.try_push(i));
-            }
-
-            a = std::move(b);
-
-            QCOMPARE(a.front(), std::uint32_t{200});
-            full_empty_cycle_u32(a, 4000u);
-        }
-
-        // Resize migration: grow then shrink, always followed by a full->empty cycle.
-        {
-            QD q;
-
-            QVERIFY(q.resize(64));
-            for (std::uint32_t i = 1; i <= 48; ++i) {
-                QVERIFY(q.try_push(i));
-            }
-
-            QVERIFY(q.resize(128));
-            full_empty_cycle_u32(q, 5000u);
-
-            QVERIFY(q.resize(64));
-            for (std::uint32_t i = 1; i <= 10; ++i) {
-                QVERIFY(q.try_push(6000u + i));
-            }
-
-            QVERIFY(q.resize(16));
-            full_empty_cycle_u32(q, 7000u);
-        }
-    }
+    void stress_cached_ca_transitions() { stress_cached_policy_transitions_suite<spsc::policy::CA<>>(); }
 
     void death_tests_debug_only() {
 #if !defined(NDEBUG)
+        QString blockedReason;
         auto expect_death = [&](const char* mode) {
             QProcess p;
             p.setProgram(QCoreApplication::applicationFilePath());
@@ -2650,27 +2696,59 @@ private slots:
             p.setProcessEnvironment(env);
 
             p.start();
-            QVERIFY2(p.waitForStarted(1500), "Death child failed to start.");
-
+            const bool started = p.waitForStarted(1500);
+#if defined(Q_OS_WIN)
+            if (!started) {
+                const QString err = p.errorString();
+                if (p.error() == QProcess::FailedToStart
+                    || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                    || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                    blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                    return;
+                }
+                QVERIFY2(false, qPrintable(QStringLiteral("Death child failed to start: %1").arg(err)));
+            }
+#else
+            QVERIFY2(started, "Death child failed to start.");
+#endif
             if (!p.waitForFinished(8000)) {
+#if defined(Q_OS_WIN)
+                const QString err = p.errorString();
+                if (p.error() == QProcess::FailedToStart
+                    || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                    || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                    blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                    return;
+                }
+#endif
                 p.kill();
                 QVERIFY2(false, "Death child did not finish (possible crash dialog)." );
             }
 
             const int code = p.exitCode();
-            QVERIFY2(code == spsc_queue_death_detail::kDeathExitCode, "Expected assertion death (SIGABRT -> kDeathExitCode)." );
+            const QString detail =
+                QStringLiteral("Expected assertion death (SIGABRT -> kDeathExitCode). exit=%1 status=%2 error=%3")
+                    .arg(code)
+                    .arg(static_cast<int>(p.exitStatus()))
+                    .arg(p.errorString());
+            QVERIFY2(code == spsc_queue_death_detail::kDeathExitCode, qPrintable(detail));
         };
 
-        expect_death("pop_empty");
-        expect_death("front_empty");
-        expect_death("publish_full");
-        expect_death("claim_full");
-        expect_death("double_emplace");
-        expect_death("commit_unconstructed");
-        expect_death("bulk_double_emplace_next");
-        expect_death("bulk_arm_publish_unconstructed");
-        expect_death("consume_foreign_snapshot");
-        expect_death("pop_n_too_many");
+#define SPSC_EXPECT_DEATH_CASE(mode_literal) \
+        do { expect_death(mode_literal); if (!blockedReason.isEmpty()) { QSKIP(qPrintable(blockedReason)); } } while (0)
+
+        SPSC_EXPECT_DEATH_CASE("pop_empty");
+        SPSC_EXPECT_DEATH_CASE("front_empty");
+        SPSC_EXPECT_DEATH_CASE("publish_full");
+        SPSC_EXPECT_DEATH_CASE("claim_full");
+        SPSC_EXPECT_DEATH_CASE("double_emplace");
+        SPSC_EXPECT_DEATH_CASE("commit_unconstructed");
+        SPSC_EXPECT_DEATH_CASE("bulk_double_emplace_next");
+        SPSC_EXPECT_DEATH_CASE("bulk_arm_publish_unconstructed");
+        SPSC_EXPECT_DEATH_CASE("consume_foreign_snapshot");
+        SPSC_EXPECT_DEATH_CASE("pop_n_too_many");
+
+#undef SPSC_EXPECT_DEATH_CASE
 #else
         QSKIP("Death tests are debug-only (assertions disabled)." );
 #endif

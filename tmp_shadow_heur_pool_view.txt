@@ -1,0 +1,20 @@
+********* Start testing of tst_pool_view_api_paranoid *********
+Config: Using QtTest library 6.10.1, Qt 6.10.1 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 13.1.0), windows 11
+QINFO  : tst_pool_view_api_paranoid::initTestCase() [spsc-test-config] suite=pool_view variant=shadow_heur macros{enable_shadow=1 allow_32bit=0 refresh_heuristic=1} effective{reg_bits=64 atomic_A_shadow=1 cached_CA_shadow=1}
+PASS   : tst_pool_view_api_paranoid::initTestCase()
+PASS   : tst_pool_view_api_paranoid::static_plain_P()
+PASS   : tst_pool_view_api_paranoid::static_volatile_V()
+PASS   : tst_pool_view_api_paranoid::static_atomic_A()
+PASS   : tst_pool_view_api_paranoid::static_cached_CA()
+PASS   : tst_pool_view_api_paranoid::extended_policy_smoke()
+PASS   : tst_pool_view_api_paranoid::dynamic_plain_P()
+PASS   : tst_pool_view_api_paranoid::dynamic_volatile_V()
+PASS   : tst_pool_view_api_paranoid::dynamic_atomic_A()
+PASS   : tst_pool_view_api_paranoid::dynamic_cached_CA()
+PASS   : tst_pool_view_api_paranoid::extended_policy_regression()
+PASS   : tst_pool_view_api_paranoid::threaded_atomic_A()
+PASS   : tst_pool_view_api_paranoid::threaded_cached_CA()
+PASS   : tst_pool_view_api_paranoid::extended_policy_threaded_atomic_like()
+PASS   : tst_pool_view_api_paranoid::cleanupTestCase()
+Totals: 15 passed, 0 failed, 0 skipped, 0 blacklisted, 282ms
+********* Finished testing of tst_pool_view_api_paranoid *********

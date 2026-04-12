@@ -1,0 +1,18 @@
+********* Start testing of tst_chunk_api_paranoid *********
+Config: Using QtTest library 6.10.1, Qt 6.10.1 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 13.1.0), windows 11
+QINFO  : tst_chunk_api_paranoid::initTestCase() [spsc-test-config] suite=chunk variant=shadow_off macros{enable_shadow=0 allow_32bit=0 refresh_heuristic=0} effective{reg_bits=64 atomic_A_shadow=0 cached_CA_shadow=0}
+PASS   : tst_chunk_api_paranoid::initTestCase()
+PASS   : tst_chunk_api_paranoid::static_contract()
+PASS   : tst_chunk_api_paranoid::dynamic_contract()
+PASS   : tst_chunk_api_paranoid::dynamic_resize_overflow_guard()
+PASS   : tst_chunk_api_paranoid::static_fuzz()
+PASS   : tst_chunk_api_paranoid::dynamic_fuzz()
+PASS   : tst_chunk_api_paranoid::allocator_accounting()
+PASS   : tst_chunk_api_paranoid::alignment_sweep()
+PASS   : tst_chunk_api_paranoid::span_contract()
+QWARN  : tst_chunk_api_paranoid::death_tests_debug_only() QProcess: CreateFile failed. (Access is denied.)
+SKIP   : tst_chunk_api_paranoid::death_tests_debug_only() Death child launch blocked by environment: pipe: The system cannot find the file specified.
+..\..\..\src\tests\chunk_test.cpp(874) : failure location
+PASS   : tst_chunk_api_paranoid::cleanupTestCase()
+Totals: 10 passed, 0 failed, 1 skipped, 0 blacklisted, 16ms
+********* Finished testing of tst_chunk_api_paranoid *********

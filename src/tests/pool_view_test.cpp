@@ -20,6 +20,7 @@
 #include <QtTest/QtTest>
 
 #include "test_build_config.hpp"
+#include "test_policy_matrix.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2306,6 +2307,33 @@ static void run_threaded_suite() {
     }
 }
 
+static void extended_policy_smoke_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        run_static_suite<Policy>();
+        run_dynamic_suite<Policy>();
+    });
+}
+
+static void extended_policy_regression_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        test_shadow_swap_move_regression_static<Policy>();
+        test_shadow_swap_move_regression_dynamic<Policy>();
+        test_null_slot_pointer_defense_static<Policy>();
+        test_null_slot_pointer_defense_dynamic<Policy>();
+        test_reject_corrupt_state_static<Policy>();
+        test_reject_corrupt_state_dynamic<Policy>();
+        test_alignment_sweep_static<Policy>();
+        test_alignment_sweep_dynamic<Policy>();
+    });
+}
+
+static void extended_policy_threaded_atomic_like_suite() {
+    run_threaded_suite<spsc::policy::FA<>>();
+    run_threaded_suite<spsc::policy::AA<>>();
+    run_threaded_suite<spsc::policy::CFA<>>();
+    run_threaded_suite<spsc::policy::CAA<>>();
+}
+
 } // namespace
 
 class tst_pool_view_api_paranoid final : public QObject {
@@ -2319,14 +2347,17 @@ private slots:
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
     void static_atomic_A()   { run_static_suite<spsc::policy::A<>>(); }
     void static_cached_CA()  { run_static_suite<spsc::policy::CA<>>(); }
+    void extended_policy_smoke() { extended_policy_smoke_suite(); }
 
     void dynamic_plain_P()    { run_dynamic_suite<spsc::policy::P>(); }
     void dynamic_volatile_V() { run_dynamic_suite<spsc::policy::V>(); }
     void dynamic_atomic_A()   { run_dynamic_suite<spsc::policy::A<>>(); }
     void dynamic_cached_CA()  { run_dynamic_suite<spsc::policy::CA<>>(); }
+    void extended_policy_regression() { extended_policy_regression_suite(); }
 
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>(); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>(); }
+    void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }
 };
 
 int run_tst_pool_view_api_paranoid(int argc, char** argv)

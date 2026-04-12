@@ -1,0 +1,38 @@
+********* Start testing of tst_latest_api_paranoid *********
+Config: Using QtTest library 6.10.1, Qt 6.10.1 (x86_64-little_endian-llp64 shared (dynamic) release build; by GCC 13.1.0), windows 11
+QINFO  : tst_latest_api_paranoid::initTestCase() [spsc-test-config] suite=latest variant=shadow_on macros{enable_shadow=1 allow_32bit=0 refresh_heuristic=0} effective{reg_bits=64 atomic_A_shadow=1 cached_CA_shadow=1}
+PASS   : tst_latest_api_paranoid::initTestCase()
+PASS   : tst_latest_api_paranoid::static_plain_P()
+PASS   : tst_latest_api_paranoid::static_volatile_V()
+PASS   : tst_latest_api_paranoid::static_atomic_A()
+PASS   : tst_latest_api_paranoid::static_cached_CA()
+PASS   : tst_latest_api_paranoid::extended_policy_smoke()
+PASS   : tst_latest_api_paranoid::dynamic_typed_plain_P()
+PASS   : tst_latest_api_paranoid::dynamic_typed_volatile_V()
+PASS   : tst_latest_api_paranoid::dynamic_typed_atomic_A()
+PASS   : tst_latest_api_paranoid::dynamic_typed_cached_CA()
+PASS   : tst_latest_api_paranoid::dynamic_raw_plain_P()
+PASS   : tst_latest_api_paranoid::dynamic_raw_volatile_V()
+PASS   : tst_latest_api_paranoid::dynamic_raw_atomic_A()
+PASS   : tst_latest_api_paranoid::dynamic_raw_cached_CA()
+PASS   : tst_latest_api_paranoid::threaded_atomic_A()
+PASS   : tst_latest_api_paranoid::threaded_cached_CA()
+PASS   : tst_latest_api_paranoid::extended_policy_threaded_atomic_like()
+PASS   : tst_latest_api_paranoid::deterministic_snapshot_interleaving()
+PASS   : tst_latest_api_paranoid::invalid_inputs()
+PASS   : tst_latest_api_paranoid::allocator_accounting()
+PASS   : tst_latest_api_paranoid::state_machine_fuzz_sweep()
+PASS   : tst_latest_api_paranoid::extended_policy_regression()
+PASS   : tst_latest_api_paranoid::move_swap_stress()
+PASS   : tst_latest_api_paranoid::raw_bytes_per_slot()
+PASS   : tst_latest_api_paranoid::reserve_resize_edge_cases_dynamic()
+PASS   : tst_latest_api_paranoid::consume_all_clear_contract()
+PASS   : tst_latest_api_paranoid::move_contracts()
+QWARN  : tst_latest_api_paranoid::death_tests_debug_only() QProcess: CreateFile failed. (Access is denied.)
+SKIP   : tst_latest_api_paranoid::death_tests_debug_only() Death child launch blocked by environment: pipe: The system cannot find the file specified.
+..\..\..\src\tests\latest_test.cpp(2601) : failure location
+PASS   : tst_latest_api_paranoid::alignment_sweep()
+PASS   : tst_latest_api_paranoid::lifecycle_traced()
+PASS   : tst_latest_api_paranoid::cleanupTestCase()
+Totals: 30 passed, 0 failed, 1 skipped, 0 blacklisted, 166ms
+********* Finished testing of tst_latest_api_paranoid *********

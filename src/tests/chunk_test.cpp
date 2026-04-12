@@ -24,6 +24,7 @@
 #include <cstring>
 #include <limits>
 #include <random>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -104,6 +105,7 @@ struct Runner_ {
     Runner_() {
         const char* mode = std::getenv("SPSC_CHUNK_DEATH");
         if (mode && *mode) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
             run_case_(mode);
         }
     }
@@ -817,6 +819,7 @@ private slots:
 
     void death_tests_debug_only() {
 #if !defined(NDEBUG)
+        QString blockedReason;
         auto expect_death = [&](const char* mode) {
             QProcess p;
             p.setProgram(QCoreApplication::applicationFilePath());
@@ -827,28 +830,59 @@ private slots:
             p.setProcessEnvironment(env);
 
             p.start();
-            QVERIFY2(p.waitForStarted(1500), "Death child failed to start.");
-
+            const bool started = p.waitForStarted(1500);
+#if defined(Q_OS_WIN)
+            if (!started) {
+                const QString err = p.errorString();
+                if (p.error() == QProcess::FailedToStart
+                    || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                    || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                    blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                    return;
+                }
+                QVERIFY2(false, qPrintable(QStringLiteral("Death child failed to start: %1").arg(err)));
+            }
+#else
+            QVERIFY2(started, "Death child failed to start.");
+#endif
             if (!p.waitForFinished(8000)) {
+#if defined(Q_OS_WIN)
+                const QString err = p.errorString();
+                if (p.error() == QProcess::FailedToStart
+                    || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                    || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                    blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                    return;
+                }
+#endif
                 p.kill();
                 QVERIFY2(false, "Death child did not finish (possible crash dialog).");
             }
 
             const int code = p.exitCode();
-            QVERIFY2(code == spsc_chunk_death_detail::kDeathExitCode,
-                     "Expected assertion death (SIGABRT -> kDeathExitCode).");
+            const QString detail =
+                QStringLiteral("Expected assertion death (SIGABRT -> kDeathExitCode). exit=%1 status=%2 error=%3")
+                    .arg(code)
+                    .arg(static_cast<int>(p.exitStatus()))
+                    .arg(p.errorString());
+            QVERIFY2(code == spsc_chunk_death_detail::kDeathExitCode, qPrintable(detail));
         };
 
-        expect_death("static_front_empty");
-        expect_death("static_back_empty");
-        expect_death("static_pop_back_empty");
-        expect_death("static_push_full");
-        expect_death("static_pop_back_n_too_many");
-        expect_death("static_commit_size_over_cap");
-        expect_death("dynamic_front_empty");
-        expect_death("dynamic_pop_back_empty");
-        expect_death("dynamic_push_without_reserve");
-        expect_death("dynamic_commit_size_over_cap");
+#define SPSC_EXPECT_DEATH_CASE(mode_literal) \
+        do { expect_death(mode_literal); if (!blockedReason.isEmpty()) { QSKIP(qPrintable(blockedReason)); } } while (0)
+
+        SPSC_EXPECT_DEATH_CASE("static_front_empty");
+        SPSC_EXPECT_DEATH_CASE("static_back_empty");
+        SPSC_EXPECT_DEATH_CASE("static_pop_back_empty");
+        SPSC_EXPECT_DEATH_CASE("static_push_full");
+        SPSC_EXPECT_DEATH_CASE("static_pop_back_n_too_many");
+        SPSC_EXPECT_DEATH_CASE("static_commit_size_over_cap");
+        SPSC_EXPECT_DEATH_CASE("dynamic_front_empty");
+        SPSC_EXPECT_DEATH_CASE("dynamic_pop_back_empty");
+        SPSC_EXPECT_DEATH_CASE("dynamic_push_without_reserve");
+        SPSC_EXPECT_DEATH_CASE("dynamic_commit_size_over_cap");
+
+#undef SPSC_EXPECT_DEATH_CASE
 #else
         QSKIP("Death tests are debug-only (assertions disabled).");
 #endif

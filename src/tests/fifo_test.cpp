@@ -50,6 +50,8 @@
 #  define SPSC_ASSERT(expr) do { if(!(expr)) { std::abort(); } } while(0)
 #endif
 
+#include "test_policy_matrix.hpp"
+
 #include "fifo.hpp"
 #include "array_fifo.hpp"
 
@@ -127,6 +129,7 @@ struct Runner_ {
     Runner_() {
         const char* mode = std::getenv("SPSC_FIFO_DEATH");
         if (mode && *mode) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
             run_case_(mode);
         }
     }
@@ -2996,9 +2999,10 @@ static void consume_all_contract_suite() {
     QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
 }
 
-static void stress_cached_ca_transitions_suite() {
-    using QS = spsc::fifo<std::uint32_t, 64u, spsc::policy::CA<>>;
-    using QD = spsc::fifo<std::uint32_t, 0u, spsc::policy::CA<>>;
+template <class Policy>
+static void stress_cached_policy_transitions_suite() {
+    using QS = spsc::fifo<std::uint32_t, 64u, Policy>;
+    using QD = spsc::fifo<std::uint32_t, 0u, Policy>;
 
     {
         QS a;
@@ -3434,6 +3438,10 @@ static void api_compile_smoke_all() {
     api_compile_smoke_one<QA>();
     api_compile_smoke_one<QCA>();
 
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        api_compile_smoke_one<spsc::fifo<Traced, 16u, Policy>>();
+    });
+
     static_assert(std::is_same_v<typename AFPlain::value_type, typename AFPlain::array_type>);
     static_assert(std::is_same_v<typename AFVPlain::value_type, typename AFVPlain::array_type>);
     static_assert(alignof(typename AFCached::value_type) >= ::spsc::hw::cacheline_bytes);
@@ -3444,8 +3452,39 @@ static void api_compile_smoke_all() {
     static_assert((sizeof(typename AFVCached::value_type) % alignof(typename AFVCached::value_type)) == 0u);
 }
 
+static void extended_policy_smoke_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        run_static_suite<Policy>();
+        run_dynamic_suite<Policy>();
+    });
+}
+
+static void extended_policy_regression_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        regression_matrix_one_policy<Policy>();
+    });
+}
+
+static void extended_policy_threaded_atomic_like_suite() {
+    run_threaded_suite<spsc::policy::FA<>>();
+    run_threaded_suite<spsc::policy::AA<>>();
+    run_threaded_suite<spsc::policy::CFA<>>();
+    run_threaded_suite<spsc::policy::CAA<>>();
+
+    run_threaded_snapshot_suite<spsc::policy::FA<>>("threaded_snapshot_fast_atomic");
+    run_threaded_snapshot_suite<spsc::policy::AA<>>("threaded_snapshot_atomic_atomic");
+    run_threaded_snapshot_suite<spsc::policy::CFA<>>("threaded_snapshot_cached_fast_atomic");
+    run_threaded_snapshot_suite<spsc::policy::CAA<>>("threaded_snapshot_cached_atomic_atomic");
+
+    run_threaded_bulk_regions_suite<spsc::policy::FA<>>("threaded_fifo_bulk_fast_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::AA<>>("threaded_fifo_bulk_atomic_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::CFA<>>("threaded_fifo_bulk_cached_fast_atomic");
+    run_threaded_bulk_regions_suite<spsc::policy::CAA<>>("threaded_fifo_bulk_cached_atomic_atomic");
+}
+
 static void death_tests_debug_only_suite() {
 #if !defined(NDEBUG)
+    QString blockedReason;
     auto expect_death = [&](const char* mode) {
         QProcess p;
         p.setProgram(QCoreApplication::applicationFilePath());
@@ -3456,26 +3495,57 @@ static void death_tests_debug_only_suite() {
         p.setProcessEnvironment(env);
 
         p.start();
-        QVERIFY2(p.waitForStarted(1500), "Death child failed to start.");
-
+        const bool started = p.waitForStarted(1500);
+#if defined(Q_OS_WIN)
+        if (!started) {
+            const QString err = p.errorString();
+            if (p.error() == QProcess::FailedToStart
+                || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                return;
+            }
+            QVERIFY2(false, qPrintable(QStringLiteral("Death child failed to start: %1").arg(err)));
+        }
+#else
+        QVERIFY2(started, "Death child failed to start.");
+#endif
         if (!p.waitForFinished(8000)) {
+#if defined(Q_OS_WIN)
+            const QString err = p.errorString();
+            if (p.error() == QProcess::FailedToStart
+                || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                return;
+            }
+#endif
             p.kill();
             QVERIFY2(false, "Death child did not finish (possible crash dialog)." );
         }
 
         const int code = p.exitCode();
-        QVERIFY2(code == spsc_fifo_death_detail::kDeathExitCode,
-                 "Expected assertion death (SIGABRT -> kDeathExitCode)." );
+        const QString detail =
+            QStringLiteral("Expected assertion death (SIGABRT -> kDeathExitCode). exit=%1 status=%2 error=%3")
+                .arg(code)
+                .arg(static_cast<int>(p.exitStatus()))
+                .arg(p.errorString());
+        QVERIFY2(code == spsc_fifo_death_detail::kDeathExitCode, qPrintable(detail));
     };
 
-    expect_death("pop_empty");
-    expect_death("front_empty");
-    expect_death("publish_full");
-    expect_death("claim_full");
-    expect_death("bulk_double_emplace_next");
-    expect_death("bulk_arm_publish_unwritten");
-    expect_death("consume_foreign_snapshot");
-    expect_death("pop_n_too_many");
+#define SPSC_EXPECT_DEATH_CASE(mode_literal) \
+    do { expect_death(mode_literal); if (!blockedReason.isEmpty()) { QSKIP(qPrintable(blockedReason)); } } while (0)
+
+    SPSC_EXPECT_DEATH_CASE("pop_empty");
+    SPSC_EXPECT_DEATH_CASE("front_empty");
+    SPSC_EXPECT_DEATH_CASE("publish_full");
+    SPSC_EXPECT_DEATH_CASE("claim_full");
+    SPSC_EXPECT_DEATH_CASE("bulk_double_emplace_next");
+    SPSC_EXPECT_DEATH_CASE("bulk_arm_publish_unwritten");
+    SPSC_EXPECT_DEATH_CASE("consume_foreign_snapshot");
+    SPSC_EXPECT_DEATH_CASE("pop_n_too_many");
+
+#undef SPSC_EXPECT_DEATH_CASE
 #else
     QSKIP("Death tests are debug-only (assertions disabled)." );
 #endif
@@ -3496,6 +3566,7 @@ private slots:
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
     void static_atomic_A()   { run_static_suite<spsc::policy::A<>>(); }
     void static_cached_CA()  { run_static_suite<spsc::policy::CA<>>(); }
+    void extended_policy_smoke() { extended_policy_smoke_suite(); }
 
     void dynamic_plain_P()    { run_dynamic_suite<spsc::policy::P>(); }
     void dynamic_volatile_V() { run_dynamic_suite<spsc::policy::V>(); }
@@ -3516,6 +3587,7 @@ private slots:
     void threaded_snapshot_cached_CA() {
         run_threaded_snapshot_suite<spsc::policy::CA<>>("threaded_snapshot_cached");
     }
+    void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }
 
     void allocator_accounting() { allocator_accounting_suite(); }
 
@@ -3627,7 +3699,13 @@ private slots:
     }
 
     void alignment_sweep() { alignment_sweep_all(); }
-    void stress_cached_ca_transitions() { stress_cached_ca_transitions_suite(); }
+    void stress_cached_ca_transitions() { stress_cached_policy_transitions_suite<spsc::policy::CA<>>(); }
+    void extended_policy_regression() {
+        extended_policy_regression_suite();
+        ::spsc::test::for_each_extended_cached_policy([]<class Policy>() {
+            stress_cached_policy_transitions_suite<Policy>();
+        });
+    }
     void regression_matrix() { regression_matrix_all(); }
     void api_smoke() { api_compile_smoke_all(); }
     void death_tests_debug_only() { death_tests_debug_only_suite(); }

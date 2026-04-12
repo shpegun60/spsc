@@ -43,6 +43,8 @@
 #  define SPSC_ASSERT(expr) do { if(!(expr)) { std::abort(); } } while(0)
 #endif
 
+#include "test_policy_matrix.hpp"
+
 #include "pool.hpp"
 
 namespace spsc_pool_death_detail {
@@ -156,6 +158,7 @@ struct Runner_ {
     Runner_() {
         const char* mode = std::getenv("SPSC_POOL_DEATH");
         if (mode && *mode) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
             run_case_(mode);
         }
     }
@@ -361,7 +364,16 @@ static void api_compile_smoke_all() {
     api_smoke_compile<SC>();
     api_smoke_compile<DP>();
     api_smoke_compile<DA>();
+
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        api_smoke_compile<spsc::pool<16u, Policy>>();
+        api_smoke_compile<spsc::pool<0u, Policy>>();
+    });
 }
+
+static void extended_policy_smoke_suite();
+static void extended_policy_regression_suite();
+static void extended_policy_threaded_atomic_like_suite();
 
 struct Blob final {
     std::uint32_t seq{0};
@@ -2454,6 +2466,7 @@ static void dynamic_capacity_sweep_suite() {
 
 static void death_tests_debug_only_suite() {
 #if !defined(NDEBUG)
+    QString blockedReason;
     auto expect_death = [&](const char* mode) {
         QProcess p;
         p.setProgram(QCoreApplication::applicationFilePath());
@@ -2464,29 +2477,60 @@ static void death_tests_debug_only_suite() {
         p.setProcessEnvironment(env);
 
         p.start();
-        QVERIFY2(p.waitForStarted(1500), "Death child failed to start.");
-
+        const bool started = p.waitForStarted(1500);
+#if defined(Q_OS_WIN)
+        if (!started) {
+            const QString err = p.errorString();
+            if (p.error() == QProcess::FailedToStart
+                || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                return;
+            }
+            QVERIFY2(false, qPrintable(QStringLiteral("Death child failed to start: %1").arg(err)));
+        }
+#else
+        QVERIFY2(started, "Death child failed to start.");
+#endif
         if (!p.waitForFinished(8000)) {
+#if defined(Q_OS_WIN)
+            const QString err = p.errorString();
+            if (p.error() == QProcess::FailedToStart
+                || err.contains(QStringLiteral("Access is denied"), Qt::CaseInsensitive)
+                || err.contains(QStringLiteral("CreateFile failed"), Qt::CaseInsensitive)) {
+                blockedReason = QStringLiteral("Death child launch blocked by environment: %1").arg(err);
+                return;
+            }
+#endif
             p.kill();
             QVERIFY2(false, "Death child did not finish (possible crash dialog).");
         }
 
         const int code = p.exitCode();
-        QVERIFY2(code == spsc_pool_death_detail::kDeathExitCode,
-                 "Expected assertion death (SIGABRT -> kDeathExitCode).");
+        const QString detail =
+            QStringLiteral("Expected assertion death (SIGABRT -> kDeathExitCode). exit=%1 status=%2 error=%3")
+                .arg(code)
+                .arg(static_cast<int>(p.exitStatus()))
+                .arg(p.errorString());
+        QVERIFY2(code == spsc_pool_death_detail::kDeathExitCode, qPrintable(detail));
     };
 
-    expect_death("pop_empty");
-    expect_death("front_empty");
-    expect_death("publish_full");
-    expect_death("claim_full");
-    expect_death("bulk_arm_publish_unwritten");
-    expect_death("write_guard_arm_without_slot");
-    expect_death("bulk_get_next_without_claim");
-    expect_death("bulk_write_next_null_nonzero");
-    expect_death("consume_foreign_snapshot");
-    expect_death("pop_n_too_many");
-    expect_death("publish_n_too_many");
+#define SPSC_EXPECT_DEATH_CASE(mode_literal) \
+    do { expect_death(mode_literal); if (!blockedReason.isEmpty()) { QSKIP(qPrintable(blockedReason)); } } while (0)
+
+    SPSC_EXPECT_DEATH_CASE("pop_empty");
+    SPSC_EXPECT_DEATH_CASE("front_empty");
+    SPSC_EXPECT_DEATH_CASE("publish_full");
+    SPSC_EXPECT_DEATH_CASE("claim_full");
+    SPSC_EXPECT_DEATH_CASE("bulk_arm_publish_unwritten");
+    SPSC_EXPECT_DEATH_CASE("write_guard_arm_without_slot");
+    SPSC_EXPECT_DEATH_CASE("bulk_get_next_without_claim");
+    SPSC_EXPECT_DEATH_CASE("bulk_write_next_null_nonzero");
+    SPSC_EXPECT_DEATH_CASE("consume_foreign_snapshot");
+    SPSC_EXPECT_DEATH_CASE("pop_n_too_many");
+    SPSC_EXPECT_DEATH_CASE("publish_n_too_many");
+
+#undef SPSC_EXPECT_DEATH_CASE
 #else
     QSKIP("Death tests are debug-only (assertions disabled).");
 #endif
@@ -2510,14 +2554,17 @@ private slots:
     void static_volatile_V();
     void static_atomic_A();
     void static_cached_CA();
+    void extended_policy_smoke();
 
     void dynamic_plain_P();
     void dynamic_volatile_V();
     void dynamic_atomic_A();
     void dynamic_cached_CA();
+    void extended_policy_regression();
 
     void threaded_atomic_A();
     void threaded_cached_CA();
+    void extended_policy_threaded_atomic_like();
 
     void dynamic_capacity_sweep();
     void death_tests_debug_only();
@@ -2768,6 +2815,10 @@ void tst_pool_api_paranoid::dynamic_cached_CA() {
     test_resize_semantics<Q>();
 }
 
+void tst_pool_api_paranoid::extended_policy_smoke() {
+    extended_policy_smoke_suite();
+}
+
 void tst_pool_api_paranoid::threaded_atomic_A() {
     using Qs = ::spsc::pool<kDepth, ::spsc::policy::A<>>;
     {
@@ -2804,13 +2855,126 @@ void tst_pool_api_paranoid::threaded_cached_CA() {
     }
 }
 
+void tst_pool_api_paranoid::extended_policy_threaded_atomic_like() {
+    extended_policy_threaded_atomic_like_suite();
+}
+
 void tst_pool_api_paranoid::dynamic_capacity_sweep() {
     dynamic_capacity_sweep_suite();
+}
+
+void tst_pool_api_paranoid::extended_policy_regression() {
+    extended_policy_regression_suite();
 }
 
 void tst_pool_api_paranoid::death_tests_debug_only() {
     death_tests_debug_only_suite();
 }
+
+namespace {
+
+template <class Policy>
+static void extended_policy_smoke_one() {
+    using QS = ::spsc::pool<kDepth, Policy>;
+    using QD = ::spsc::pool<0u, Policy>;
+
+    test_ctor_contracts<QS>();
+    test_ctor_contracts<QD>();
+
+    if constexpr (::spsc::alloc::policy_allocator_alignment_v<Policy> > 1u) {
+        test_policy_default_round_up_cached<QS>();
+        test_policy_default_round_up_cached<QD>();
+    }
+
+    {
+        QS q(reg{kBufSz});
+        QVERIFY(q.is_valid());
+
+        test_api_coverage_smoke(q);
+        fill_and_drain_basic(q);
+        test_claim_publish_path(q);
+        test_zero_count_contracts(q);
+        test_typed_view_contracts(q);
+        test_bulk_limit_contracts(q);
+        test_raii_guards(q);
+        test_bulk_raii_overloads(q);
+        test_guard_move_semantics(q);
+        fuzz_ops(q);
+    }
+
+    {
+        QD q;
+        ensure_valid(q);
+
+        test_api_coverage_smoke(q);
+        fill_and_drain_basic(q);
+        test_claim_publish_path(q);
+        test_zero_count_contracts(q);
+        test_typed_view_contracts(q);
+        test_bulk_limit_contracts(q);
+        test_raii_guards(q);
+        test_bulk_raii_overloads(q);
+        test_guard_move_semantics(q);
+        fuzz_ops(q);
+        q.destroy();
+    }
+}
+
+template <class Policy>
+static void extended_policy_regression_one() {
+    using QS = ::spsc::pool<kDepth, Policy>;
+    using QD = ::spsc::pool<0u, Policy>;
+
+    test_shadow_swap_regression<QS>();
+    test_wraparound_bulk_regions<QS>();
+    test_copy_move_semantics<QS>();
+    test_resize_semantics<QS>();
+
+    test_shadow_swap_regression<QD>();
+    test_wraparound_bulk_regions<QD>();
+    test_copy_move_semantics<QD>();
+    test_resize_semantics<QD>();
+}
+
+template <class Policy>
+static void run_threaded_policy_suite() {
+    using QS = ::spsc::pool<kDepth, Policy>;
+    {
+        QS q;
+        ensure_valid(q);
+        test_two_thread_spsc(q);
+        verify_invariants(q, "threaded extended static");
+    }
+
+    using QD = ::spsc::pool<0u, Policy>;
+    {
+        QD q;
+        ensure_valid(q);
+        test_two_thread_spsc(q);
+        verify_invariants(q, "threaded extended dynamic");
+    }
+}
+
+static void extended_policy_smoke_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        extended_policy_smoke_one<Policy>();
+    });
+}
+
+static void extended_policy_regression_suite() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+        extended_policy_regression_one<Policy>();
+    });
+}
+
+static void extended_policy_threaded_atomic_like_suite() {
+    run_threaded_policy_suite<spsc::policy::FA<>>();
+    run_threaded_policy_suite<spsc::policy::AA<>>();
+    run_threaded_policy_suite<spsc::policy::CFA<>>();
+    run_threaded_policy_suite<spsc::policy::CAA<>>();
+}
+
+} // namespace
 
 // ------------------------------ Alignment suites ------------------------------
 
