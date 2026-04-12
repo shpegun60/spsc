@@ -844,6 +844,38 @@ static void alignment_typed_dynamic_aligned_alloc() {
     QVERIFY(is_aligned(&q.front(), Align));
 }
 
+static void alignment_typed_cached_contiguous_static() {
+    using Q = spsc::latest<std::uint32_t, 64u, spsc::policy::CA<>>;
+
+    Q q;
+    const auto base = reinterpret_cast<std::uintptr_t>(q.data());
+    const auto next = reinterpret_cast<std::uintptr_t>(q.data() + 1);
+
+    QVERIFY((base % ::spsc::hw::cacheline_bytes) == 0u);
+    QCOMPARE(next - base, static_cast<std::uintptr_t>(sizeof(typename Q::value_type)));
+
+    if constexpr (::spsc::hw::cacheline_bytes > sizeof(typename Q::value_type)) {
+        QVERIFY((next % ::spsc::hw::cacheline_bytes) != 0u);
+    }
+}
+
+static void alignment_typed_cached_contiguous_dynamic() {
+    using Q = spsc::latest<std::uint32_t, 0u, spsc::policy::CA<>>;
+
+    Q q;
+    QVERIFY(q.init(kMedCap));
+
+    const auto base = reinterpret_cast<std::uintptr_t>(q.data());
+    const auto next = reinterpret_cast<std::uintptr_t>(q.data() + 1);
+
+    QVERIFY((base % ::spsc::hw::cacheline_bytes) == 0u);
+    QCOMPARE(next - base, static_cast<std::uintptr_t>(sizeof(typename Q::value_type)));
+
+    if constexpr (::spsc::hw::cacheline_bytes > sizeof(typename Q::value_type)) {
+        QVERIFY((next % ::spsc::hw::cacheline_bytes) != 0u);
+    }
+}
+
 template <class Policy, std::size_t Align>
 static void alignment_raw_dynamic_aligned_alloc() {
     using A = spsc::alloc::aligned_allocator<std::byte, Align, spsc::alloc::fail_mode::returns_null>;
@@ -2472,6 +2504,9 @@ private slots:
 #endif
     }
     void alignment_sweep() {
+        alignment_typed_cached_contiguous_static();
+        alignment_typed_cached_contiguous_dynamic();
+
         // typed dynamic
         alignment_typed_dynamic_default_alloc<spsc::policy::P>();
         alignment_typed_dynamic_default_alloc<spsc::policy::A<>>();

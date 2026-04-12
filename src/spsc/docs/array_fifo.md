@@ -4,6 +4,11 @@ These wrappers are built on top of `fifo` / `fifo_view`, but specialized for fix
 
 They are ideal when the payload is a frame with a compile-time fixed width.
 
+With cache-aligned policies such as `spsc::policy::CA<>`, `array_fifo` and
+`array_fifo_view` promote each frame slot to cache-line alignment so adjacent
+frames do not share a cache line. `carray_fifo_view` keeps its raw `T[Depth][N]`
+layout and does not add per-slot wrapper padding.
+
 ## Main Types
 
 - `array_fifo<T, N, FifoCapacity, Policy, Alloc>`
@@ -41,8 +46,9 @@ if (auto* frame = q.try_claim()) {
 ## `array_fifo_view` Example
 
 ```cpp
-std::array<std::array<std::uint8_t, 64>, 32> backing{};
-spsc::array_fifo_view<std::uint8_t, 64, 32> q{backing};
+using View = spsc::array_fifo_view<std::uint8_t, 64, 32>;
+std::array<View::value_type, 32> backing{};
+View q{backing};
 ```
 
 ## `carray_fifo_view` Example

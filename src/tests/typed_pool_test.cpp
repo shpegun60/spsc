@@ -1562,6 +1562,23 @@ static void alignment_sweep_suite() {
         }
         q.destroy();
     }
+    {
+        spsc::typed_pool<std::uint32_t, 64u, spsc::policy::CA<>> q;
+        QVERIFY(q.is_valid());
+        for (reg i = 0; i < q.capacity(); ++i) {
+            const auto addr = reinterpret_cast<std::uintptr_t>(q.data()[i]);
+            QVERIFY((addr % ::spsc::hw::cacheline_bytes) == 0u);
+        }
+    }
+    {
+        spsc::typed_pool<std::uint32_t, 0u, spsc::policy::CA<>> q;
+        QVERIFY(q.resize(128u));
+        for (reg i = 0; i < q.capacity(); ++i) {
+            const auto addr = reinterpret_cast<std::uintptr_t>(q.data()[i]);
+            QVERIFY((addr % ::spsc::hw::cacheline_bytes) == 0u);
+        }
+        q.destroy();
+    }
 }
 
 static void full_empty_cycle_u32(spsc::typed_pool<std::uint32_t, 64u, spsc::policy::CA<>>& q, std::uint32_t base) {

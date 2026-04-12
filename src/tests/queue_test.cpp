@@ -2526,6 +2526,37 @@ private slots:
             QVERIFY((addr % alignof(Aligned64)) == 0u);
             q.destroy();
         }
+        {
+            using Q = spsc::queue<std::uint32_t, 64u, spsc::policy::CA<>>;
+            Q q;
+            QVERIFY(q.is_valid());
+
+            const auto base = reinterpret_cast<std::uintptr_t>(q.data());
+            const auto next = reinterpret_cast<std::uintptr_t>(q.data() + 1);
+
+            QVERIFY((base % ::spsc::hw::cacheline_bytes) == 0u);
+            QCOMPARE(next - base, static_cast<std::uintptr_t>(sizeof(typename Q::value_type)));
+
+            if constexpr (::spsc::hw::cacheline_bytes > sizeof(typename Q::value_type)) {
+                QVERIFY((next % ::spsc::hw::cacheline_bytes) != 0u);
+            }
+        }
+        {
+            using Q = spsc::queue<std::uint32_t, 0u, spsc::policy::CA<>>;
+            Q q;
+            QVERIFY(q.resize(128u));
+
+            const auto base = reinterpret_cast<std::uintptr_t>(q.data());
+            const auto next = reinterpret_cast<std::uintptr_t>(q.data() + 1);
+
+            QVERIFY((base % ::spsc::hw::cacheline_bytes) == 0u);
+            QCOMPARE(next - base, static_cast<std::uintptr_t>(sizeof(typename Q::value_type)));
+
+            if constexpr (::spsc::hw::cacheline_bytes > sizeof(typename Q::value_type)) {
+                QVERIFY((next % ::spsc::hw::cacheline_bytes) != 0u);
+            }
+            q.destroy();
+        }
     }
 
 

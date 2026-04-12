@@ -33,6 +33,7 @@
 #endif
 
 #include "chunk.hpp"
+#include "chunk_fifo.hpp"
 
 namespace spsc_chunk_death_detail {
 
@@ -190,6 +191,10 @@ static void compare_model_prefix(const Q& q, const std::vector<Blob>& shadow, co
 static void api_smoke_compile() {
     using QS = spsc::chunk<Blob, 8u>;
     using QD = spsc::chunk<Blob, 0u>;
+    using CFPlain = spsc::chunk_fifo<std::uint32_t, 8u, 4u, spsc::policy::P>;
+    using CFCached = spsc::chunk_fifo<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
+    using CFVPlain = spsc::chunk_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::P>;
+    using CFVCached = spsc::chunk_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
 
     static_assert(std::is_copy_constructible_v<QS>);
     static_assert(std::is_copy_assignable_v<QS>);
@@ -213,6 +218,15 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<QD&>().reserve(reg{})), bool>);
     static_assert(std::is_same_v<decltype(std::declval<QD&>().resize(reg{})), bool>);
     static_assert(std::is_same_v<decltype(std::declval<QD&>().try_push(std::declval<Blob>())), bool>);
+
+    static_assert(std::is_same_v<typename CFPlain::value_type, typename CFPlain::chunk_type>);
+    static_assert(std::is_same_v<typename CFVPlain::value_type, typename CFVPlain::chunk_type>);
+    static_assert(alignof(typename CFCached::value_type) >= ::spsc::hw::cacheline_bytes);
+    static_assert(alignof(typename CFVCached::value_type) >= ::spsc::hw::cacheline_bytes);
+    static_assert(std::is_base_of_v<typename CFCached::chunk_type, typename CFCached::value_type>);
+    static_assert(std::is_base_of_v<typename CFVCached::chunk_type, typename CFVCached::value_type>);
+    static_assert((sizeof(typename CFCached::value_type) % alignof(typename CFCached::value_type)) == 0u);
+    static_assert((sizeof(typename CFVCached::value_type) % alignof(typename CFVCached::value_type)) == 0u);
 }
 
 static void static_contract_suite() {
@@ -686,6 +700,48 @@ static void alignment_sweep_suite() {
     }
 }
 
+static void chunk_fifo_alignment_contract_suite() {
+    {
+        using Q = spsc::chunk_fifo<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
+        Q q;
+        QVERIFY(q.is_valid());
+        QVERIFY(is_aligned(q.data(), ::spsc::hw::cacheline_bytes));
+        QVERIFY(is_aligned(q.data() + 1, ::spsc::hw::cacheline_bytes));
+
+        auto* slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        QVERIFY(slot->empty());
+        QVERIFY(slot->try_push(11u));
+        QVERIFY(slot->try_push(22u));
+        QVERIFY(q.try_publish());
+
+        auto* front = q.try_front();
+        QVERIFY(front != nullptr);
+        QCOMPARE(front->front(), std::uint32_t{11u});
+        QCOMPARE(front->back(), std::uint32_t{22u});
+    }
+
+    {
+        using V = spsc::chunk_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
+        std::array<typename V::value_type, 4u> backing{};
+        V q(backing);
+        QVERIFY(q.is_valid());
+        QVERIFY(is_aligned(q.data(), ::spsc::hw::cacheline_bytes));
+        QVERIFY(is_aligned(q.data() + 1, ::spsc::hw::cacheline_bytes));
+
+        auto* slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        QVERIFY(slot->try_push(33u));
+        QVERIFY(slot->try_push(44u));
+        q.publish();
+
+        auto* front = q.try_front();
+        QVERIFY(front != nullptr);
+        QCOMPARE(front->front(), std::uint32_t{33u});
+        QCOMPARE(front->back(), std::uint32_t{44u});
+    }
+}
+
 #if SPSC_HAS_SPAN
 static void span_contract_suite() {
     {
@@ -750,6 +806,7 @@ private slots:
 
     void alignment_sweep() {
         alignment_sweep_suite();
+        chunk_fifo_alignment_contract_suite();
     }
 
 #if SPSC_HAS_SPAN

@@ -7,6 +7,8 @@ The result is a FIFO of logical blocks:
 - each queue slot is one `chunk`
 - each chunk has its own logical size
 - blocks move through the pipeline as queue entries
+- with cache-aligned policies such as `spsc::policy::CA<>`, each slot is promoted
+  to cache-line alignment so adjacent chunks do not share a cache line
 
 ## Main Types
 
@@ -78,8 +80,9 @@ Read the [Quick Start](../README.md) for the top-level initialization overview, 
 Use the view version when the chunk storage is external:
 
 ```cpp
-std::array<spsc::chunk<std::uint16_t, 256>, 8> backing{};
-spsc::chunk_fifo_view<std::uint16_t, 256, 8> q{backing};
+using View = spsc::chunk_fifo_view<std::uint16_t, 256, 8>;
+std::array<View::value_type, 8> backing{};
+View q{backing};
 ```
 
 ## More Example Patterns
@@ -253,8 +256,9 @@ q.consume(snap);
 ### view `attach()` / `state()`
 
 ```cpp
-std::array<spsc::chunk<std::uint16_t, 64>, 8> backing{};
-spsc::chunk_fifo_view<std::uint16_t, 64, 0> view{backing.data(), backing.size()};
+using View = spsc::chunk_fifo_view<std::uint16_t, 64, 0>;
+std::array<View::value_type, 8> backing{};
+View view{backing.data(), backing.size()};
 
 auto st = view.state();
 view.attach(backing.data(), backing.size(), st);

@@ -23,6 +23,7 @@
 #include "test_build_config.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -50,6 +51,7 @@
 #endif
 
 #include "fifo.hpp"
+#include "array_fifo.hpp"
 
 namespace spsc_fifo_death_detail {
 
@@ -3180,6 +3182,49 @@ static void alignment_sweep_all() {
     run_alignment_sweep_dynamic<spsc::policy::V>();
     run_alignment_sweep_dynamic<spsc::policy::A<>>();
     run_alignment_sweep_dynamic<spsc::policy::CA<>>();
+
+    {
+        using Q = spsc::fifo<std::uint32_t, 64u, spsc::policy::CA<>>;
+        Q q;
+        QVERIFY(q.is_valid());
+
+        const auto base = reinterpret_cast<std::uintptr_t>(q.data());
+        const auto next = reinterpret_cast<std::uintptr_t>(q.data() + 1);
+
+        QVERIFY((base % ::spsc::hw::cacheline_bytes) == 0u);
+        QCOMPARE(next - base, static_cast<std::uintptr_t>(sizeof(typename Q::value_type)));
+
+        if constexpr (::spsc::hw::cacheline_bytes > sizeof(typename Q::value_type)) {
+            QVERIFY((next % ::spsc::hw::cacheline_bytes) != 0u);
+        }
+    }
+
+    {
+        using Q = spsc::array_fifo<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
+        Q q;
+        QVERIFY(q.is_valid());
+
+        const auto base = reinterpret_cast<std::uintptr_t>(q.data());
+        const auto next = reinterpret_cast<std::uintptr_t>(q.data() + 1);
+
+        QVERIFY((base % ::spsc::hw::cacheline_bytes) == 0u);
+        QVERIFY((next % ::spsc::hw::cacheline_bytes) == 0u);
+        QCOMPARE(next - base, static_cast<std::uintptr_t>(sizeof(typename Q::value_type)));
+    }
+
+    {
+        using V = spsc::array_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
+        std::array<typename V::value_type, 4u> backing{};
+        V q(backing);
+        QVERIFY(q.is_valid());
+
+        const auto base = reinterpret_cast<std::uintptr_t>(q.data());
+        const auto next = reinterpret_cast<std::uintptr_t>(q.data() + 1);
+
+        QVERIFY((base % ::spsc::hw::cacheline_bytes) == 0u);
+        QVERIFY((next % ::spsc::hw::cacheline_bytes) == 0u);
+        QCOMPARE(next - base, static_cast<std::uintptr_t>(sizeof(typename V::value_type)));
+    }
 }
 
 
@@ -3379,11 +3424,24 @@ static void api_compile_smoke_all() {
     using QV  = spsc::fifo<Traced, 16u, spsc::policy::V>;
     using QA  = spsc::fifo<Traced, 16u, spsc::policy::A<>>;
     using QCA = spsc::fifo<Traced, 16u, spsc::policy::CA<>>;
+    using AFPlain = spsc::array_fifo<std::uint32_t, 8u, 4u, spsc::policy::P>;
+    using AFCached = spsc::array_fifo<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
+    using AFVPlain = spsc::array_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::P>;
+    using AFVCached = spsc::array_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
 
     api_compile_smoke_one<QP>();
     api_compile_smoke_one<QV>();
     api_compile_smoke_one<QA>();
     api_compile_smoke_one<QCA>();
+
+    static_assert(std::is_same_v<typename AFPlain::value_type, typename AFPlain::array_type>);
+    static_assert(std::is_same_v<typename AFVPlain::value_type, typename AFVPlain::array_type>);
+    static_assert(alignof(typename AFCached::value_type) >= ::spsc::hw::cacheline_bytes);
+    static_assert(alignof(typename AFVCached::value_type) >= ::spsc::hw::cacheline_bytes);
+    static_assert(std::is_base_of_v<typename AFCached::array_type, typename AFCached::value_type>);
+    static_assert(std::is_base_of_v<typename AFVCached::array_type, typename AFVCached::value_type>);
+    static_assert((sizeof(typename AFCached::value_type) % alignof(typename AFCached::value_type)) == 0u);
+    static_assert((sizeof(typename AFVCached::value_type) % alignof(typename AFVCached::value_type)) == 0u);
 }
 
 static void death_tests_debug_only_suite() {
