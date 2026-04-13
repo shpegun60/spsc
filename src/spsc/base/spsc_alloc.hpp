@@ -13,6 +13,7 @@
 #include <cstddef>     // std::size_t, std::byte, std::max_align_t, std::ptrdiff_t
 #include <cstring>     // std::memcpy
 #include <limits>      // std::numeric_limits
+#include <memory>      // std::allocator_traits
 #include <new>         // std::nothrow, std::align_val_t
 #include <type_traits> // std::true_type, std::false_type
 
