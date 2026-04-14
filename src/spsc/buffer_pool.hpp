@@ -291,28 +291,34 @@ public:
     explicit buffer_pool(const size_type count) noexcept(kNoexceptAllocate && std::is_nothrow_default_constructible_v<stored_buffer_type>)
     {
         if (count != 0u) {
-            init_ok_ = init_default_(count);
+            (void)init_default_(count);
         }
     }
     ~buffer_pool() noexcept
     {
         destroy();
     }
-    buffer_pool(const buffer_pool& other) { init_ok_ = other.is_valid() ? copy_from_(other) : false; }
+    buffer_pool(const buffer_pool& other)
+    {
+        SPSC_ASSERT(other.is_valid());
+        if (other.is_valid() && (other.count_ != 0u)) {
+            (void)copy_from_(other);
+        }
+    }
     buffer_pool& operator=(const buffer_pool& other)
     {
         if (this == &other) {
             return *this;
         }
 
+        SPSC_ASSERT(other.is_valid());
         if (!other.is_valid()) {
             destroy();
-            init_ok_ = false;
             return *this;
         }
 
-        buffer_pool tmp(other);
-        if (!tmp.is_valid()) {
+        buffer_pool tmp;
+        if ((other.count_ != 0u) && !tmp.copy_from_(other)) {
             return *this;
         }
 
@@ -341,7 +347,6 @@ public:
         if (this != &other) {
             std::swap(buffers_, other.buffers_);
             std::swap(count_, other.count_);
-            std::swap(init_ok_, other.init_ok_);
         }
     }
 
@@ -375,7 +380,6 @@ public:
         destroy();
         buffers_ = new_buffers;
         count_ = count;
-        init_ok_ = true;
         return true;
     }
 
@@ -385,7 +389,6 @@ public:
             SPSC_ASSERT(false && "buffer_pool::destroy(): invalid fixed-buffer state");
             buffers_ = nullptr;
             count_ = 0u;
-            init_ok_ = true;
             return;
         }
 
@@ -395,10 +398,9 @@ public:
         }
 
         count_ = 0u;
-        init_ok_ = true;
     }
 
-    [[nodiscard]] bool is_valid() const noexcept { return init_ok_ && state_ok_(buffers_, count_); }
+    [[nodiscard]] bool is_valid() const noexcept { return state_ok_(buffers_, count_); }
 
     // ------------------------------------------------------------------------------------------
     // Size / Span Introspection
@@ -471,6 +473,7 @@ private:
                              const stored_buffer_type* src,
                              const size_type copy_count) noexcept(std::is_nothrow_copy_assignable_v<stored_buffer_type>)
     {
+        (void)dst_count;
         SPSC_ASSERT(copy_count <= dst_count);
         SPSC_ASSERT((copy_count == 0u) || (dst != nullptr));
         SPSC_ASSERT((copy_count == 0u) || (src != nullptr));
@@ -536,17 +539,14 @@ private:
     {
         buffers_ = other.buffers_;
         count_ = other.count_;
-        init_ok_ = other.init_ok_;
 
         other.buffers_ = nullptr;
         other.count_ = 0u;
-        other.init_ok_ = true;
     }
 
 private:
     stored_buffer_type* buffers_{nullptr};
     size_type count_{0u};
-    bool init_ok_{true};
 };
 
 /* =======================================================================
@@ -616,28 +616,34 @@ public:
         kNoexceptAllocate && std::is_nothrow_default_constructible_v<value_type>)
     {
         if (buffer_size != 0u) {
-            init_ok_ = init_size_(buffer_size);
+            (void)init_size_(buffer_size);
         }
     }
     ~buffer_pool() noexcept
     {
         destroy();
     }
-    buffer_pool(const buffer_pool& other) { init_ok_ = other.is_valid() ? copy_from_(other) : false; }
+    buffer_pool(const buffer_pool& other)
+    {
+        SPSC_ASSERT(other.is_valid());
+        if (other.is_valid() && (other.buffer_size_ != 0u)) {
+            (void)copy_from_(other);
+        }
+    }
     buffer_pool& operator=(const buffer_pool& other)
     {
         if (this == &other) {
             return *this;
         }
 
+        SPSC_ASSERT(other.is_valid());
         if (!other.is_valid()) {
             destroy();
-            init_ok_ = false;
             return *this;
         }
 
-        buffer_pool tmp(other);
-        if (!tmp.is_valid()) {
+        buffer_pool tmp;
+        if ((other.buffer_size_ != 0u) && !tmp.copy_from_(other)) {
             return *this;
         }
 
@@ -666,7 +672,6 @@ public:
         if (this != &other) {
             buffers_.swap(other.buffers_);
             std::swap(buffer_size_, other.buffer_size_);
-            std::swap(init_ok_, other.init_ok_);
         }
     }
 
@@ -700,7 +705,6 @@ public:
         destroy();
         buffers_ = new_buffers;
         buffer_size_ = buffer_size;
-        init_ok_ = true;
         return true;
     }
 
@@ -717,10 +721,9 @@ public:
         }
 
         buffer_size_ = 0u;
-        init_ok_ = true;
     }
 
-    [[nodiscard]] bool is_valid() const noexcept { return init_ok_ && state_ok_(buffers_, buffer_size_); }
+    [[nodiscard]] bool is_valid() const noexcept { return state_ok_(buffers_, buffer_size_); }
 
     // ------------------------------------------------------------------------------------------
     // Size / Span Introspection
@@ -740,20 +743,32 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] pointer data(const size_type index) noexcept { return (is_valid() && (index < Count)) ? buffers_[index] : nullptr; }
     [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (is_valid() && (index < Count)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] pointer operator[](const size_type index) noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < Count); return (is_valid() && (index < Count)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] const_pointer operator[](const size_type index) const noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < Count); return (is_valid() && (index < Count)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] pointer operator[](const size_type index) noexcept
+    {
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(buffer_size_ != 0u);
+        SPSC_ASSERT(index < Count);
+        return (is_valid() && (buffer_size_ != 0u) && (index < Count)) ? buffers_[index] : nullptr;
+    }
+    [[nodiscard]] const_pointer operator[](const size_type index) const noexcept
+    {
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(buffer_size_ != 0u);
+        SPSC_ASSERT(index < Count);
+        return (is_valid() && (buffer_size_ != 0u) && (index < Count)) ? buffers_[index] : nullptr;
+    }
 
 private:
     // ------------------------------------------------------------------------------------------
     // Internal Helpers
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] static bool state_ok_(const std::array<pointer, Count>& slots,
+    [[nodiscard]] static bool state_ok_(const std::array<pointer, Count>& slot_ptrs,
                                         const size_type buffer_size) noexcept
     {
         bool all_null = true;
         bool all_present = true;
 
-        for (const auto ptr : slots) {
+        for (const auto ptr : slot_ptrs) {
             all_null &= (ptr == nullptr);
             all_present &= (ptr != nullptr);
         }
@@ -828,11 +843,11 @@ private:
         return true;
     }
 
-    static void release_all_buffers_(std::array<pointer, Count>& slots, const size_type buffer_size) noexcept
+    static void release_all_buffers_(std::array<pointer, Count>& slot_ptrs, const size_type buffer_size) noexcept
     {
         for (size_type i = 0u; i < Count; ++i) {
-            release_buffer_(slots[i], buffer_size);
-            slots[i] = nullptr;
+            release_buffer_(slot_ptrs[i], buffer_size);
+            slot_ptrs[i] = nullptr;
         }
     }
 
@@ -841,6 +856,7 @@ private:
                              const std::array<pointer, Count>& src,
                              const size_type copy_size) noexcept(std::is_nothrow_copy_assignable_v<value_type>)
     {
+        (void)dst_buffer_size;
         if (copy_size == 0u) {
             return true;
         }
@@ -907,11 +923,9 @@ private:
     {
         buffers_ = other.buffers_;
         buffer_size_ = other.buffer_size_;
-        init_ok_ = other.init_ok_;
 
         other.clear_slots_();
         other.buffer_size_ = 0u;
-        other.init_ok_ = true;
     }
 
     void clear_slots_() noexcept
@@ -930,7 +944,6 @@ private:
 private:
     std::array<pointer, Count> buffers_{};
     size_type buffer_size_{0u};
-    bool init_ok_{true};
 };
 
 /* =======================================================================
@@ -1011,28 +1024,34 @@ public:
         std::is_nothrow_default_constructible_v<value_type>)
     {
         if ((count != 0u) && (buffer_size != 0u)) {
-            init_ok_ = init_shape_(count, buffer_size);
+            (void)init_shape_(count, buffer_size);
         }
     }
     ~buffer_pool() noexcept
     {
         destroy();
     }
-    buffer_pool(const buffer_pool& other) { init_ok_ = other.is_valid() ? copy_from_(other) : false; }
+    buffer_pool(const buffer_pool& other)
+    {
+        SPSC_ASSERT(other.is_valid());
+        if (other.is_valid() && (other.count_ != 0u) && (other.buffer_size_ != 0u)) {
+            (void)copy_from_(other);
+        }
+    }
     buffer_pool& operator=(const buffer_pool& other)
     {
         if (this == &other) {
             return *this;
         }
 
+        SPSC_ASSERT(other.is_valid());
         if (!other.is_valid()) {
             destroy();
-            init_ok_ = false;
             return *this;
         }
 
-        buffer_pool tmp(other);
-        if (!tmp.is_valid()) {
+        buffer_pool tmp;
+        if ((other.count_ != 0u) && (other.buffer_size_ != 0u) && !tmp.copy_from_(other)) {
             return *this;
         }
 
@@ -1062,7 +1081,6 @@ public:
             std::swap(buffers_, other.buffers_);
             std::swap(count_, other.count_);
             std::swap(buffer_size_, other.buffer_size_);
-            std::swap(init_ok_, other.init_ok_);
         }
     }
 
@@ -1099,7 +1117,6 @@ public:
         buffers_ = new_buffers;
         count_ = count;
         buffer_size_ = buffer_size;
-        init_ok_ = true;
         return true;
     }
 
@@ -1116,10 +1133,9 @@ public:
         buffers_ = nullptr;
         count_ = 0u;
         buffer_size_ = 0u;
-        init_ok_ = true;
     }
 
-    [[nodiscard]] bool is_valid() const noexcept { return init_ok_ && state_ok_(buffers_, count_, buffer_size_); }
+    [[nodiscard]] bool is_valid() const noexcept { return state_ok_(buffers_, count_, buffer_size_); }
 
     // ------------------------------------------------------------------------------------------
     // Size / Span Introspection
@@ -1146,20 +1162,20 @@ private:
     // ------------------------------------------------------------------------------------------
     // Internal Helpers
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] static bool state_ok_(pointer* slots,
+    [[nodiscard]] static bool state_ok_(pointer* slot_ptrs,
                                         const size_type count,
                                         const size_type buffer_size) noexcept
     {
         if ((count == 0u) || (buffer_size == 0u)) {
-            return (count == 0u) && (buffer_size == 0u) && (slots == nullptr);
+            return (count == 0u) && (buffer_size == 0u) && (slot_ptrs == nullptr);
         }
 
-        if (slots == nullptr) {
+        if (slot_ptrs == nullptr) {
             return false;
         }
 
         for (size_type i = 0u; i < count; ++i) {
-            if (slots[i] == nullptr) {
+            if (slot_ptrs[i] == nullptr) {
                 return false;
             }
         }
@@ -1226,59 +1242,59 @@ private:
         std::is_nothrow_default_constructible_v<value_type>)
     {
         slot_allocator_type slot_alloc{};
-        pointer* slots = nullptr;
+        pointer* slot_ptrs = nullptr;
         size_type built = 0u;
 
         SPSC_TRY {
-            slots = slot_alloc_traits::allocate(slot_alloc, count);
-            if (RB_UNLIKELY(slots == nullptr)) {
+            slot_ptrs = slot_alloc_traits::allocate(slot_alloc, count);
+            if (RB_UNLIKELY(slot_ptrs == nullptr)) {
                 return false;
             }
 
             for (size_type i = 0u; i < count; ++i) {
-                slots[i] = nullptr;
+                slot_ptrs[i] = nullptr;
             }
 
             for (; built < count; ++built) {
-                if (!allocate_buffer_(buffer_size, slots[built])) {
+                if (!allocate_buffer_(buffer_size, slot_ptrs[built])) {
                     for (size_type i = 0u; i < built; ++i) {
-                        release_buffer_(slots[i], buffer_size);
-                        slots[i] = nullptr;
+                        release_buffer_(slot_ptrs[i], buffer_size);
+                        slot_ptrs[i] = nullptr;
                     }
-                    slot_alloc_traits::deallocate(slot_alloc, slots, count);
+                    slot_alloc_traits::deallocate(slot_alloc, slot_ptrs, count);
                     return false;
                 }
             }
         } SPSC_CATCH_ALL {
-            if (slots != nullptr) {
+            if (slot_ptrs != nullptr) {
                 for (size_type i = 0u; i < built; ++i) {
-                    release_buffer_(slots[i], buffer_size);
-                    slots[i] = nullptr;
+                    release_buffer_(slot_ptrs[i], buffer_size);
+                    slot_ptrs[i] = nullptr;
                 }
-                slot_alloc_traits::deallocate(slot_alloc, slots, count);
+                slot_alloc_traits::deallocate(slot_alloc, slot_ptrs, count);
             }
             return false;
         }
 
-        out = slots;
+        out = slot_ptrs;
         return true;
     }
 
-    static void destroy_shape_(pointer* slots,
+    static void destroy_shape_(pointer* slot_ptrs,
                                const size_type count,
                                const size_type buffer_size) noexcept
     {
-        if (slots == nullptr) {
+        if (slot_ptrs == nullptr) {
             return;
         }
 
         for (size_type i = 0u; i < count; ++i) {
-            release_buffer_(slots[i], buffer_size);
-            slots[i] = nullptr;
+            release_buffer_(slot_ptrs[i], buffer_size);
+            slot_ptrs[i] = nullptr;
         }
 
         slot_allocator_type slot_alloc{};
-        slot_alloc_traits::deallocate(slot_alloc, slots, count);
+        slot_alloc_traits::deallocate(slot_alloc, slot_ptrs, count);
     }
 
     static bool copy_prefix_(pointer* dst,
@@ -1288,6 +1304,8 @@ private:
                              const size_type copy_count,
                              const size_type copy_size) noexcept(std::is_nothrow_copy_assignable_v<value_type>)
     {
+        (void)dst_count;
+        (void)dst_buffer_size;
         SPSC_ASSERT(copy_count <= dst_count);
         SPSC_ASSERT(copy_size <= dst_buffer_size);
         SPSC_ASSERT(((copy_count == 0u) || (copy_size == 0u)) || (dst != nullptr));
@@ -1366,12 +1384,10 @@ private:
         buffers_ = other.buffers_;
         count_ = other.count_;
         buffer_size_ = other.buffer_size_;
-        init_ok_ = other.init_ok_;
 
         other.buffers_ = nullptr;
         other.count_ = 0u;
         other.buffer_size_ = 0u;
-        other.init_ok_ = true;
     }
 
     [[nodiscard]] static constexpr size_type effective_buffer_size_bytes_(const size_type logical_size) noexcept
@@ -1384,7 +1400,6 @@ private:
     pointer* buffers_{nullptr};
     size_type count_{0u};
     size_type buffer_size_{0u};
-    bool init_ok_{true};
 };
 
 

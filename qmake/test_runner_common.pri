@@ -25,6 +25,7 @@ SOURCES += \
     ../test_runner_main.cpp \
     ../test_suite_catalog.cpp \
     ../test_suite_registry.cpp \
+    ../src/tests/buffer_pool_test.cpp \
     ../src/tests/chunk_test.cpp \
     ../src/tests/latest_test.cpp \
     ../src/tests/pool_view_test.cpp \
@@ -41,6 +42,7 @@ HEADERS += \
     ../macro.h \
     ../src/tests/test_config.hpp \
     ../src/tests/test_build_config.hpp \
+    ../src/tests/buffer_pool_test.h \
     ../src/tests/chunk_test.h \
     ../src/tests/queue_test.h \
     ../src/tests/latest_test.h \

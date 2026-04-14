@@ -13,11 +13,14 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLibraryInfo>
 #include <QPlainTextEdit>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QSet>
 #include <QSplitter>
 #include <QSpinBox>
 #include <QStandardPaths>
@@ -92,6 +95,71 @@ QString executableFileName(const QString& baseName)
 #else
     return baseName;
 #endif
+}
+
+QStringList splitPathList(const QString& value)
+{
+#ifdef Q_OS_WIN
+    return value.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+#else
+    return value.split(QLatin1Char(':'), Qt::SkipEmptyParts);
+#endif
+}
+
+QString joinPathList(const QStringList& value)
+{
+#ifdef Q_OS_WIN
+    return value.join(QLatin1Char(';'));
+#else
+    return value.join(QLatin1Char(':'));
+#endif
+}
+
+QString normalizedPathKey(const QString& value)
+{
+    return QDir::cleanPath(QDir::fromNativeSeparators(value)).toLower();
+}
+
+void appendUniqueExistingPath(QStringList& ordered,
+                              QSet<QString>& seen,
+                              const QString& candidate)
+{
+    if (candidate.isEmpty()) {
+        return;
+    }
+
+    const QFileInfo info(candidate);
+    if (!info.exists() || !info.isDir()) {
+        return;
+    }
+
+    const QString absolute = info.absoluteFilePath();
+    const QString key = normalizedPathKey(absolute);
+    if (seen.contains(key)) {
+        return;
+    }
+
+    seen.insert(key);
+    ordered.push_back(absolute);
+}
+
+QProcessEnvironment makeRunnerEnvironment()
+{
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    QStringList orderedPath;
+    QSet<QString> seen;
+
+    appendUniqueExistingPath(orderedPath, seen, QCoreApplication::applicationDirPath());
+    appendUniqueExistingPath(orderedPath, seen, QStringLiteral("C:/msys64/ucrt64/bin"));
+    appendUniqueExistingPath(orderedPath, seen, QLibraryInfo::path(QLibraryInfo::BinariesPath));
+
+    const QStringList existingPath = splitPathList(env.value(QStringLiteral("PATH")));
+    for (const QString& entry : existingPath) {
+        appendUniqueExistingPath(orderedPath, seen, entry);
+    }
+
+    env.insert(QStringLiteral("PATH"), joinPathList(orderedPath));
+    return env;
 }
 
 QString displayName(const QString& variantLabel, const QString& suiteName)
@@ -481,6 +549,7 @@ MainWindow::TestSuiteResult MainWindow::runSuite(const TestSuiteSpec& spec, cons
     const QString outputSpec = QStringLiteral("%1,txt").arg(logPath);
     QProcess process;
     process.setProgram(programPath);
+    process.setProcessEnvironment(makeRunnerEnvironment());
     process.setArguments({
         QStringLiteral("--run-suite"),
         spec.suiteName,

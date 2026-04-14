@@ -1,6 +1,7 @@
 #include "test_suite_registry.h"
 
 #include "src/tests/chunk_test.h"
+#include "src/tests/buffer_pool_test.h"
 #include "src/tests/fifo_test.h"
 #include "src/tests/fifo_view_test.h"
 #include "src/tests/latest_test.h"
@@ -20,7 +21,8 @@ struct SuiteEntry {
     Runner      runner;
 };
 
-constexpr std::array<SuiteEntry, 8> kSuites{{
+constexpr std::array<SuiteEntry, 9> kSuites{{
+    {"buffer_pool", &run_tst_buffer_pool_api_paranoid},
     {"fifo", &run_tst_fifo_api_paranoid},
     {"fifo_view", &run_tst_fifo_view_api_paranoid},
     {"pool", &run_tst_pool_api_paranoid},

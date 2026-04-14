@@ -10,6 +10,7 @@ QVector<QString> all_test_suite_names()
         QStringLiteral("latest"),
         QStringLiteral("chunk"),
         QStringLiteral("queue"),
-        QStringLiteral("typed_pool")
+        QStringLiteral("typed_pool"),
+        QStringLiteral("buffer_pool")
     };
 }
