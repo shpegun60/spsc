@@ -1076,6 +1076,136 @@ static void failure_ctor_suite_fully_dynamic()
 }
 
 template <class Tag>
+static void failure_copy_ctor_suite_fixed_buffer_dynamic_count()
+{
+    using Q = ::spsc::buffer_pool<
+        Cell,
+        5u,
+        0u,
+        ::spsc::policy::CA<>,
+        ControlledAlignedAlloc<Cell, 64u, Tag>>;
+
+    alloc_control<Tag>::reset();
+    Q src;
+    make_filled(src, 5100u);
+    const auto src_values = value_snapshot(src);
+    const auto src_ptrs = pointer_snapshot(src);
+    const auto live_before = alloc_control<Tag>::bytes_live.load();
+
+    alloc_control<Tag>::arm_fail_after_existing(1u);
+    {
+        Q copy{src};
+        verify_invariants(copy);
+        QVERIFY(is_empty_state(copy));
+        QVERIFY(copy.data(0u) == nullptr);
+    }
+    QVERIFY(value_snapshot(src) == src_values);
+    QVERIFY(pointer_snapshot(src) == src_ptrs);
+    QCOMPARE(alloc_control<Tag>::bytes_live.load(), live_before);
+
+    alloc_control<Tag>::fail_on_call.store(-1);
+    {
+        Q copy{src};
+        verify_invariants(copy);
+        QVERIFY(value_snapshot(copy) == src_values);
+        if (copy.size() != 0u) {
+            for (reg i = 0u; i < copy.count(); ++i) {
+                QVERIFY(copy.data(i) != src.data(i));
+            }
+        }
+    }
+}
+
+template <class Tag>
+static void failure_copy_ctor_suite_dynamic_buffer_fixed_count()
+{
+    using Q = ::spsc::buffer_pool<
+        Cell,
+        0u,
+        3u,
+        ::spsc::policy::CA<>,
+        ControlledAlignedAlloc<Cell, 64u, Tag>>;
+
+    alloc_control<Tag>::reset();
+    Q src;
+    make_filled(src, 5200u);
+    const auto src_values = value_snapshot(src);
+    const auto src_ptrs = pointer_snapshot(src);
+    const auto live_before = alloc_control<Tag>::bytes_live.load();
+
+    alloc_control<Tag>::arm_fail_after_existing(2u);
+    {
+        Q copy{src};
+        verify_invariants(copy);
+        QVERIFY(is_empty_state(copy));
+        QVERIFY(copy.data(0u) == nullptr);
+    }
+    QVERIFY(value_snapshot(src) == src_values);
+    QVERIFY(pointer_snapshot(src) == src_ptrs);
+    QCOMPARE(alloc_control<Tag>::bytes_live.load(), live_before);
+
+    alloc_control<Tag>::fail_on_call.store(-1);
+    {
+        Q copy{src};
+        verify_invariants(copy);
+        QVERIFY(value_snapshot(copy) == src_values);
+        for (reg i = 0u; i < copy.count(); ++i) {
+            QVERIFY(copy.data(i) != src.data(i));
+        }
+    }
+}
+
+template <class Tag>
+static void failure_copy_ctor_suite_fully_dynamic()
+{
+    using Q = ::spsc::buffer_pool<
+        Cell,
+        0u,
+        0u,
+        ::spsc::policy::CA<>,
+        ControlledAlignedAlloc<Cell, 64u, Tag>>;
+
+    alloc_control<Tag>::reset();
+    Q src;
+    make_filled(src, 5300u);
+    const auto src_values = value_snapshot(src);
+    const auto src_ptrs = pointer_snapshot(src);
+    const auto live_before = alloc_control<Tag>::bytes_live.load();
+
+    alloc_control<Tag>::arm_fail_after_existing(1u);
+    {
+        Q copy{src};
+        verify_invariants(copy);
+        QVERIFY(is_empty_state(copy));
+        QVERIFY(copy.data(0u) == nullptr);
+    }
+    QVERIFY(value_snapshot(src) == src_values);
+    QVERIFY(pointer_snapshot(src) == src_ptrs);
+    QCOMPARE(alloc_control<Tag>::bytes_live.load(), live_before);
+
+    alloc_control<Tag>::arm_fail_after_existing(2u);
+    {
+        Q copy{src};
+        verify_invariants(copy);
+        QVERIFY(is_empty_state(copy));
+        QVERIFY(copy.data(0u) == nullptr);
+    }
+    QVERIFY(value_snapshot(src) == src_values);
+    QVERIFY(pointer_snapshot(src) == src_ptrs);
+    QCOMPARE(alloc_control<Tag>::bytes_live.load(), live_before);
+
+    alloc_control<Tag>::fail_on_call.store(-1);
+    {
+        Q copy{src};
+        verify_invariants(copy);
+        QVERIFY(value_snapshot(copy) == src_values);
+        for (reg i = 0u; i < copy.count(); ++i) {
+            QVERIFY(copy.data(i) != src.data(i));
+        }
+    }
+}
+
+template <class Tag>
 static void failure_resize_suite_fixed_buffer_dynamic_count()
 {
     using Q = ::spsc::buffer_pool<
@@ -1950,6 +2080,16 @@ private slots:
         buffer_pool_test_detail::failure_ctor_suite_fixed_buffer_dynamic_count<FixedCtorTag>();
         buffer_pool_test_detail::failure_ctor_suite_dynamic_buffer_fixed_count<RuntimeCtorTag>();
         buffer_pool_test_detail::failure_ctor_suite_fully_dynamic<DynamicCtorTag>();
+    }
+
+    void failure_copy_constructor_paths()
+    {
+        struct FixedCopyCtorTag {};
+        struct RuntimeCopyCtorTag {};
+        struct DynamicCopyCtorTag {};
+        buffer_pool_test_detail::failure_copy_ctor_suite_fixed_buffer_dynamic_count<FixedCopyCtorTag>();
+        buffer_pool_test_detail::failure_copy_ctor_suite_dynamic_buffer_fixed_count<RuntimeCopyCtorTag>();
+        buffer_pool_test_detail::failure_copy_ctor_suite_fully_dynamic<DynamicCopyCtorTag>();
     }
 
     void failure_resize_paths()
