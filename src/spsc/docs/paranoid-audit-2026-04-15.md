@@ -288,6 +288,178 @@ Residual note:
 | `buffer_pool` static | Per-slot `cache_aligned_slot_t<std::array<T,N>, Policy>` | No runtime allocator | Always valid | Good |
 | `buffer_pool` dynamic forms | Runtime-buffer forms use `allocator<std::byte>` payload and policy-aware span rounding | Dynamic slot table and/or byte-buffer allocation depending on specialization | `empty-or-valid`, no half-live state | Good |
 
+## Per-Container Quick Verdicts
+
+### `array_fifo`
+
+Checked:
+- Wrapper shape over `fifo<std::array<T, N>, ...>`.
+- Slot promotion and cache-aligned wrapper interaction.
+- Deleted value-push API to keep usage zero-copy only.
+
+Potentially risky:
+- No independent state machine of its own; correctness depends on `fifo`.
+
+Verdict:
+- Good.
+
+### `array_fifo_view`
+
+Checked:
+- Wrapper shape over `fifo_view<std::array<T, N>, ...>`.
+- External-storage attach semantics inherited from `fifo_view`.
+- Deleted value-push API and preserved zero-copy discipline.
+
+Potentially risky:
+- External storage must already satisfy the typed alignment and capacity contract.
+
+Verdict:
+- Good.
+
+### `chunk_fifo`
+
+Checked:
+- Wrapper shape over `fifo<chunk<T, N>, ...>`.
+- Chunk slot promotion under cache-aligned policies.
+- Deleted value-push API to prevent accidental copy-style use.
+
+Potentially risky:
+- Correctness is downstream of `fifo` plus `chunk`.
+
+Verdict:
+- Good.
+
+### `chunk_fifo_view`
+
+Checked:
+- Wrapper shape over `fifo_view<chunk<T, N>, ...>`.
+- Non-owning attachment behavior inherited from `fifo_view`.
+- Zero-copy-only API surface preserved.
+
+Potentially risky:
+- External storage and attachment lifetime remain the caller's responsibility.
+
+Verdict:
+- Good.
+
+### `chunk`
+
+Checked:
+- Static logical-size discipline over fixed storage.
+- Dynamic reserve/resize/move-only behavior.
+- `commit_size()` and DMA-style logical-size workflows.
+
+Potentially risky:
+- Dynamic form uses eager default construction after reserve, so its cost model is important for large `T`.
+
+Verdict:
+- Good.
+
+### `fifo`
+
+Checked:
+- Ring invariants, occupancy math, copy/move/resize/destroy paths.
+- Alignment path for typed contiguous storage.
+- Dynamic failure behavior and conservative snapshot handling.
+
+Potentially risky:
+- Typed payload alignment is allocator-driven, not auto-promoted to cacheline alignment unless the slot type or allocator requests it.
+
+Verdict:
+- Good.
+
+### `fifo_view`
+
+Checked:
+- `attach`, `adopt`, `detach`, restore, move, and swap flows.
+- Dynamic validity coupling of attachment and non-zero capacity.
+- Conservative read/write region behavior on impossible snapshots.
+
+Potentially risky:
+- Caller-owned external storage must remain valid and correctly aligned for the full attachment lifetime.
+
+Verdict:
+- Good.
+
+### `pool`
+
+Checked:
+- Raw-buffer slot-table plus per-buffer allocation model.
+- Typed exposure gates in `claim_as()` / `front_as()`.
+- Reallocation and migration order.
+
+Potentially risky:
+- Typed access correctness depends on caller respecting size/alignment fit of `U` into the raw buffer contract.
+
+Verdict:
+- Good.
+
+### `pool_view`
+
+Checked:
+- Non-owning raw-slot attachment model.
+- Defensive rejection of `nullptr` slots.
+- Coupled invariants among slot table, capacity, and buffer size.
+
+Potentially risky:
+- External slot pointers and their backing buffers are entirely caller-owned.
+
+Verdict:
+- Good.
+
+### `latest`
+
+Checked:
+- Newest-value semantics rather than FIFO semantics.
+- Snapshot bridging through `cons_head_snapshot_`.
+- Both raw-byte and typed forms, including dynamic normalization and resize.
+
+Potentially risky:
+- Behavior is intentionally different from FIFO, so misuse risk is conceptual rather than structural.
+
+Verdict:
+- Good.
+
+### `queue`
+
+Checked:
+- Placement-new / explicit-destroy lifetime discipline.
+- Copy/move/resize of live object ranges.
+- Fail-closed cleanup behavior on impossible corrupted snapshots.
+
+Potentially risky:
+- In impossible corrupted states, the implementation intentionally prefers assert-and-leak over UB.
+
+Verdict:
+- Good.
+
+### `typed_pool`
+
+Checked:
+- Pointer-ring model with one typed backing allocation per slot.
+- Placement-new / explicit-destroy API.
+- Reallocation, copy, move, and inactive-slot preservation.
+
+Potentially risky:
+- Like `queue`, the implementation deliberately fails closed if a corrupted state prevents safe cleanup.
+
+Verdict:
+- Good.
+
+### `buffer_pool`
+
+Checked:
+- All four specialization families.
+- Logical payload bytes vs physical DMA/cache-safe span bytes.
+- Runtime byte-allocation path, alignment rounding, and failure-path behavior.
+- `empty-or-valid` invariants for dynamic forms.
+
+Potentially risky:
+- The design has many specialization branches, so long-term safety depends on keeping tests equally exhaustive.
+
+Verdict:
+- Good.
+
 ## Container-By-Container Notes
 
 ### `fifo`
