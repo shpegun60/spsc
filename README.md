@@ -208,7 +208,7 @@ Debug per-suite totals, same for all variants:
 - `pool`: 24 passed, 0 failed, 1 skipped
 - `pool_view`: 16 passed, 0 failed
 - `latest`: 31 passed, 0 failed
-- `chunk`: 11 passed, 0 failed
+- `chunk`: 11 passed, 0 failed, 1 skipped
 - `queue`: 52 passed, 0 failed
 - `typed_pool`: 65 passed, 0 failed
 
@@ -220,7 +220,7 @@ Release per-suite totals, same for all variants:
 - `pool`: 24 passed, 0 failed, 1 skipped
 - `pool_view`: 16 passed, 0 failed
 - `latest`: 30 passed, 0 failed, 1 skipped
-- `chunk`: 10 passed, 0 failed, 1 skipped
+- `chunk`: 11 passed, 0 failed, 1 skipped
 - `queue`: 51 passed, 0 failed, 1 skipped
 - `typed_pool`: 64 passed, 0 failed, 1 skipped
 

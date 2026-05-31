@@ -858,6 +858,114 @@ static void chunk_fifo_reuse_contract_suite() {
         V q(backing.data(), static_cast<reg>(backing.size()));
         verify_chunk_fifo_reclaim_clears(q);
     }
+
+}
+
+static void chunk_fifo_release_safe_claim_publish_guard_suite() {
+#if defined(NDEBUG)
+    {
+        using Q = spsc::chunk_fifo<std::uint32_t, 8u, 2u, spsc::policy::P>;
+        Q q;
+
+        auto* slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        QVERIFY(slot->try_push(1u));
+        QVERIFY(q.try_publish());
+        slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        QVERIFY(slot->try_push(2u));
+        QVERIFY(q.try_publish());
+        QCOMPARE(q.size(), reg{2u});
+        QCOMPARE(q.front().front(), std::uint32_t{1u});
+        QVERIFY(q.full());
+
+        auto& bad = q.claim();
+        QVERIFY2(bad.empty(), "release full chunk_fifo::claim() must return an empty sink slot");
+        QVERIFY(bad.try_push(99u));
+
+        q.publish();
+        q.publish(spsc::unsafe, reg{1u});
+        QVERIFY(!q.try_publish());
+        QVERIFY(!q.try_publish(spsc::unsafe, reg{1u}));
+
+        QCOMPARE(q.size(), reg{2u});
+        QCOMPARE(q.front().front(), std::uint32_t{1u});
+        QVERIFY(q.try_pop());
+        q.publish();
+        QCOMPARE(q.size(), reg{1u});
+        QCOMPARE(q.front().front(), std::uint32_t{2u});
+    }
+
+    {
+        using Q = spsc::chunk_fifo<std::uint32_t, 8u, 0u, spsc::policy::P>;
+        Q q;
+
+        QVERIFY(!q.is_valid());
+        auto& bad = q.claim();
+        QVERIFY2(bad.empty(), "release invalid dynamic chunk_fifo::claim() must return an empty sink slot");
+        QVERIFY(bad.try_push(77u));
+
+        q.publish();
+        q.publish(spsc::unsafe, reg{1u});
+        QVERIFY(!q.try_publish());
+        QVERIFY(!q.try_publish(spsc::unsafe, reg{1u}));
+        QVERIFY(q.try_claim() == nullptr);
+        QVERIFY(q.empty());
+    }
+
+    {
+        using V = spsc::chunk_fifo_view<std::uint32_t, 8u, 2u, spsc::policy::P>;
+        std::array<typename V::value_type, 2u> backing{};
+        V q(backing);
+
+        auto* slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        QVERIFY(slot->try_push(2u));
+        QVERIFY(q.try_publish());
+        slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        QVERIFY(slot->try_push(3u));
+        QVERIFY(q.try_publish());
+        QCOMPARE(q.size(), reg{2u});
+        QCOMPARE(q.front().front(), std::uint32_t{2u});
+        QVERIFY(q.full());
+
+        auto& bad = q.claim();
+        QVERIFY2(bad.empty(), "release full chunk_fifo_view::claim() must return an empty sink slot");
+        QVERIFY(bad.try_push(100u));
+
+        q.publish();
+        q.publish(spsc::unsafe, reg{1u});
+        QVERIFY(!q.try_publish());
+        QVERIFY(!q.try_publish(spsc::unsafe, reg{1u}));
+
+        QCOMPARE(q.size(), reg{2u});
+        QCOMPARE(q.front().front(), std::uint32_t{2u});
+        QVERIFY(q.try_pop());
+        q.publish();
+        QCOMPARE(q.size(), reg{1u});
+        QCOMPARE(q.front().front(), std::uint32_t{3u});
+    }
+
+    {
+        using V = spsc::chunk_fifo_view<std::uint32_t, 8u, 0u, spsc::policy::P>;
+        V q;
+
+        QVERIFY(!q.is_valid());
+        auto& bad = q.claim();
+        QVERIFY2(bad.empty(), "release invalid dynamic chunk_fifo_view::claim() must return an empty sink slot");
+        QVERIFY(bad.try_push(88u));
+
+        q.publish();
+        q.publish(spsc::unsafe, reg{1u});
+        QVERIFY(!q.try_publish());
+        QVERIFY(!q.try_publish(spsc::unsafe, reg{1u}));
+        QVERIFY(q.try_claim() == nullptr);
+        QVERIFY(q.empty());
+    }
+#else
+    QSKIP("Release-safe chunk_fifo claim/publish guard contracts are checked only with NDEBUG.");
+#endif
 }
 
 #if SPSC_HAS_SPAN
@@ -926,6 +1034,10 @@ private slots:
         alignment_sweep_suite();
         chunk_fifo_alignment_contract_suite();
         chunk_fifo_reuse_contract_suite();
+    }
+
+    void release_safe_claim_publish_guards() {
+        chunk_fifo_release_safe_claim_publish_guard_suite();
     }
 
 #if SPSC_HAS_SPAN
