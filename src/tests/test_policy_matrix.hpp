@@ -8,15 +8,111 @@
 
 namespace spsc::test {
 
-static_assert(SPSC_DEFAULT_POLICY_ATOMIC == 1,
-              "test matrix expects the public default policy to be atomic/thread-capable");
+static_assert(SPSC_DEFAULT_POLICY_ATOMIC == 0,
+              "test matrix expects the public default policy to be plain unless explicitly overridden");
 static_assert(SPSC_REQUIRE_LOCK_FREE == 1,
-              "test matrix expects atomic policies to require lock-free counters by default");
-static_assert(std::is_same_v<::spsc::policy::default_policy, ::spsc::policy::A<>>,
-              "default_policy must match the configured safe-by-default atomic contract");
+              "test matrix expects lock-free enforcement to stay enabled by default");
+static_assert(std::is_same_v<::spsc::policy::default_policy, ::spsc::policy::P>,
+              "default_policy must match the configured plain-by-default contract");
 
 template <class... Policies>
 struct policy_pack {};
+
+template <class T>
+struct type_tag {
+    using type = T;
+};
+
+template <class Q, class = void>
+struct has_publish_count : std::false_type {};
+
+template <class Q>
+struct has_publish_count<Q, std::void_t<decltype(std::declval<Q&>().publish(typename Q::size_type{1u}))>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_try_publish_count : std::false_type {};
+
+template <class Q>
+struct has_try_publish_count<Q, std::void_t<decltype(std::declval<Q&>().try_publish(typename Q::size_type{1u}))>>
+    : std::true_type {};
+
+template <class Q, class N, class = void>
+struct has_pop_with : std::false_type {};
+
+template <class Q, class N>
+struct has_pop_with<Q, N, std::void_t<decltype(std::declval<Q&>().pop(std::declval<N&>()))>>
+    : std::true_type {};
+
+template <class Q, class N, class = void>
+struct has_try_pop_with : std::false_type {};
+
+template <class Q, class N>
+struct has_try_pop_with<Q, N, std::void_t<decltype(std::declval<Q&>().try_pop(std::declval<N&>()))>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_destroy_method : std::false_type {};
+
+template <class Q>
+struct has_destroy_method<Q, std::void_t<decltype(std::declval<Q&>().destroy())>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_swap_method : std::false_type {};
+
+template <class Q>
+struct has_swap_method<Q, std::void_t<decltype(std::declval<Q&>().swap(std::declval<Q&>()))>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_resize_one : std::false_type {};
+
+template <class Q>
+struct has_resize_one<Q, std::void_t<decltype(std::declval<Q&>().resize(typename Q::size_type{}))>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_resize_two : std::false_type {};
+
+template <class Q>
+struct has_resize_two<Q, std::void_t<decltype(std::declval<Q&>().resize(typename Q::size_type{}, typename Q::size_type{}))>>
+    : std::true_type {};
+
+template <class R, class = void>
+struct region_has_ptr : std::false_type {};
+
+template <class R>
+struct region_has_ptr<R, std::void_t<decltype(std::declval<const R&>().ptr)>>
+    : std::true_type {};
+
+template <class R, class = void>
+struct region_has_span : std::false_type {};
+
+template <class R>
+struct region_has_span<R, std::void_t<decltype(std::declval<const R&>().span())>>
+    : std::true_type {};
+
+template <class R, class = void>
+struct region_has_data : std::false_type {};
+
+template <class R>
+struct region_has_data<R, std::void_t<decltype(std::declval<const R&>().data())>>
+    : std::true_type {};
+
+template <class R, class = void>
+struct region_has_count : std::false_type {};
+
+template <class R>
+struct region_has_count<R, std::void_t<decltype(std::declval<const R&>().count)>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_valid_method : std::false_type {};
+
+template <class Q>
+struct has_valid_method<Q, std::void_t<decltype(std::declval<const Q&>().valid())>>
+    : std::is_same<decltype(std::declval<const Q&>().valid()), bool> {};
 
 using extended_nonthreaded_policy_pack =
     policy_pack<
@@ -48,7 +144,7 @@ using extended_cached_policy_pack =
 
 template <class... Policies, class Fn>
 constexpr void for_each_policy(policy_pack<Policies...>, Fn&& fn) {
-    (fn.template operator()<Policies>(), ...);
+    (fn(type_tag<Policies>{}), ...);
 }
 
 template <class Fn>

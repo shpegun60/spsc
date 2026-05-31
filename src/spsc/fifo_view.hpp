@@ -344,9 +344,6 @@ public:
                 other.Base::clear();
             }
         }
-
-        bump_snapshot_epoch_();
-        other.bump_snapshot_epoch_();
     }
 
 
@@ -387,7 +384,6 @@ public:
     void clear() noexcept {
         // Not concurrent with producer/consumer ops.
         Base::clear();
-        bump_snapshot_epoch_();
     }
 
     // Explicit detach: makes the view invalid (does not touch external storage).
@@ -398,7 +394,6 @@ public:
         } else {
             Base::clear();
         }
-        bump_snapshot_epoch_();
     }
 
     // Attach / Reset API (no ctor needed)
@@ -410,7 +405,6 @@ public:
         if (RB_UNLIKELY(!is_storage_aligned(buffer))) { detach(); return false; }
         storage_ = buffer;
         Base::clear();
-        bump_snapshot_epoch_();
         return true;
     }
 
@@ -435,7 +429,6 @@ public:
             detach();
             return false;
         }
-        bump_snapshot_epoch_();
         return true;
     }
 
@@ -458,7 +451,6 @@ public:
             detach();
             return false;
         }
-        bump_snapshot_epoch_();
         return true;
     }
 
@@ -474,7 +466,6 @@ public:
             detach();
             return false;
         }
-        bump_snapshot_epoch_();
         return true;
     }
 
@@ -515,7 +506,6 @@ public:
     void reset() noexcept
     {
         Base::clear();
-        bump_snapshot_epoch_();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -572,7 +562,7 @@ public:
     [[nodiscard]] snapshot make_snapshot() noexcept {
         using it = snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
-            return snapshot(it(nullptr, 0u, 0u, 0u), it(nullptr, 0u, 0u, 0u));
+            return snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
 
         // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
@@ -581,13 +571,13 @@ public:
         const size_type h    = static_cast<size_type>(t + used);
 
         const size_type m = Base::mask();
-        return snapshot(it(data(), m, t, snapshot_epoch_), it(data(), m, h, snapshot_epoch_));
+        return snapshot(it(data(), m, t), it(data(), m, h));
     }
 
     [[nodiscard]] const_snapshot make_snapshot() const noexcept {
         using it = const_snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
-            return const_snapshot(it(nullptr, 0u, 0u, 0u), it(nullptr, 0u, 0u, 0u));
+            return const_snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
 
         // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
@@ -596,15 +586,27 @@ public:
         const size_type h    = static_cast<size_type>(t + used);
 
         const size_type m = Base::mask();
-        return const_snapshot(it(data(), m, t, snapshot_epoch_), it(data(), m, h, snapshot_epoch_));
+        return const_snapshot(it(data(), m, t), it(data(), m, h));
     }
 
     // Consume exactly s.size() elements from snapshot
     template<class Snap>
     void consume(const Snap& s) noexcept {
-        const bool ok = try_consume(s);
-        SPSC_ASSERT(ok);
-        (void)ok;
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(s.begin().data() == data());
+        SPSC_ASSERT(s.end().data() == data());
+        SPSC_ASSERT(s.begin().mask() == Base::mask());
+        SPSC_ASSERT(s.end().mask() == Base::mask());
+
+        const size_type cur_tail = static_cast<size_type>(Base::tail());
+        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
+
+        const size_type new_tail = static_cast<size_type>(s.head_index());
+
+        const size_type n = static_cast<size_type>(new_tail - cur_tail); // wrap-safe
+        SPSC_ASSERT(n <= Base::capacity()); // Guards against impossible snapshots
+
+        pop(n);
     }
 
     // Try to consume s.size(), ensuring consumer hasn't moved since snapshot
@@ -626,8 +628,6 @@ public:
         if (RB_UNLIKELY(s.end().data() != my_data)) { return false; }
         if (RB_UNLIKELY(s.begin().mask() != my_mask)) { return false; }
         if (RB_UNLIKELY(s.end().mask() != my_mask)) { return false; }
-        if (RB_UNLIKELY(s.begin().epoch() != snapshot_epoch_)) { return false; }
-        if (RB_UNLIKELY(s.end().epoch() != snapshot_epoch_)) { return false; }
 
         // Consumer must not have advanced since snapshot.
         if (RB_UNLIKELY(snap_tail != cur_tail)) { return false; }
@@ -652,7 +652,6 @@ public:
     void consume_all() noexcept {
         if (RB_UNLIKELY(!is_valid())) { return; }
         Base::sync_tail_to_head();
-        bump_snapshot_epoch_();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -896,26 +895,22 @@ public:
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(!empty());
         Base::increment_tail();
-        bump_snapshot_epoch_();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
         if (RB_UNLIKELY(empty())) { return false; }
         Base::increment_tail();
-        bump_snapshot_epoch_();
         return true;
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(can_read(n));
         Base::advance_tail(n);
-        if (n != 0u) { bump_snapshot_epoch_(); }
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!can_read(n))) { return false; }
         Base::advance_tail(n);
-        if (n != 0u) { bump_snapshot_epoch_(); }
         return true;
     }
 
@@ -1280,7 +1275,6 @@ private:
             if (RB_UNLIKELY((ptr == nullptr) != (cap == 0u))) {
                 storage_ = nullptr;
                 (void)Base::init(0u);
-                bump_snapshot_epoch_();
                 return;
             }
 
@@ -1289,7 +1283,6 @@ private:
                 if (RB_UNLIKELY(!ok)) {
                     storage_ = nullptr;
                     (void)Base::init(0u);
-                    bump_snapshot_epoch_();
                     return;
                 }
                 storage_ = ptr;
@@ -1314,21 +1307,10 @@ private:
             other.storage_ = nullptr;
             other.Base::clear();
         }
-
-        bump_snapshot_epoch_();
-        other.bump_snapshot_epoch_();
     }
 
 private:
-    void bump_snapshot_epoch_() noexcept {
-        ++snapshot_epoch_;
-        if (snapshot_epoch_ == 0u) {
-            snapshot_epoch_ = 1u;
-        }
-    }
-
     storage_type storage_{nullptr};
-    size_type snapshot_epoch_{1u};
 };
 
 

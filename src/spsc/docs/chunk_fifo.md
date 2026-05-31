@@ -42,6 +42,7 @@ using Blocks = spsc::chunk_fifo<std::uint16_t, 256, 8>;
 Blocks q;
 
 if (auto* block = q.try_claim()) {
+    block->clear();
     block->push_back(10);
     block->push_back(20);
     block->push_back(30);
@@ -53,7 +54,7 @@ if (auto* block = q.try_claim()) {
 
 ```cpp
 if (auto* block = q.try_front()) {
-    for (std::uint16_t sample : block->used_span()) {
+    for (std::uint16_t sample : *block) {
         process(sample);
     }
     q.pop();
@@ -105,7 +106,7 @@ for (std::size_t i = 0; i < static_cast<std::size_t>(q.capacity()); ++i) {
 auto snap = q.make_snapshot();
 
 for (const auto& block : snap) {
-    process_block(block.used_span());
+    process_block(block.data(), block.size());
 }
 
 q.consume(snap);
@@ -136,7 +137,6 @@ q.consume(snap);
 - `try_push`
 - `emplace`
 - `try_emplace`
-- `scoped_write`
 
 ## Good Fits
 
@@ -157,6 +157,7 @@ These wrappers inherit most of their API from `fifo` / `fifo_view`, but the payl
 ### Producer
 
 - `claim`, `try_claim`
+- `scoped_write`, `scoped_write(max_count)`
 - `publish`, `try_publish`
 - `publish(unsafe, n)`, `try_publish(unsafe, n)` for region-style production
 
@@ -179,17 +180,12 @@ The producer usually:
 
 `chunk_fifo_view` inherits the `fifo_view`-style attach/adopt/state model, but over externally owned chunk storage.
 
-Every successful `claim()` / `try_claim()` / `claim_write()` clears the claimed
-chunk before handing it to the producer. Reused FIFO slots therefore do not carry
-stale logical size from a previous block.
-
 ### Disabled Intentionally
 
 - `push`
 - `try_push`
 - `emplace`
 - `try_emplace`
-- `scoped_write`
 
 This is by design, because block production is expected to be zero-copy and explicit.
 
@@ -199,6 +195,7 @@ This is by design, because block production is expected to be zero-copy and expl
 
 ```cpp
 if (auto* block = q.try_claim()) {
+    block->clear();
     block->push_back(1);
     block->push_back(2);
     q.publish();
@@ -207,6 +204,7 @@ if (auto* block = q.try_claim()) {
 
 ```cpp
 auto& block = q.claim();
+block.clear();
 fill_block(block);
 q.publish();
 ```
@@ -215,6 +213,7 @@ q.publish();
 
 ```cpp
 if (auto* block = q.try_claim()) {
+    block->clear();
     fill_block(*block);
     q.publish();
 }
@@ -224,13 +223,14 @@ if (auto* block = q.try_claim()) {
 
 ```cpp
 if (auto* block = q.try_front()) {
-    process_block(block->used_span());
+    process_block(block->data(), block->size());
 }
 ```
 
 ```cpp
 if (!q.empty()) {
-    process_block(q.front().used_span());
+    const auto& block = q.front();
+    process_block(block.data(), block.size());
 }
 ```
 
@@ -251,10 +251,13 @@ q.consume_all();
 ```cpp
 auto snap = q.make_snapshot();
 for (const auto& block : snap) {
-    process_block(block.used_span());
+    process_block(block.data(), block.size());
 }
 q.consume(snap);
 ```
+
+`used_span()` and `cap_span()` are available only when C++20 `std::span` support is enabled
+(`SPSC_HAS_SPAN=1`). The examples above stay valid in C++17 builds.
 
 ### view `attach()` / `state()`
 

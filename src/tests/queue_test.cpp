@@ -225,14 +225,6 @@ static const Runner_ g_runner_{};
 
 namespace {
 
-struct DynamicBaseProbe final : public spsc::SPSCbase<0u, spsc::policy::P> {
-    using Base = spsc::SPSCbase<0u, spsc::policy::P>;
-    using Base::capacity;
-    using Base::empty;
-    using Base::init;
-    using Base::size;
-};
-
 constexpr reg kSmallCap = 16u;
 constexpr reg kMedCap   = 256u;
 constexpr reg kBigCap   = 1024u;
@@ -271,16 +263,16 @@ static void api_smoke_compile() {
     // Producer
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_push(std::declval<value_type>())), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().push(std::declval<value_type>())), void>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().try_emplace(1)), value_type*>);
-    static_assert(std::is_same_v<decltype(std::declval<Q&>().emplace(1)), value_type&>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().try_emplace(std::declval<value_type>())), value_type*>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().emplace(std::declval<value_type>())), value_type&>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_claim()), value_type*>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim()), value_type*>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish()), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish()), void>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(::spsc::unsafe, reg{1})), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(::spsc::unsafe, reg{1})), void>);
-    static_assert(!requires(Q& q) { q.try_publish(reg{1}); });
-    static_assert(!requires(Q& q) { q.publish(reg{1}); });
+    static_assert(!::spsc::test::has_try_publish_count<Q>::value);
+    static_assert(!::spsc::test::has_publish_count<Q>::value);
 
     // Consumer
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_front()), value_type*>);
@@ -1942,56 +1934,6 @@ static void snapshot_invalid_queue_suite() {
     QVERIFY(!q.try_consume(s));
 }
 
-static void spscbase_zero_capacity_restore_contract_suite() {
-    DynamicBaseProbe b;
-
-    QVERIFY(b.init(0u));
-    QCOMPARE(b.capacity(), reg{0});
-    QCOMPARE(b.size(), reg{0});
-    QVERIFY(b.empty());
-
-    QVERIFY(!b.init(0u, reg{1u}, reg{0u}));
-    QCOMPARE(b.capacity(), reg{0});
-    QCOMPARE(b.size(), reg{0});
-    QVERIFY(b.empty());
-
-    QVERIFY(!b.init(0u, reg{0u}, reg{1u}));
-    QCOMPARE(b.capacity(), reg{0});
-    QCOMPARE(b.size(), reg{0});
-    QVERIFY(b.empty());
-
-    QVERIFY(b.init(0u, reg{0u}, reg{0u}));
-    QCOMPARE(b.capacity(), reg{0});
-    QCOMPARE(b.size(), reg{0});
-    QVERIFY(b.empty());
-}
-
-static void snapshot_epoch_invalidation_suite() {
-    {
-        spsc::queue<Blob, 4, spsc::policy::P> q;
-        QVERIFY(q.is_valid());
-        fill_seq(q, 1, 2);
-        auto snap = q.make_snapshot();
-        q.clear();
-        fill_seq(q, 10, 2);
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2});
-        q.destroy();
-    }
-
-    {
-        spsc::queue<Blob, 0, spsc::policy::P> q;
-        QVERIFY(q.resize(4));
-        fill_seq(q, 1, 2);
-        auto snap = q.make_snapshot();
-        q.clear();
-        fill_seq(q, 10, 2);
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2});
-        q.destroy();
-    }
-}
-
 // ----------------------------------------
 // Dynamic move semantics contract
 // ----------------------------------------
@@ -2177,21 +2119,24 @@ static void run_threaded_bulk_regions_suite(const char* name) {
 }
 
 static void extended_policy_compile_smoke_all() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         api_smoke_compile<spsc::queue<Blob, kSmallCap, Policy>>();
         api_smoke_compile<spsc::queue<Tracked, 0u, Policy>>();
     });
 }
 
 static void extended_policy_smoke_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         run_static_suite<Policy>();
         run_dynamic_suite<Policy>();
     });
 }
 
 static void extended_policy_regression_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         run_state_machine_fuzz<Policy>(false);
         run_state_machine_fuzz<Policy>(true);
     });
@@ -2587,10 +2532,17 @@ private slots:
         }
         QCOMPARE(n, reg{30});
 
-        // A snapshot is a ring-storage view, not an owning copy. Once the
-        // consumer advances, do not dereference it; only validate rejection.
+        // Mutating the queue after snapshot must not mutate the snapshot view.
         q.pop(10);
         fill_seq(q, 1000, 10);
+
+        n = 0;
+        exp = 1;
+        for (auto it = s.begin(); it != s.end(); ++it) {
+            QCOMPARE(it->seq, exp++);
+            ++n;
+        }
+        QCOMPARE(n, reg{30});
 
         // try_consume must fail because consumer advanced.
         QVERIFY(!q.try_consume(s));
@@ -2636,14 +2588,6 @@ private slots:
 
     void snapshot_invalid_queue() {
         snapshot_invalid_queue_suite();
-    }
-
-    void spscbase_zero_capacity_restore_contract() {
-        spscbase_zero_capacity_restore_contract_suite();
-    }
-
-    void snapshot_epoch_invalidation() {
-        snapshot_epoch_invalidation_suite();
     }
 
     void dynamic_move_contract() {

@@ -170,7 +170,7 @@ using AARMW = AA<O>;
 
 /* Default policy: compile-time switchable without editing callers. */
 #ifndef SPSC_DEFAULT_POLICY_ATOMIC
-#  define SPSC_DEFAULT_POLICY_ATOMIC 1
+#  define SPSC_DEFAULT_POLICY_ATOMIC 0
 #endif /* SPSC_DEFAULT_POLICY_ATOMIC */
 
 static_assert(SPSC_DEFAULT_POLICY_ATOMIC == 0 ||

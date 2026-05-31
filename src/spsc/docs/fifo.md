@@ -396,6 +396,8 @@ for (auto it = q.rbegin(); it != q.rend(); ++it) {
 
 ### `span()`
 
+Available only when C++20 `std::span` support is enabled (`SPSC_HAS_SPAN=1`).
+
 ```cpp
 auto ring = q.span();
 inspect_storage_bytes(ring.data(), ring.size());

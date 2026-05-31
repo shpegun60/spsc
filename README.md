@@ -138,7 +138,6 @@ mkdir build
 cd build
 qmake ..\spsc_test.pro
 mingw32-make -j8
-mingw32-make release -j8
 ```
 
 If you use Qt Creator, opening `spsc_test.pro` is enough.
@@ -149,6 +148,15 @@ Launch the Qt dashboard:
 
 ```powershell
 .\bin\debug\spsc_launcher.exe
+# or
+.\bin\release\spsc_launcher.exe
+```
+
+The dashboard and runner executables are built per configuration:
+
+```powershell
+.\bin\debug\spsc_test_shadow_on.exe --run-suite fifo
+.\bin\release\spsc_test_shadow_on.exe --run-suite fifo
 ```
 
 The dashboard:
@@ -160,7 +168,6 @@ The dashboard:
 
 Main suites include:
 
-- `buffer_pool`
 - `fifo`
 - `fifo_view`
 - `pool`
@@ -169,20 +176,11 @@ Main suites include:
 - `chunk`
 - `queue`
 - `typed_pool`
+- `buffer_pool`
 
-Direct runner variants are also built:
+## Latest Test Report (Integrated Run)
 
-```powershell
-.\bin\debug\spsc_test_shadow_off.exe --run-suite fifo
-.\bin\debug\spsc_test_shadow_on.exe --run-suite fifo
-.\bin\debug\spsc_test_shadow_heur.exe --run-suite fifo
-```
-
-Release builds use the same names under `.\bin\release\`.
-
-## Latest Test Report (Matrix Run)
-
-Run source:
+Run sources:
 
 - `build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/bin/debug/spsc_test_shadow_*.exe`
 - `build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/bin/release/spsc_test_shadow_*.exe`
@@ -195,34 +193,14 @@ Environment:
 
 Matrix:
 
-- variants: `shadow_off`, `shadow_on`, `shadow_heur`
-- suites: `buffer_pool`, `fifo`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, `queue`, `typed_pool`
-- debug: 27/27 suite runs passed
-- release: 27/27 suite runs passed
+- Debug and Release
+- `shadow_off`, `shadow_on`, `shadow_heur`
+- `fifo`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, `queue`, `typed_pool`, `buffer_pool`
 
-Debug per-suite totals, same for all variants:
+Conclusion:
 
-- `buffer_pool`: 28 passed, 0 failed
-- `fifo`: 50 passed, 0 failed
-- `fifo_view`: 51 passed, 0 failed
-- `pool`: 24 passed, 0 failed, 1 skipped
-- `pool_view`: 16 passed, 0 failed
-- `latest`: 31 passed, 0 failed
-- `chunk`: 11 passed, 0 failed, 1 skipped
-- `queue`: 52 passed, 0 failed
-- `typed_pool`: 65 passed, 0 failed
-
-Release per-suite totals, same for all variants:
-
-- `buffer_pool`: 27 passed, 0 failed, 1 skipped
-- `fifo`: 49 passed, 0 failed, 1 skipped
-- `fifo_view`: 50 passed, 0 failed, 1 skipped
-- `pool`: 24 passed, 0 failed, 1 skipped
-- `pool_view`: 16 passed, 0 failed
-- `latest`: 30 passed, 0 failed, 1 skipped
-- `chunk`: 11 passed, 0 failed, 1 skipped
-- `queue`: 51 passed, 0 failed, 1 skipped
-- `typed_pool`: 64 passed, 0 failed, 1 skipped
+- 54/54 suite runs passed with 30s per-suite timeout.
+- The qmake matrix is a C++17 matrix and forces `SPSC_HAS_SPAN=0`; C++20 `std::span` helpers are intentionally outside this matrix.
 
 ## Notes About Death Tests
 

@@ -16,7 +16,7 @@ Use it together with the per-container pages:
 | `claim` / `try_claim` + `publish` | almost all queue-like containers |
 | `front` / `try_front` + `pop` | almost all queue-like containers |
 | snapshots | `fifo`, `fifo_view`, `queue`, `pool`, `pool_view`, `typed_pool`, wrappers built on them |
-| bulk `claim_write` / `claim_read` | `fifo`, `fifo_view`, `queue`, `pool`, `pool_view`, `typed_pool`, wrappers built on `fifo`/`fifo_view` |
+| bulk `claim_write` / `claim_read` | `fifo`, `fifo_view`, `queue`, `pool`, `pool_view`, `typed_pool` |
 | `attach` / `adopt` / `state` | `fifo_view`, `pool_view`, wrappers built on `fifo_view` |
 | typed raw-slot overlays | `pool`, `pool_view` via `claim_as`, `front_as`, `try_peek` |
 | newest-only sticky read | `latest` |
@@ -538,13 +538,16 @@ spsc::chunk<std::uint16_t, 0> block;
 block.reserve(512);
 ```
 
-Span-friendly processing:
+C++17-safe processing:
 
 ```cpp
-for (std::uint16_t sample : block.used_span()) {
+for (std::uint16_t sample : block) {
     process(sample);
 }
 ```
+
+When C++20 `std::span` support is enabled (`SPSC_HAS_SPAN=1`), the same used range is also
+available through `block.used_span()`.
 
 ## 17. Wrapper Families: `array_fifo*` And `chunk_fifo*`
 
@@ -563,6 +566,7 @@ if (auto* frame = rxFrames.try_claim()) {
 
 ```cpp
 if (auto* block = audioBlocks.try_claim()) {
+    block->clear();
     block->push_back(left);
     block->push_back(right);
     audioBlocks.publish();

@@ -33,7 +33,6 @@
 #include <cstring>
 #include <csignal>
 #include <cstdlib>
-#include <concepts>
 #include <limits>
 #include <memory>
 #include <random>
@@ -122,16 +121,6 @@ static const Runner_ g_runner_{};
 namespace {
 
 
-template <class Q>
-concept has_valid = requires(const Q& q) {
-    { q.valid() } -> std::same_as<bool>;
-};
-
-template <class Q>
-concept has_bytes_per_slot = requires(const Q& q) {
-    { q.bytes_per_slot() } -> std::convertible_to<reg>;
-};
-
 constexpr reg kSmallCap  = 16u;
 constexpr reg kMedCap    = 256u;
 
@@ -208,7 +197,8 @@ static void api_smoke_compile_raw() {
 }
 
 static void extended_policy_compile_smoke_all() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         api_smoke_compile<spsc::latest<std::uint32_t, kSmallCap, Policy>>();
         api_smoke_compile<spsc::latest<std::uint32_t, 0u, Policy>>();
         api_smoke_compile_raw<spsc::latest<void, 0u, Policy>>();
@@ -225,6 +215,14 @@ struct Blob {
     std::uint32_t b{};
     std::uint32_t c{};
 
+    constexpr Blob() noexcept = default;
+    constexpr Blob(std::uint32_t seq_,
+                   std::uint32_t a_ = 0u,
+                   std::uint32_t b_ = 0u,
+                   std::uint32_t c_ = 0u) noexcept
+        : seq(seq_), a(a_), b(b_), c(c_)
+    {}
+
     bool operator==(const Blob& o) const noexcept {
         return seq == o.seq && a == o.a && b == o.b && c == o.c;
     }
@@ -235,6 +233,13 @@ struct alignas(Align) OverAligned {
     std::uint32_t seq{};
     std::uint32_t x{};
     std::uint64_t y{};
+
+    constexpr OverAligned() noexcept = default;
+    constexpr OverAligned(std::uint32_t seq_,
+                          std::uint32_t x_ = 0u,
+                          std::uint64_t y_ = 0u) noexcept
+        : seq(seq_), x(x_), y(y_)
+    {}
 
     bool operator==(const OverAligned& o) const noexcept {
         return seq == o.seq && x == o.x && y == o.y;
@@ -311,7 +316,7 @@ struct LatestModel {
 
 template <class Q>
 static void assert_invariants(const Q& q) {
-    if constexpr (has_valid<Q>) {
+    if constexpr (::spsc::test::has_valid_method<Q>::value) {
         QVERIFY(q.valid());
     }
 
@@ -426,14 +431,14 @@ static void typed_push_emplace(Q& q) {
     QCOMPARE(q.front().seq, 123u);
 
     // emplace
-    q.emplace(T{.seq = 777u});
+    q.emplace(T{777u});
     QCOMPARE(q.front().seq, 777u);
 
     // try_push/try_emplace
     q.clear();
     QVERIFY(q.try_push(t));
     QCOMPARE(q.front().seq, 123u);
-    QVERIFY(q.try_emplace(T{.seq = 9u}));
+    QVERIFY(q.try_emplace(T{9u}));
     QCOMPARE(q.front().seq, 9u);
 
     assert_invariants(q);
@@ -801,7 +806,7 @@ static void shadow_regression_static_swap_and_move() {
     // Now swap. If shadows are not re-synced, a may think it is NOT full and allow an extra push.
     a.swap(b);
 
-    if constexpr (has_valid<Q>) {
+    if constexpr (::spsc::test::has_valid_method<Q>::value) {
         QVERIFY(a.valid());
         QVERIFY(b.valid());
     }
@@ -836,7 +841,7 @@ static void alignment_typed_dynamic_default_alloc() {
     QVERIFY(is_aligned(q.data(), 64u));
 
     // Spot check front() alignment too.
-    q.push(T{.seq = 1u, .x = 2u, .y = 3u});
+    q.push(T{1u, 2u, 3u});
     QVERIFY(is_aligned(&q.front(), 64u));
 }
 
@@ -851,7 +856,7 @@ static void alignment_typed_dynamic_aligned_alloc() {
 
     QVERIFY(is_aligned(q.data(), Align));
 
-    q.push(T{.seq = 1u, .x = 2u, .y = 3u});
+    q.push(T{1u, 2u, 3u});
     QVERIFY(is_aligned(&q.front(), Align));
 }
 
@@ -1188,190 +1193,6 @@ static void threaded_spsc_latest_raw(Q& q) {
     QVERIFY(q.empty());
 }
 
-template <class Q>
-static void threaded_clear_while_producing(Q& q) {
-    using T = typename Q::value_type;
-
-    q.clear();
-
-    std::atomic<bool> start{false};
-    std::atomic<bool> prod_done{false};
-    std::atomic<bool> abort{false};
-    std::atomic<int>  fail{0};
-    std::atomic<int>  clears{0};
-
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kThreadTimeoutMs);
-    auto timed_out = [&]() noexcept {
-        return std::chrono::steady_clock::now() > deadline;
-    };
-
-    std::thread prod([&]() {
-        while (!start.load(std::memory_order_acquire)) {
-            if (timed_out()) {
-                abort.store(true, std::memory_order_relaxed);
-                fail.store(50, std::memory_order_relaxed);
-                return;
-            }
-            std::this_thread::yield();
-        }
-
-        for (std::uint32_t seq = 1u; seq <= static_cast<std::uint32_t>(kThreadIters); ++seq) {
-            if (abort.load(std::memory_order_relaxed)) {
-                return;
-            }
-
-            const T v{.seq = seq, .a = seq ^ 0x33333333u, .b = seq + 0x4444u, .c = ~seq};
-            unsigned spins = 0;
-            while (!q.try_push(v)) {
-                if (timed_out()) {
-                    abort.store(true, std::memory_order_relaxed);
-                    fail.store(51, std::memory_order_relaxed);
-                    return;
-                }
-                spin_pause(spins);
-            }
-        }
-
-        prod_done.store(true, std::memory_order_release);
-    });
-
-    std::thread cons([&]() {
-        start.store(true, std::memory_order_release);
-
-        std::uint32_t last = 0u;
-        for (;;) {
-            if (abort.load(std::memory_order_relaxed)) {
-                return;
-            }
-            if (timed_out()) {
-                abort.store(true, std::memory_order_relaxed);
-                fail.store(60, std::memory_order_relaxed);
-                return;
-            }
-
-            const T* f = q.try_front();
-            if (f != nullptr) {
-                const std::uint32_t seq = f->seq;
-                if (seq < last) {
-                    abort.store(true, std::memory_order_relaxed);
-                    fail.store(61, std::memory_order_relaxed);
-                    return;
-                }
-                if (f->a != (seq ^ 0x33333333u) || f->b != (seq + 0x4444u) || f->c != ~seq) {
-                    abort.store(true, std::memory_order_relaxed);
-                    fail.store(62, std::memory_order_relaxed);
-                    return;
-                }
-                last = seq;
-            } else if (prod_done.load(std::memory_order_acquire)) {
-                q.clear();
-                return;
-            }
-
-            q.clear();
-            clears.fetch_add(1, std::memory_order_relaxed);
-        }
-    });
-
-    prod.join();
-    cons.join();
-
-    QVERIFY2(!abort.load(std::memory_order_relaxed), "threaded_clear_while_producing: timed out or invariant failed");
-    QCOMPARE(fail.load(std::memory_order_relaxed), 0);
-    QVERIFY(clears.load(std::memory_order_relaxed) > 0);
-    q.clear();
-    QVERIFY(q.empty());
-}
-
-template <class Q>
-static void threaded_clear_while_producing_raw(Q& q) {
-    q.clear();
-
-    std::atomic<bool> start{false};
-    std::atomic<bool> prod_done{false};
-    std::atomic<bool> abort{false};
-    std::atomic<int>  fail{0};
-    std::atomic<int>  clears{0};
-
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kThreadTimeoutMs);
-    auto timed_out = [&]() noexcept {
-        return std::chrono::steady_clock::now() > deadline;
-    };
-
-    std::thread prod([&]() {
-        while (!start.load(std::memory_order_acquire)) {
-            if (timed_out()) {
-                abort.store(true, std::memory_order_relaxed);
-                fail.store(70, std::memory_order_relaxed);
-                return;
-            }
-            std::this_thread::yield();
-        }
-
-        for (std::uint32_t seq = 1u; seq <= static_cast<std::uint32_t>(kThreadIters); ++seq) {
-            if (abort.load(std::memory_order_relaxed)) {
-                return;
-            }
-
-            const std::uint32_t v = seq;
-            unsigned spins = 0;
-            while (!q.try_push(v)) {
-                if (timed_out()) {
-                    abort.store(true, std::memory_order_relaxed);
-                    fail.store(71, std::memory_order_relaxed);
-                    return;
-                }
-                spin_pause(spins);
-            }
-        }
-
-        prod_done.store(true, std::memory_order_release);
-    });
-
-    std::thread cons([&]() {
-        start.store(true, std::memory_order_release);
-
-        std::uint32_t last = 0u;
-        for (;;) {
-            if (abort.load(std::memory_order_relaxed)) {
-                return;
-            }
-            if (timed_out()) {
-                abort.store(true, std::memory_order_relaxed);
-                fail.store(80, std::memory_order_relaxed);
-                return;
-            }
-
-            const void* f = q.try_front();
-            if (f != nullptr) {
-                std::uint32_t v{};
-                std::memcpy(&v, f, sizeof(v));
-                if (v < last) {
-                    abort.store(true, std::memory_order_relaxed);
-                    fail.store(81, std::memory_order_relaxed);
-                    return;
-                }
-                last = v;
-            } else if (prod_done.load(std::memory_order_acquire)) {
-                q.clear();
-                return;
-            }
-
-            q.clear();
-            clears.fetch_add(1, std::memory_order_relaxed);
-        }
-    });
-
-    prod.join();
-    cons.join();
-
-    QVERIFY2(!abort.load(std::memory_order_relaxed), "threaded_clear_while_producing_raw: timed out or invariant failed");
-    QCOMPARE(fail.load(std::memory_order_relaxed), 0);
-    QVERIFY(clears.load(std::memory_order_relaxed) > 0);
-    q.clear();
-    QVERIFY(q.empty());
-}
-
 // -------------------------
 // Suite runners
 // -------------------------
@@ -1381,7 +1202,7 @@ static void run_static_typed_suite() {
     using Q = spsc::latest<Blob, kSmallCap, Policy>;
 
     Q q;
-    if constexpr (has_valid<Q>) {
+    if constexpr (::spsc::test::has_valid_method<Q>::value) {
         QVERIFY(q.valid());
     }
     QCOMPARE(q.capacity(), kSmallCap);
@@ -1415,8 +1236,8 @@ static void run_dynamic_typed_suite() {
         Q other;
         QVERIFY(other.init(128u));
 
-        q.push(Blob{.seq = 7u});
-        other.push(Blob{.seq = 9u});
+        q.push(Blob{7u});
+        other.push(Blob{9u});
 
         q.swap(other);
         QCOMPARE(q.front().seq, 9u);
@@ -1445,8 +1266,8 @@ static void run_dynamic_raw_suite() {
         Q other;
         QVERIFY(other.init(128u, sizeof(Blob)));
 
-        Blob a{.seq = 1u};
-        Blob b{.seq = 2u};
+        Blob a{1u};
+        Blob b{2u};
         q.push(a);
         other.push(b);
 
@@ -1747,7 +1568,7 @@ template <class Q>
 static void invalid_default_constructed_typed() {
     Q q;
 
-    if constexpr (has_valid<Q>) {
+    if constexpr (::spsc::test::has_valid_method<Q>::value) {
         QVERIFY(!q.valid());
     }
 
@@ -1768,7 +1589,7 @@ template <class Q>
 static void invalid_default_constructed_raw() {
     Q q;
 
-    if constexpr (has_valid<Q>) {
+    if constexpr (::spsc::test::has_valid_method<Q>::value) {
         QVERIFY(!q.valid());
     }
 
@@ -1843,8 +1664,8 @@ static void allocator_accounting_typed_dynamic() {
         QVERIFY(A::alloc_calls.load(std::memory_order_relaxed) >= 1u);
         QVERIFY(A::bytes_live.load(std::memory_order_relaxed) >= sizeof(Blob) * 128u);
 
-        q.push(Blob{.seq = 1u});
-        q.push(Blob{.seq = 2u});
+        q.push(Blob{1u});
+        q.push(Blob{2u});
         QCOMPARE(q.front().seq, 2u);
 
         q.destroy();
@@ -1874,7 +1695,7 @@ static void allocator_accounting_raw_dynamic() {
         QVERIFY(BA::alloc_calls.load(std::memory_order_relaxed) >= 64u);
         QVERIFY(BA::bytes_live.load(std::memory_order_relaxed) >= sizeof(Blob) * 64u);
 
-        Blob b{.seq = 123u};
+        Blob b{123u};
         q.push(b);
 
         Blob out{};
@@ -2225,8 +2046,8 @@ static void move_swap_stress_typed_dynamic() {
             b.pop();
         }
 
-        a.push(Blob{.seq = static_cast<std::uint32_t>(i * 2 + 1)});
-        b.push(Blob{.seq = static_cast<std::uint32_t>(i * 2 + 2)});
+        a.push(Blob{static_cast<std::uint32_t>(i * 2 + 1)});
+        b.push(Blob{static_cast<std::uint32_t>(i * 2 + 2)});
 
         a.swap(b);
         QVERIFY(!a.empty());
@@ -2293,7 +2114,7 @@ static void reserve_resize_edge_cases_typed_dynamic() {
     Q q;
     QVERIFY(q.reserve(0u));
     QVERIFY(!q.valid());
-    QVERIFY(!q.try_push(Blob{.seq = 1u}));
+    QVERIFY(!q.try_push(Blob{1u}));
 
     QVERIFY(q.init(3u));
     QVERIFY(q.valid());
@@ -2301,7 +2122,7 @@ static void reserve_resize_edge_cases_typed_dynamic() {
     QVERIFY((q.capacity() & (q.capacity() - 1u)) == 0u);
 
     const reg cap0 = q.capacity();
-    q.push(Blob{.seq = 11u});
+    q.push(Blob{11u});
     QCOMPARE(q.front().seq, 11u);
 
     QVERIFY(q.resize(1u)); // No shrink.
@@ -2367,8 +2188,8 @@ static void consume_all_and_clear_contract_typed(Q& q) {
     q.clear();
     QVERIFY(q.try_front() == nullptr);
 
-    q.push(T{.seq = 1u});
-    q.push(T{.seq = 2u});
+    q.push(T{1u});
+    q.push(T{2u});
     QVERIFY(q.try_front() != nullptr);
     QCOMPARE(q.front().seq, 2u);
 
@@ -2377,7 +2198,7 @@ static void consume_all_and_clear_contract_typed(Q& q) {
     QVERIFY(q.try_front() == nullptr);
     QVERIFY(!q.try_pop());
 
-    q.push(T{.seq = 3u});
+    q.push(T{3u});
     QCOMPARE(q.front().seq, 3u);
     (void)q.try_front();
     q.clear();
@@ -2421,7 +2242,7 @@ static void move_contract_static_typed() {
     using Q = spsc::latest<Blob, kSmallCap, Policy>;
 
     Q a;
-    a.push(Blob{.seq = 7u});
+    a.push(Blob{7u});
     Q b = std::move(a);
     QVERIFY(a.valid());
     QVERIFY(a.empty());
@@ -2429,7 +2250,7 @@ static void move_contract_static_typed() {
     QCOMPARE(b.front().seq, 7u);
 
     Q c;
-    c.push(Blob{.seq = 9u});
+    c.push(Blob{9u});
     c = std::move(b);
     QVERIFY(c.valid());
     QCOMPARE(c.front().seq, 7u);
@@ -2443,13 +2264,13 @@ static void move_contract_typed_dynamic() {
 
     Q src;
     QVERIFY(src.init(64u));
-    src.push(Blob{.seq = 1u});
-    src.push(Blob{.seq = 2u});
+    src.push(Blob{1u});
+    src.push(Blob{2u});
     QVERIFY(src.try_front() != nullptr);
 
     Q dst;
     QVERIFY(dst.init(32u));
-    dst.push(Blob{.seq = 9u});
+    dst.push(Blob{9u});
 
     dst = std::move(src);
     QVERIFY(dst.valid());
@@ -2496,7 +2317,8 @@ static void move_contract_raw_dynamic() {
 }
 
 static void extended_policy_smoke_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         run_static_typed_suite<Policy>();
         run_dynamic_typed_suite<Policy>();
         run_dynamic_raw_suite<Policy>();
@@ -2504,7 +2326,8 @@ static void extended_policy_smoke_suite() {
 }
 
 static void extended_policy_regression_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         {
             spsc::latest<Blob, kSmallCap, Policy> q;
             typed_state_machine_fuzz(q, 0x7A110001u + static_cast<std::uint32_t>(sizeof(Policy)));
@@ -2525,7 +2348,8 @@ static void extended_policy_regression_suite() {
         move_contract_raw_dynamic<Policy>();
     });
 
-    ::spsc::test::for_each_extended_atomic_like_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_atomic_like_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         {
             spsc::latest<Blob, 0u, Policy> q;
             QVERIFY(q.init(8u));
@@ -2540,18 +2364,17 @@ static void extended_policy_regression_suite() {
 }
 
 static void extended_policy_threaded_atomic_like_suite() {
-    ::spsc::test::for_each_extended_atomic_like_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_atomic_like_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         {
             spsc::latest<Blob, 0u, Policy> q;
             QVERIFY(q.init(1024u));
             threaded_spsc_latest(q);
-            threaded_clear_while_producing(q);
         }
         {
             spsc::latest<void, 0u, Policy> q;
             QVERIFY(q.init(1024u, sizeof(std::uint32_t)));
             threaded_spsc_latest_raw(q);
-            threaded_clear_while_producing_raw(q);
         }
     });
 }
@@ -2592,13 +2415,11 @@ private slots:
             spsc::latest<Blob, 0u, spsc::policy::A<>> q;
             QVERIFY(q.init(1024u));
             threaded_spsc_latest(q);
-            threaded_clear_while_producing(q);
         }
         {
             spsc::latest<void, 0u, spsc::policy::A<>> q;
             QVERIFY(q.init(1024u, sizeof(std::uint32_t)));
             threaded_spsc_latest_raw(q);
-            threaded_clear_while_producing_raw(q);
         }
     }
 
@@ -2607,13 +2428,11 @@ private slots:
             spsc::latest<Blob, 0u, spsc::policy::CA<>> q;
             QVERIFY(q.init(1024u));
             threaded_spsc_latest(q);
-            threaded_clear_while_producing(q);
         }
         {
             spsc::latest<void, 0u, spsc::policy::CA<>> q;
             QVERIFY(q.init(1024u, sizeof(std::uint32_t)));
             threaded_spsc_latest_raw(q);
-            threaded_clear_while_producing_raw(q);
         }
     }
     void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }

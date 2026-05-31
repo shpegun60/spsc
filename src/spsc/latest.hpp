@@ -633,7 +633,12 @@ public:
     }
 
     RB_FORCEINLINE void clear() noexcept {
-        consume_all();
+        if (RB_UNLIKELY(!is_valid())) {
+            return;
+        }
+        Base::clear();
+        cons_head_snapshot_ = 0u;
+        cons_has_snapshot_  = false;
     }
 
 
@@ -1284,7 +1289,12 @@ public:
     }
 
     RB_FORCEINLINE void clear() noexcept {
-        consume_all();
+        if (RB_UNLIKELY(!is_valid())) {
+            return;
+        }
+        Base::clear();
+        cons_head_snapshot_ = 0u;
+        cons_has_snapshot_  = false;
     }
 
 
@@ -1780,7 +1790,9 @@ public:
     }
 
     RB_FORCEINLINE void clear() noexcept {
-        consume_all();
+        Base::clear();
+        cons_head_snapshot_ = 0u;
+        cons_has_snapshot_  = false;
     }
 
     template<class U>

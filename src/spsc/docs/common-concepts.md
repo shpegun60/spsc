@@ -111,7 +111,7 @@ All main containers use a `Policy` parameter controlling the metadata counters.
 
 Ready-made families:
 
-- `default_policy`: `A<>` by default; define `SPSC_DEFAULT_POLICY_ATOMIC=0` only when you deliberately want `P` as the default
+- `default_policy`: `P` by default; define `SPSC_DEFAULT_POLICY_ATOMIC=1` only when you deliberately want `A<>` as the default
 - `P`: plain counters, fastest on simple single-core paths
 - `V`: volatile counters for ISR/task style communication
 - `VV`: both counters and geometry volatile

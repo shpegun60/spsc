@@ -103,11 +103,7 @@ template <class SizeT, class T, class Policy, class Alloc>
 template <class T, class... Args>
 T* construct_at_compat(T* ptr, Args&&... args)
 {
-#if defined(__cpp_lib_construct_at) && (__cpp_lib_construct_at >= 201811L)
-    return std::construct_at(ptr, std::forward<Args>(args)...);
-#else
     return ::new (static_cast<void*>(ptr)) T(std::forward<Args>(args)...);
-#endif
 }
 
 } // namespace detail

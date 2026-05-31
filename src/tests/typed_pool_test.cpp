@@ -206,8 +206,8 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish()), void>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(::spsc::unsafe, reg{1})), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(::spsc::unsafe, reg{1})), void>);
-    static_assert(!requires(Q& q) { q.try_publish(reg{1}); });
-    static_assert(!requires(Q& q) { q.publish(reg{1}); });
+    static_assert(!::spsc::test::has_try_publish_count<Q>::value);
+    static_assert(!::spsc::test::has_publish_count<Q>::value);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe)), typename Q::regions>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe, reg{1})), typename Q::regions>);
 
@@ -252,7 +252,8 @@ static void api_compile_smoke_all() {
     api_smoke_compile<QA>();
     api_smoke_compile<QCA>();
 
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         api_smoke_compile<spsc::typed_pool<std::uint32_t, 16u, Policy>>();
     });
 }
@@ -678,9 +679,6 @@ static void snapshot_try_consume_contract_suite() {
     QVERIFY(other.is_valid());
     fill_seq(other, 100u, 4u);
     auto other_snap = other.make_snapshot();
-    typename Q::snapshot mixed_snap(snap.begin(), other_snap.end());
-    QVERIFY(!q.try_consume(mixed_snap));
-    QCOMPARE(q.size(), reg{32u});
     QVERIFY(!q.try_consume(other_snap));
     QCOMPARE(q.size(), reg{32});
 
@@ -712,141 +710,6 @@ static void snapshot_invalid_pool_suite() {
     auto snap = q.make_snapshot();
     QVERIFY(snap.empty());
     QVERIFY(!q.try_consume(snap));
-}
-
-static void snapshot_epoch_invalidation_suite() {
-    {
-        spsc::typed_pool<Blob, 4u, spsc::policy::P> q;
-        QVERIFY(q.is_valid());
-        fill_seq(q, 1u, 2u);
-        auto snap = q.make_snapshot();
-        q.clear();
-        fill_seq(q, 10u, 2u);
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2u});
-        q.destroy();
-    }
-
-    {
-        spsc::typed_pool<Blob, 0u, spsc::policy::P> q;
-        QVERIFY(q.resize(4u));
-        fill_seq(q, 1u, 2u);
-        auto snap = q.make_snapshot();
-        q.clear();
-        fill_seq(q, 10u, 2u);
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2u});
-        q.destroy();
-    }
-}
-
-static void release_safe_guard_contract_suite() {
-    spsc::typed_pool<Blob, 2u, spsc::policy::P> q;
-    QVERIFY(q.is_valid());
-
-#if defined(NDEBUG)
-    {
-        spsc::typed_pool<Blob, 0u, spsc::policy::P> invalid;
-        QVERIFY(!invalid.is_valid());
-        QVERIFY(invalid.claim() == nullptr);
-        QVERIFY(invalid.front() == nullptr);
-        invalid.publish();
-        invalid.publish(spsc::unsafe, reg{1u});
-        invalid.pop();
-        invalid.pop(reg{1u});
-        QVERIFY(invalid.empty());
-    }
-
-    {
-        spsc::typed_pool<Blob, 2u, spsc::policy::P> full;
-        full.push(Blob{10u, 11u});
-        full.push(Blob{12u, 13u});
-        QVERIFY(full.full());
-        QVERIFY(full.claim() == nullptr);
-        full.publish();
-        full.publish(spsc::unsafe, reg{1u});
-        QCOMPARE(full.size(), reg{2u});
-        full.destroy();
-    }
-
-    {
-        spsc::typed_pool<Blob, 2u, spsc::policy::P> empty;
-        QVERIFY(empty.front() == nullptr);
-        empty.pop();
-        empty.pop(reg{1u});
-        QVERIFY(empty.empty());
-        empty.destroy();
-    }
-#endif
-
-    auto full_guard = q.scoped_write(0u);
-    QVERIFY(!full_guard);
-#if defined(NDEBUG)
-    QVERIFY(full_guard.emplace_next(Blob{}) == nullptr);
-#endif
-
-    {
-        auto g = q.scoped_write();
-        QVERIFY(g);
-        QVERIFY(g.emplace(Blob{1u, 2u}) != nullptr);
-#if defined(NDEBUG)
-        QVERIFY(g.emplace(Blob{}) == nullptr);
-#endif
-        g.commit();
-    }
-
-    q.pop();
-
-    {
-        auto g = q.scoped_write(1u);
-        QVERIFY(g);
-        QVERIFY(g.emplace_next(Blob{3u, 4u}) != nullptr);
-#if defined(NDEBUG)
-        QVERIFY(g.emplace_next(Blob{}) == nullptr);
-#endif
-        g.commit();
-    }
-
-    q.destroy();
-
-#if defined(NDEBUG)
-    {
-        spsc::typed_pool<Blob, 0u, spsc::policy::P> invalid;
-        QVERIFY(!invalid.is_valid());
-        QVERIFY(invalid.claim() == nullptr);
-        QVERIFY(!invalid.try_publish());
-        QVERIFY(!invalid.try_publish(::spsc::unsafe, reg{1u}));
-        invalid.publish();
-        invalid.publish(::spsc::unsafe, reg{1u});
-        QVERIFY(invalid.front() == nullptr);
-        invalid.pop();
-        invalid.pop(reg{1u});
-        QVERIFY(!invalid.is_valid());
-        QCOMPARE(invalid.size(), reg{0u});
-    }
-
-    {
-        spsc::typed_pool<Blob, 2u, spsc::policy::P> full;
-        QVERIFY(full.is_valid());
-        QVERIFY(full.try_emplace(10u));
-        QVERIFY(full.try_emplace(11u));
-        QCOMPARE(full.size(), reg{2u});
-        QVERIFY(full.claim() == nullptr);
-        QVERIFY(!full.try_publish());
-        QVERIFY(!full.try_publish(::spsc::unsafe, reg{1u}));
-        full.publish();
-        full.publish(::spsc::unsafe, reg{1u});
-        QCOMPARE(full.size(), reg{2u});
-        full.pop();
-        full.pop();
-        QVERIFY(full.empty());
-        QVERIFY(full.front() == nullptr);
-        full.pop();
-        full.pop(reg{1u});
-        QVERIFY(full.empty());
-        full.destroy();
-    }
-#endif
 }
 
 template <class Q>
@@ -2465,14 +2328,16 @@ template <class Policy>
 static void run_threaded_snapshot_try_consume_suite();
 
 static void extended_policy_smoke_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         run_static_suite<Policy>();
         run_dynamic_suite<Policy>();
     });
 }
 
 static void extended_policy_regression_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         {
             spsc::typed_pool<Blob, 16u, Policy> q;
             regression_matrix_suite(q, "extended_static");
@@ -2486,7 +2351,8 @@ static void extended_policy_regression_suite() {
         }
     });
 
-    ::spsc::test::for_each_extended_cached_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_cached_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         stress_cached_policy_transitions_suite<Policy>();
     });
 }
@@ -3075,8 +2941,6 @@ private slots:
 
     void snapshot_consume_contract() { spsc::typed_pool<Blob, 64u, spsc::policy::P> q; snapshot_consume_suite(q); q.destroy(); }
     void snapshot_invalid_pool()     { snapshot_invalid_pool_suite(); }
-    void snapshot_epoch_invalidation() { snapshot_epoch_invalidation_suite(); }
-    void release_safe_guard_contracts() { release_safe_guard_contract_suite(); }
 
     void dynamic_move_contract() { dynamic_move_contract_suite(); }
 

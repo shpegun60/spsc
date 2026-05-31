@@ -3,6 +3,8 @@
 This folder contains the `spsc` container family: single-producer / single-consumer queues, pools, newest-value buffers, and block wrappers built on the same base.
 
 This page is the short quick start and overview. The full method-by-method reference, container guides, and concurrency recipes live in [`docs/`](docs/README.md).
+The examples below are C++17-safe unless explicitly marked otherwise. Helpers that return `std::span`
+(`span()`, `used_span()`, `cap_span()`) require C++20 library support and `SPSC_HAS_SPAN=1`.
 
 ## Start Here
 
@@ -48,8 +50,9 @@ For FreeRTOS and MCU examples, see [Concurrency and FreeRTOS](docs/concurrency-a
 ## Policy Cheat Sheet
 
 The policy controls only the queue metadata behavior: counters, geometry, atomicity, and cacheline padding.
-By default, containers use `spsc::policy::default_policy`, which is `A<>` unless
-`SPSC_DEFAULT_POLICY_ATOMIC` is explicitly set to `0` before including the library.
+By default, containers use `spsc::policy::default_policy`, which is `P`. Define
+`SPSC_DEFAULT_POLICY_ATOMIC=1` before including the library if you want
+`default_policy` to be `A<>`.
 If you opt into `P`, treat that instance as single-thread/single-core only; it is
 not a task/task or thread/thread synchronization policy.
 
@@ -238,6 +241,7 @@ using Blocks = spsc::chunk_fifo<std::uint16_t, 256, 8>;
 Blocks q;
 
 if (auto* block = q.try_claim()) {
+    block->clear();
     block->push_back(10);
     block->push_back(20);
     block->push_back(30);
@@ -245,7 +249,7 @@ if (auto* block = q.try_claim()) {
 }
 
 if (auto* block = q.try_front()) {
-    for (std::uint16_t sample : block->used_span()) {
+    for (std::uint16_t sample : *block) {
         process_sample(sample);
     }
     q.pop();

@@ -294,9 +294,6 @@ public:
             if (RB_UNLIKELY(slots_ == nullptr || bufferSize_.load() == 0u)) { detach(); }
             if (RB_UNLIKELY(other.slots_ == nullptr || other.bufferSize_.load() == 0u)) { other.detach(); }
         }
-
-        bump_snapshot_epoch_();
-        other.bump_snapshot_epoch_();
     }
 
     friend void swap(pool_view& a, pool_view& b) noexcept { a.swap(b); }
@@ -331,10 +328,7 @@ public:
     [[nodiscard]] size_type write_size() const noexcept { return is_valid() ? Base::write_size() : 0u; }
     [[nodiscard]] size_type read_size()  const noexcept { return is_valid() ? Base::read_size()  : 0u; }
 
-    void clear() noexcept {
-        Base::clear();
-        bump_snapshot_epoch_();
-    }
+    void clear() noexcept { Base::clear(); }
 
     // Explicit detach: makes the view invalid (does not touch external storage).
     void detach() noexcept {
@@ -342,7 +336,6 @@ public:
         bufferSize_.store(0u);
         if constexpr (kDynamic) { (void)Base::init(0u); }
         else { Base::clear(); }
-        bump_snapshot_epoch_();
     }
 
     // Attach / adopt API (NOT concurrent with producer/consumer ops)
@@ -363,7 +356,6 @@ public:
         slots_ = slot_array;
         bufferSize_.store(buffer_size);
         Base::clear();
-        bump_snapshot_epoch_();
         return true;
     }
 
@@ -392,7 +384,6 @@ public:
             detach();
             return false;
         }
-        bump_snapshot_epoch_();
         return true;
     }
 
@@ -418,7 +409,6 @@ public:
             detach();
             return false;
         }
-        bump_snapshot_epoch_();
         return true;
     }
 
@@ -452,7 +442,6 @@ public:
             detach();
             return false;
         }
-        bump_snapshot_epoch_();
         return true;
     }
 
@@ -488,10 +477,7 @@ public:
     }
 
     // Reset indices to empty while keeping attachment (if any).
-    void reset() noexcept {
-        Base::clear();
-        bump_snapshot_epoch_();
-    }
+    void reset() noexcept { Base::clear(); }
 
     // ------------------------------------------------------------------------------------------
     // Access to the ring of pointers (void**)
@@ -551,7 +537,7 @@ public:
     [[nodiscard]] snapshot make_snapshot() noexcept {
         using it = snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
-            return snapshot(it(nullptr, 0u, 0u, 0u), it(nullptr, 0u, 0u, 0u));
+            return snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
         // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
         const size_type t    = static_cast<size_type>(Base::tail());
@@ -559,13 +545,13 @@ public:
         const size_type h    = static_cast<size_type>(t + used);
 
         const size_type m = Base::mask();
-        return snapshot(it(data(), m, t, snapshot_epoch_), it(data(), m, h, snapshot_epoch_));
+        return snapshot(it(data(), m, t), it(data(), m, h));
     }
 
     [[nodiscard]] const_snapshot make_snapshot() const noexcept {
         using it = const_snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
-            return const_snapshot(it(nullptr, 0u, 0u, 0u), it(nullptr, 0u, 0u, 0u));
+            return const_snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
         }
         // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
         const size_type t    = static_cast<size_type>(Base::tail());
@@ -573,14 +559,24 @@ public:
         const size_type h    = static_cast<size_type>(t + used);
 
         const size_type m = Base::mask();
-        return const_snapshot(it(data(), m, t, snapshot_epoch_), it(data(), m, h, snapshot_epoch_));
+        return const_snapshot(it(data(), m, t), it(data(), m, h));
     }
 
     template<class Snap>
     void consume(const Snap& s) noexcept {
-        const bool ok = try_consume(s);
-        SPSC_ASSERT(ok);
-        (void)ok;
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(s.begin().data() == data());
+        SPSC_ASSERT(s.end().data() == data());
+        SPSC_ASSERT(s.begin().mask() == Base::mask());
+        SPSC_ASSERT(s.end().mask() == Base::mask());
+        const size_type cur_tail = static_cast<size_type>(Base::tail());
+        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
+
+        const size_type new_tail = static_cast<size_type>(s.head_index());
+        const size_type n = static_cast<size_type>(new_tail - cur_tail); // wrap-safe
+        SPSC_ASSERT(n <= Base::capacity()); // Guards against impossible snapshots
+
+        pop(n);
     }
 
 
@@ -602,8 +598,6 @@ public:
         if (RB_UNLIKELY(s.end().data() != my_data)) { return false; }
         if (RB_UNLIKELY(s.begin().mask() != my_mask)) { return false; }
         if (RB_UNLIKELY(s.end().mask() != my_mask)) { return false; }
-        if (RB_UNLIKELY(s.begin().epoch() != snapshot_epoch_)) { return false; }
-        if (RB_UNLIKELY(s.end().epoch() != snapshot_epoch_)) { return false; }
 
         if (RB_UNLIKELY(snap_tail != cur_tail)) { return false; }
 
@@ -625,7 +619,6 @@ public:
     void consume_all() noexcept {
         if (RB_UNLIKELY(!is_valid())) { return; }
         Base::sync_tail_to_head();
-        bump_snapshot_epoch_();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -946,30 +939,22 @@ public:
     RB_FORCEINLINE void pop() noexcept {
         if (RB_UNLIKELY(empty())) { SPSC_ASSERT(!empty()); return; }
         Base::increment_tail();
-        bump_snapshot_epoch_();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
         if (RB_UNLIKELY(empty())) { return false; }
         Base::increment_tail();
-        bump_snapshot_epoch_();
         return true;
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!can_read(n))) { SPSC_ASSERT(can_read(n)); return; }
         Base::advance_tail(n);
-        if (n != 0u) {
-            bump_snapshot_epoch_();
-        }
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!can_read(n))) { return false; }
         Base::advance_tail(n);
-        if (n != 0u) {
-            bump_snapshot_epoch_();
-        }
         return true;
     }
 
@@ -1404,7 +1389,6 @@ private:
                     slots_ = nullptr;
                     bufferSize_.store(0u);
                     (void)Base::init(0u);
-                    bump_snapshot_epoch_();
                     other.detach();
                     return;
                 }
@@ -1414,7 +1398,6 @@ private:
                     slots_ = nullptr;
                     bufferSize_.store(0u);
                     (void)Base::init(0u);
-                    bump_snapshot_epoch_();
                     other.detach();
                     return;
                 }
@@ -1424,7 +1407,6 @@ private:
             }
 
             other.detach();
-            bump_snapshot_epoch_();
         } else {
             const size_type obs = other.bufferSize_.load();
             slots_ = other.slots_;
@@ -1450,23 +1432,12 @@ private:
             other.slots_ = nullptr;
             other.bufferSize_.store(0u);
             other.Base::clear();
-            bump_snapshot_epoch_();
-            other.bump_snapshot_epoch_();
-        }
-    }
-
-private:
-    void bump_snapshot_epoch_() noexcept {
-        ++snapshot_epoch_;
-        if (snapshot_epoch_ == 0u) {
-            snapshot_epoch_ = 1u;
         }
     }
 
 private:
     pointer* slots_{nullptr};
     geometry_type  bufferSize_{};
-    size_type snapshot_epoch_{1u};
 };
 
 // ------------------------------------------------------------------------

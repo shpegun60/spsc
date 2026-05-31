@@ -8,13 +8,13 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Changed
 
-- Default public policy selection is now safe-by-default atomic (`A<>`) unless `SPSC_DEFAULT_POLICY_ATOMIC=0` is defined before including the library.
-- Atomic counter policies now reject memory orders that cannot publish SPSC payloads safely, including `relaxed_orders` for normal container policies.
+- qmake dashboard/test runner builds now target C++17 and keep Debug/Release binaries in separate `bin/debug` and `bin/release` directories.
+- qmake C++17 test runners force `SPSC_HAS_SPAN=0`; `std::span` helpers remain available only for C++20-capable builds that enable span support.
+- The default SPSC policy remains plain (`SPSC_DEFAULT_POLICY_ATOMIC=0`), while lock-free atomics remain required by default (`SPSC_REQUIRE_LOCK_FREE=1`).
 
 ### Fixed
 
-- Hardened snapshot consumption against stale lifecycle epochs and mismatched begin/end iterators.
-- Hardened release builds for invalid/full/empty non-try pool and typed-pool paths that previously relied on debug assertions.
+- Restored Qt shadow-build MOC/test runner layout so the dashboard resolves per-config runner executables reliably.
 
 ## [1.0.0] - 2026-03-21
 
@@ -42,4 +42,5 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/shpegun60/spsc/releases/tag/v1.0.0

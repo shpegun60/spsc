@@ -43,11 +43,10 @@ public:
 
     ring_iterator() noexcept = default;
 
-    ring_iterator(pointer storage, Size mask, Size index, Size epoch = Size{0}) noexcept
+    ring_iterator(pointer storage, Size mask, Size index) noexcept
         : storage_(storage)
         , mask_(mask)
         , index_(index)
-        , epoch_(epoch)
     {}
 
     // Implicit conversion from non-const to const iterator.
@@ -56,7 +55,6 @@ public:
         : storage_(other.storage_)
         , mask_(other.mask_)
         , index_(other.index_)
-        , epoch_(other.epoch_)
     {}
 
     reference operator*() const noexcept {
@@ -95,7 +93,6 @@ public:
 
     [[nodiscard]] Size index() const noexcept { return index_; }
     [[nodiscard]] Size mask() const noexcept { return mask_; }
-    [[nodiscard]] Size epoch() const noexcept { return epoch_; }
 
 private:
     template<class, class, bool> friend class ring_iterator;
@@ -103,7 +100,6 @@ private:
     pointer storage_{nullptr};
     Size    mask_{0};
     Size    index_{0};
-    Size    epoch_{0};
 };
 
 // Symmetric comparisons for iterator/const_iterator.
@@ -113,8 +109,7 @@ inline bool operator==(const ring_iterator<T, Size, C1>& a,
 {
     return a.data() == b.data()
     && a.index() == b.index()
-        && a.mask() == b.mask()
-        && a.epoch() == b.epoch();
+        && a.mask() == b.mask();
 }
 
 template<class T, class Size, bool C1, bool C2>
@@ -145,8 +140,8 @@ public:
     snapshot_view() noexcept = default;
 
     snapshot_view(iterator b, iterator e) noexcept
-        : begin_(valid_range_(b, e) ? b : iterator{})
-        , end_(valid_range_(b, e) ? e : iterator{})
+        : begin_(b)
+        , end_(e)
     {}
 
     iterator begin() noexcept { return begin_; }
@@ -163,7 +158,12 @@ public:
         // Wrap-safe logical size; bounded by capacity derived from iterator mask.
         // Fails closed (returns 0) if the snapshot is corrupted.
         const size_type cap = static_cast<size_type>(begin_.mask() + 1u);
-        if (begin_.data() == nullptr || cap == 0u) { return size_type{0}; }
+        if (begin_.data() == nullptr ||
+            begin_.data() != end_.data() ||
+            begin_.mask() != end_.mask() ||
+            cap == 0u) {
+            return size_type{0};
+        }
 
         const size_type used = static_cast<size_type>(end_.index() - begin_.index()); // wrap-safe
         return (used <= cap) ? used : size_type{0};
@@ -177,18 +177,6 @@ public:
     }
 
 private:
-    [[nodiscard]] static bool valid_range_(const iterator& b, const iterator& e) noexcept {
-        if (b.data() != e.data() || b.mask() != e.mask() || b.epoch() != e.epoch()) {
-            return false;
-        }
-        const size_type cap = static_cast<size_type>(b.mask() + 1u);
-        if (b.data() == nullptr || cap == 0u) {
-            return false;
-        }
-        const size_type used = static_cast<size_type>(e.index() - b.index());
-        return used <= cap;
-    }
-
     iterator begin_{};
     iterator end_{};
 };
@@ -212,14 +200,15 @@ public:
     const_snapshot_view() noexcept = default;
 
     const_snapshot_view(const_iterator b, const_iterator e) noexcept
-        : begin_(valid_range_(b, e) ? b : const_iterator{})
-        , end_(valid_range_(b, e) ? e : const_iterator{})
+        : begin_(b)
+        , end_(e)
     {}
 
     // Convenience: allow constructing from mutable iterators (implicit conv exists).
     const_snapshot_view(detail::ring_iterator<T, Size, false> b,
                         detail::ring_iterator<T, Size, false> e) noexcept
-        : const_snapshot_view(const_iterator(b), const_iterator(e))
+        : begin_(const_iterator(b))
+        , end_(const_iterator(e))
     {}
 
     const_iterator begin() const noexcept { return begin_; }
@@ -232,7 +221,12 @@ public:
         // Wrap-safe logical size; bounded by capacity derived from iterator mask.
         // Fails closed (returns 0) if the snapshot is corrupted.
         const size_type cap = static_cast<size_type>(begin_.mask() + 1u);
-        if (begin_.data() == nullptr || cap == 0u) { return size_type{0}; }
+        if (begin_.data() == nullptr ||
+            begin_.data() != end_.data() ||
+            begin_.mask() != end_.mask() ||
+            cap == 0u) {
+            return size_type{0};
+        }
 
         const size_type used = static_cast<size_type>(end_.index() - begin_.index()); // wrap-safe
         return (used <= cap) ? used : size_type{0};
@@ -246,19 +240,6 @@ public:
     }
 
 private:
-    [[nodiscard]] static bool valid_range_(const const_iterator& b,
-                                           const const_iterator& e) noexcept {
-        if (b.data() != e.data() || b.mask() != e.mask() || b.epoch() != e.epoch()) {
-            return false;
-        }
-        const size_type cap = static_cast<size_type>(b.mask() + 1u);
-        if (b.data() == nullptr || cap == 0u) {
-            return false;
-        }
-        const size_type used = static_cast<size_type>(e.index() - b.index());
-        return used <= cap;
-    }
-
     const_iterator begin_{};
     const_iterator end_{};
 };

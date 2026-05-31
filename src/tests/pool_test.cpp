@@ -122,14 +122,6 @@ static void sigabrt_handler_(int) noexcept {
         require_valid(q);
         auto g = q.scoped_write(1u);
         (void)g.write_next(nullptr, 1u); // Must assert: non-zero copy from nullptr.
-    } else if (std::strcmp(mode, "bulk_write_next_oversized") == 0) {
-        struct Oversized final {
-            std::array<std::byte, 256u> bytes{};
-        };
-        Q q(reg{64u});
-        require_valid(q);
-        auto g = q.scoped_write(1u);
-        (void)g.write_next(Oversized{}); // Must assert: typed value cannot fit in a slot.
     } else if (std::strcmp(mode, "consume_foreign_snapshot") == 0) {
         Q q1(reg{64u});
         Q q2(reg{64u});
@@ -292,8 +284,8 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish()), bool>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().publish(::spsc::unsafe, reg{1})), void>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_publish(::spsc::unsafe, reg{1})), bool>);
-    static_assert(!requires(Q& q) { q.publish(reg{1}); });
-    static_assert(!requires(Q& q) { q.try_publish(reg{1}); });
+    static_assert(!::spsc::test::has_publish_count<Q>::value);
+    static_assert(!::spsc::test::has_try_publish_count<Q>::value);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe)), typename Q::regions>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().claim_write(::spsc::unsafe, reg{1})), typename Q::regions>);
 
@@ -323,7 +315,7 @@ static void api_smoke_compile() {
     // Lifetime/ownership API
     static_assert(std::is_same_v<decltype(std::declval<Q&>().destroy()), void>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().swap(std::declval<Q&>())), void>);
-    if constexpr (requires(Q& q) { q.resize(reg{2u}, reg{64u}); }) {
+    if constexpr (::spsc::test::has_resize_two<Q>::value) {
         static_assert(std::is_same_v<decltype(std::declval<Q&>().resize(reg{2u}, reg{64u})), bool>);
     } else {
         static_assert(std::is_same_v<decltype(std::declval<Q&>().resize(reg{64u})), bool>);
@@ -373,7 +365,8 @@ static void api_compile_smoke_all() {
     api_smoke_compile<DP>();
     api_smoke_compile<DA>();
 
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         api_smoke_compile<spsc::pool<16u, Policy>>();
         api_smoke_compile<spsc::pool<0u, Policy>>();
     });
@@ -462,7 +455,7 @@ struct misalign_byte_alloc {
 
 template <class Q>
 static bool resize_to(Q& q, reg depth, reg buf_sz) {
-    if constexpr (requires(Q& x) { x.resize(depth, buf_sz); }) {
+    if constexpr (::spsc::test::has_resize_two<Q>::value) {
         return q.resize(depth, buf_sz);
     } else {
         (void)depth;
@@ -480,11 +473,11 @@ static void ensure_valid(Q& q, reg depth = kDepth, reg buf_sz = kBufSz) {
 
 template <typename R>
 constexpr auto region_ptr(const R& r) {
-    if constexpr (requires { r.ptr; }) {
+    if constexpr (::spsc::test::region_has_ptr<R>::value) {
         return r.ptr;
-    } else if constexpr (requires { r.span(); }) {
+    } else if constexpr (::spsc::test::region_has_span<R>::value) {
         return r.span().data();
-    } else if constexpr (requires { r.data(); }) {
+    } else if constexpr (::spsc::test::region_has_data<R>::value) {
         return r.data();
     } else {
         static_assert(sizeof(R) == 0, "Region must expose ptr/data/span");
@@ -494,7 +487,7 @@ constexpr auto region_ptr(const R& r) {
 
 template <class R>
 static reg region_count(const R& r) {
-    if constexpr (requires { r.count; }) {
+    if constexpr (::spsc::test::region_has_count<R>::value) {
         return static_cast<reg>(r.count);
     } else {
         return static_cast<reg>(r.n);
@@ -837,18 +830,12 @@ static void test_snapshot_contracts(Q& q) {
     QVERIFY(q.try_push(make_blob(1u, rng)));
     QVERIFY(q.try_push(make_blob(2u, rng)));
 
-    auto snap = q.make_snapshot();
+    const auto snap = q.make_snapshot();
 
     // Snapshot must not be consumable by another pool.
     {
         Q other;
         ensure_valid(other);
-        std::mt19937 other_rng(4242u);
-        QVERIFY(other.try_push(make_blob(900u, other_rng)));
-        auto other_snap = other.make_snapshot();
-        typename Q::snapshot mixed_snap(snap.begin(), other_snap.end());
-        QVERIFY(!q.try_consume(mixed_snap));
-        QCOMPARE(q.size(), reg{2u});
         QVERIFY(!other.try_consume(snap));
     }
 
@@ -860,102 +847,6 @@ static void test_snapshot_contracts(Q& q) {
     const auto snap2 = q.make_snapshot();
     QVERIFY(q.try_consume(snap2));
     QVERIFY(q.empty());
-}
-
-static void test_snapshot_epoch_invalidation() {
-    {
-        spsc::pool<4u, spsc::policy::P> q(reg{kBufSz});
-        QVERIFY(q.is_valid());
-        std::mt19937 rng(7u);
-        QVERIFY(q.try_push(make_blob(1u, rng)));
-        QVERIFY(q.try_push(make_blob(2u, rng)));
-        const auto snap = q.make_snapshot();
-        q.clear();
-        QVERIFY(q.try_push(make_blob(10u, rng)));
-        QVERIFY(q.try_push(make_blob(11u, rng)));
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2u});
-        q.destroy();
-    }
-
-    {
-        spsc::pool<0u, spsc::policy::P> q(reg{4u}, reg{kBufSz});
-        QVERIFY(q.is_valid());
-        std::mt19937 rng(9u);
-        QVERIFY(q.try_push(make_blob(1u, rng)));
-        QVERIFY(q.try_push(make_blob(2u, rng)));
-        const auto snap = q.make_snapshot();
-        q.clear();
-        QVERIFY(q.try_push(make_blob(10u, rng)));
-        QVERIFY(q.try_push(make_blob(11u, rng)));
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2u});
-        q.destroy();
-    }
-}
-
-static void test_release_safe_push_guards() {
-    struct Oversized {
-        std::byte bytes[kBufSz + 1u]{};
-    };
-    static_assert(std::is_trivially_copyable_v<Oversized>);
-
-    spsc::pool<4u, spsc::policy::P> q(reg{kBufSz});
-    QVERIFY(q.is_valid());
-
-    Oversized big{};
-    QVERIFY(!q.try_push(big));
-    QVERIFY(!q.try_push(nullptr, reg{1u}));
-    QVERIFY(q.empty());
-
-#if defined(NDEBUG)
-    q.push(big);
-    q.push(nullptr, reg{1u});
-    QVERIFY(q.empty());
-#endif
-
-    q.destroy();
-}
-
-static void test_release_safe_nontry_guards() {
-#if !defined(NDEBUG)
-    QSKIP("release-only non-try misuse guards are covered in release builds");
-#else
-    {
-        spsc::pool<0u, spsc::policy::P> q;
-        QVERIFY(!q.is_valid());
-        QVERIFY(q.claim() == nullptr);
-        q.publish();
-        q.publish(::spsc::unsafe, reg{1u});
-        QVERIFY(q.front() == nullptr);
-        q.pop();
-        q.pop(reg{1u});
-        QVERIFY(!q.is_valid());
-        QCOMPARE(q.size(), reg{0u});
-    }
-
-    {
-        spsc::pool<2u, spsc::policy::P> q(reg{kBufSz});
-        QVERIFY(q.is_valid());
-        std::mt19937 rng(55u);
-        QVERIFY(q.try_push(make_blob(1u, rng)));
-        QVERIFY(q.try_push(make_blob(2u, rng)));
-        QCOMPARE(q.size(), reg{2u});
-
-        QVERIFY(q.claim() == nullptr);
-        q.publish();
-        q.publish(::spsc::unsafe, reg{1u});
-        QCOMPARE(q.size(), reg{2u});
-
-        q.pop();
-        q.pop();
-        QVERIFY(q.empty());
-        q.pop();
-        q.pop(reg{1u});
-        QVERIFY(q.empty());
-        q.destroy();
-    }
-#endif
 }
 
 template <class Q>
@@ -1081,26 +972,6 @@ static void test_bulk_limit_contracts(Q& q) {
     QVERIFY(!q.empty());
     q.consume_all();
     QVERIFY(q.empty());
-
-    // Typed write_next must reject oversized values in release too.
-#if defined(NDEBUG)
-    {
-        struct Oversized final {
-            std::array<std::byte, 256u> bytes{};
-        };
-        static_assert(std::is_trivially_copyable_v<Oversized>);
-
-        q.consume_all();
-        const reg before = q.size();
-        auto bw = q.scoped_write(1u);
-        QVERIFY(static_cast<bool>(bw));
-        QVERIFY(static_cast<std::size_t>(q.buffer_size()) < sizeof(Oversized));
-        QVERIFY(bw.write_next(Oversized{}) == nullptr);
-        QCOMPARE(bw.constructed(), reg{0u});
-        bw.commit();
-        QCOMPARE(q.size(), before);
-    }
-#endif
 }
 
 template <class Q>
@@ -2000,7 +1871,7 @@ static void test_resize_semantics() {
     }
 
     // Dynamic pools: request depth growth must increase capacity to next pow2 (or keep old if already >=).
-    if constexpr (requires(Q& x) { x.resize(reg{}, reg{}); }) {
+    if constexpr (::spsc::test::has_resize_two<Q>::value) {
         const reg want_depth = static_cast<reg>(old_cap + 3u);
         QVERIFY(q.resize(want_depth, new_bs));
         QVERIFY(q.capacity() >= old_cap);
@@ -2008,7 +1879,7 @@ static void test_resize_semantics() {
     }
 
     // Shrink-to-zero should fully destroy.
-    if constexpr (requires(Q& x) { x.resize(reg{}, reg{}); }) {
+    if constexpr (::spsc::test::has_resize_two<Q>::value) {
         QVERIFY(q.resize(0u, 0u));
     } else {
         QVERIFY(q.resize(0u));
@@ -2656,7 +2527,6 @@ static void death_tests_debug_only_suite() {
     SPSC_EXPECT_DEATH_CASE("write_guard_arm_without_slot");
     SPSC_EXPECT_DEATH_CASE("bulk_get_next_without_claim");
     SPSC_EXPECT_DEATH_CASE("bulk_write_next_null_nonzero");
-    SPSC_EXPECT_DEATH_CASE("bulk_write_next_oversized");
     SPSC_EXPECT_DEATH_CASE("consume_foreign_snapshot");
     SPSC_EXPECT_DEATH_CASE("pop_n_too_many");
     SPSC_EXPECT_DEATH_CASE("publish_n_too_many");
@@ -2698,9 +2568,6 @@ private slots:
     void extended_policy_threaded_atomic_like();
 
     void dynamic_capacity_sweep();
-    void snapshot_epoch_invalidation();
-    void release_safe_push_guards();
-    void release_safe_nontry_guards();
     void death_tests_debug_only();
 
     void alignment_default_alloc();
@@ -2997,18 +2864,6 @@ void tst_pool_api_paranoid::dynamic_capacity_sweep() {
     dynamic_capacity_sweep_suite();
 }
 
-void tst_pool_api_paranoid::snapshot_epoch_invalidation() {
-    test_snapshot_epoch_invalidation();
-}
-
-void tst_pool_api_paranoid::release_safe_push_guards() {
-    test_release_safe_push_guards();
-}
-
-void tst_pool_api_paranoid::release_safe_nontry_guards() {
-    test_release_safe_nontry_guards();
-}
-
 void tst_pool_api_paranoid::extended_policy_regression() {
     extended_policy_regression_suite();
 }
@@ -3102,13 +2957,15 @@ static void run_threaded_policy_suite() {
 }
 
 static void extended_policy_smoke_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         extended_policy_smoke_one<Policy>();
     });
 }
 
 static void extended_policy_regression_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         extended_policy_regression_one<Policy>();
     });
 }

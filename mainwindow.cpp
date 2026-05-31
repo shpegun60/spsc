@@ -83,8 +83,8 @@ QVector<TestVariant> configuredVariants()
 {
     return {
         {QStringLiteral("shadow_off"), QStringLiteral("Shadow Off"), QStringLiteral("spsc_test_shadow_off"), 0, 0, 0},
-        {QStringLiteral("shadow_on"), QStringLiteral("Shadow On"), QStringLiteral("spsc_test_shadow_on"), 1, 1, 0},
-        {QStringLiteral("shadow_heur"), QStringLiteral("Shadow Heuristic"), QStringLiteral("spsc_test_shadow_heur"), 1, 1, 1}
+        {QStringLiteral("shadow_on"), QStringLiteral("Shadow On"), QStringLiteral("spsc_test_shadow_on"), 1, 0, 0},
+        {QStringLiteral("shadow_heur"), QStringLiteral("Shadow Heuristic"), QStringLiteral("spsc_test_shadow_heur"), 1, 0, 1}
     };
 }
 
@@ -143,15 +143,17 @@ void appendUniqueExistingPath(QStringList& ordered,
     ordered.push_back(absolute);
 }
 
-QProcessEnvironment makeRunnerEnvironment()
+QProcessEnvironment makeRunnerEnvironment(const QString& programPath)
 {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     QStringList orderedPath;
     QSet<QString> seen;
 
-    appendUniqueExistingPath(orderedPath, seen, QCoreApplication::applicationDirPath());
-    appendUniqueExistingPath(orderedPath, seen, QStringLiteral("C:/msys64/ucrt64/bin"));
+    appendUniqueExistingPath(orderedPath, seen, QFileInfo(programPath).absolutePath());
     appendUniqueExistingPath(orderedPath, seen, QLibraryInfo::path(QLibraryInfo::BinariesPath));
+
+    const QDir appDir(QCoreApplication::applicationDirPath());
+    appendUniqueExistingPath(orderedPath, seen, appDir.absolutePath());
 
     const QStringList existingPath = splitPathList(env.value(QStringLiteral("PATH")));
     for (const QString& entry : existingPath) {
@@ -160,6 +162,15 @@ QProcessEnvironment makeRunnerEnvironment()
 
     env.insert(QStringLiteral("PATH"), joinPathList(orderedPath));
     return env;
+}
+
+QString currentBuildSubdir()
+{
+#ifdef QT_NO_DEBUG
+    return QStringLiteral("release");
+#else
+    return QStringLiteral("debug");
+#endif
 }
 
 QString displayName(const QString& variantLabel, const QString& suiteName)
@@ -528,7 +539,15 @@ QVector<MainWindow::TestSuiteSpec> MainWindow::suiteSpecs() const
 
 QString MainWindow::resolveProgramPath(const TestSuiteSpec& spec) const
 {
-    return QDir(QCoreApplication::applicationDirPath()).filePath(spec.executableName);
+    const QDir appDir(QCoreApplication::applicationDirPath());
+    const QString buildSubdir = currentBuildSubdir();
+    const QString appDirName = QFileInfo(appDir.absolutePath()).fileName();
+
+    if (appDirName.compare(buildSubdir, Qt::CaseInsensitive) == 0) {
+        return appDir.filePath(spec.executableName);
+    }
+
+    return appDir.filePath(buildSubdir + QLatin1Char('/') + spec.executableName);
 }
 
 MainWindow::TestSuiteResult MainWindow::runSuite(const TestSuiteSpec& spec, const int timeoutMs) const
@@ -541,7 +560,13 @@ MainWindow::TestSuiteResult MainWindow::runSuite(const TestSuiteSpec& spec, cons
     const QString programPath = resolveProgramPath(spec);
     if (!QFileInfo::exists(programPath)) {
         result.exitCode = 127;
-        result.log = QStringLiteral("Missing test runner executable: %1").arg(programPath);
+        result.log = QStringLiteral(
+                         "Missing test runner executable: %1\n"
+                         "Launcher dir: %2\n"
+                         "Selected build subdir: %3")
+                         .arg(programPath,
+                              QCoreApplication::applicationDirPath(),
+                              currentBuildSubdir());
         return result;
     }
 
@@ -549,7 +574,7 @@ MainWindow::TestSuiteResult MainWindow::runSuite(const TestSuiteSpec& spec, cons
     const QString outputSpec = QStringLiteral("%1,txt").arg(logPath);
     QProcess process;
     process.setProgram(programPath);
-    process.setProcessEnvironment(makeRunnerEnvironment());
+    process.setProcessEnvironment(makeRunnerEnvironment(programPath));
     process.setArguments({
         QStringLiteral("--run-suite"),
         spec.suiteName,

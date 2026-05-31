@@ -619,15 +619,15 @@ static void api_smoke_compile()
     static_assert(std::is_same_v<decltype(std::declval<Q&>().span_bytes()), size_type>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().size_bytes()), size_type>);
 
-    if constexpr (requires(Q& q) { q.destroy(); }) {
+    if constexpr (::spsc::test::has_destroy_method<Q>::value) {
         static_assert(std::is_same_v<decltype(std::declval<Q&>().destroy()), void>);
     }
-    if constexpr (requires(Q& q) { q.swap(q); }) {
+    if constexpr (::spsc::test::has_swap_method<Q>::value) {
         static_assert(std::is_same_v<decltype(std::declval<Q&>().swap(std::declval<Q&>())), void>);
     }
-    if constexpr (requires(Q& q) { q.resize(size_type{}, size_type{}); }) {
+    if constexpr (::spsc::test::has_resize_two<Q>::value) {
         static_assert(std::is_same_v<decltype(std::declval<Q&>().resize(size_type{}, size_type{})), bool>);
-    } else if constexpr (requires(Q& q) { q.resize(size_type{}); }) {
+    } else if constexpr (::spsc::test::has_resize_one<Q>::value) {
         static_assert(std::is_same_v<decltype(std::declval<Q&>().resize(size_type{})), bool>);
     }
 }
@@ -663,7 +663,8 @@ static void api_compile_smoke_all()
         ::spsc::dynamic_buffer_pool<Cell>,
         ::spsc::buffer_pool<Cell, 0u, 0u>>);
 
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         api_smoke_compile<::spsc::buffer_pool<Cell, 5u, 3u, Policy>>();
         api_smoke_compile<::spsc::buffer_pool<Cell, 5u, 0u, Policy>>();
         api_smoke_compile<::spsc::buffer_pool<Cell, 0u, 3u, Policy>>();
@@ -1619,7 +1620,8 @@ static void alignment_rounding_matrix_suite()
 
 static void extended_policy_smoke_suite()
 {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         using QS = ::spsc::buffer_pool<Cell, 5u, 3u, Policy>;
         using QF = ::spsc::buffer_pool<Cell, 5u, 0u, Policy>;
         using QC = ::spsc::buffer_pool<Cell, 0u, 3u, Policy>;

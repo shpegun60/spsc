@@ -366,8 +366,8 @@ static void api_compile_smoke() {
         >;
 
     [[maybe_unused]] smoke_pack smoke{};
-    static_assert(!requires(Q& q) { q.publish(reg{1u}); });
-    static_assert(!requires(Q& q) { q.try_publish(reg{1u}); });
+    static_assert(!::spsc::test::has_publish_count<Q>::value);
+    static_assert(!::spsc::test::has_try_publish_count<Q>::value);
     [[maybe_unused]] state_t st{};
     [[maybe_unused]] snapshot_t s1{};
     [[maybe_unused]] const_snapshot_t s2{};
@@ -380,8 +380,8 @@ static void api_compile_smoke() {
     using trap_lvalue_t =
         std::conditional_t<std::is_same_v<reg, std::uint32_t>, std::uint64_t, std::uint32_t>;
     static_assert(!std::is_same_v<trap_lvalue_t, reg>);
-    static_assert(!requires(Q& q, trap_lvalue_t& n) { q.pop(n); });
-    static_assert(!requires(Q& q, trap_lvalue_t& n) { q.try_pop(n); });
+    static_assert(!::spsc::test::has_pop_with<Q, trap_lvalue_t>::value);
+    static_assert(!::spsc::test::has_try_pop_with<Q, trap_lvalue_t>::value);
 
     (void)smoke; (void)st; (void)s1; (void)s2; (void)r; (void)wg; (void)rg; (void)bwg; (void)brg;
 }
@@ -1157,46 +1157,6 @@ static void test_snapshots(Q& q) {
     q.reset();
     verify_invariants(q);
     QVERIFY(q.empty());
-}
-
-static void test_snapshot_epoch_reset_invalidation() {
-    {
-        static_storage<4u> st;
-        st.init(kBufSz);
-        spsc::pool_view<4u, spsc::policy::P> q(st.slot_table, kBufSz);
-        std::mt19937 rng(33u);
-        QVERIFY(q.try_push(make_blob(1u, rng)));
-        QVERIFY(q.try_push(make_blob(2u, rng)));
-        auto snap = q.make_snapshot();
-        static_storage<4u> other_st;
-        other_st.init(kBufSz);
-        spsc::pool_view<4u, spsc::policy::P> other(other_st.slot_table, kBufSz);
-        QVERIFY(other.try_push(make_blob(99u, rng)));
-        auto other_snap = other.make_snapshot();
-        typename spsc::pool_view<4u, spsc::policy::P>::snapshot mixed_snap(snap.begin(), other_snap.end());
-        QVERIFY(!q.try_consume(mixed_snap));
-        QCOMPARE(q.size(), reg{2u});
-        q.reset();
-        QVERIFY(q.try_push(make_blob(10u, rng)));
-        QVERIFY(q.try_push(make_blob(11u, rng)));
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2u});
-    }
-
-    {
-        dynamic_storage<> st;
-        st.init(4u, kBufSz);
-        spsc::pool_view<0u, spsc::policy::P> q(st.slot_table.data(), st.depth, kBufSz);
-        std::mt19937 rng(44u);
-        QVERIFY(q.try_push(make_blob(1u, rng)));
-        QVERIFY(q.try_push(make_blob(2u, rng)));
-        const auto snap = q.make_snapshot();
-        q.reset();
-        QVERIFY(q.try_push(make_blob(10u, rng)));
-        QVERIFY(q.try_push(make_blob(11u, rng)));
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2u});
-    }
 }
 
 // ------------------------------ tests: RAII guards + alignment paranoia ------------------------------
@@ -2348,14 +2308,16 @@ static void run_threaded_suite() {
 }
 
 static void extended_policy_smoke_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         run_static_suite<Policy>();
         run_dynamic_suite<Policy>();
     });
 }
 
 static void extended_policy_regression_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         test_shadow_swap_move_regression_static<Policy>();
         test_shadow_swap_move_regression_dynamic<Policy>();
         test_null_slot_pointer_defense_static<Policy>();
@@ -2398,7 +2360,6 @@ private slots:
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>(); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>(); }
     void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }
-    void snapshot_epoch_reset_invalidation() { test_snapshot_epoch_reset_invalidation(); }
 };
 
 int run_tst_pool_view_api_paranoid(int argc, char** argv)

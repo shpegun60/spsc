@@ -100,6 +100,7 @@ public:
     using Base::reserve;
     using Base::resize;
     using Base::scoped_read;
+    using Base::scoped_write;
     using Base::size;
 #if SPSC_HAS_SPAN
     using Base::span;
@@ -144,8 +145,6 @@ public:
     template <class... Args>
     [[nodiscard]] value_type *try_emplace(Args &&...) = delete;
 
-    void scoped_write() = delete;
-    void scoped_write(size_type) = delete;
 };
 
 /* ========================================================================
@@ -224,6 +223,7 @@ public:
     using Base::rend;
     using Base::reset;
     using Base::scoped_read;
+    using Base::scoped_write;
     using Base::size;
 #if SPSC_HAS_SPAN
     using Base::span;
@@ -261,8 +261,6 @@ public:
     template <class... Args>
     [[nodiscard]] value_type *try_emplace(Args &&...) = delete;
 
-    void scoped_write() = delete;
-    void scoped_write(size_type) = delete;
 };
 
 /* ========================================================================
@@ -333,6 +331,7 @@ public:
     using Base::rend;
     using Base::reset;
     using Base::scoped_read;
+    using Base::scoped_write;
     using Base::size;
 #if SPSC_HAS_SPAN
     using Base::span;
@@ -369,8 +368,6 @@ public:
     template <class... Args>
     [[nodiscard]] value_type *try_emplace(Args &&...) = delete;
 
-    void scoped_write() = delete;
-    void scoped_write(size_type) = delete;
 };
 
 } // namespace spsc

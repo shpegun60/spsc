@@ -156,16 +156,31 @@
 // ============================================================================
 // C++20 SPAN
 // ============================================================================
-#if defined(__has_include)
-#  if __has_include(<span>) && (__cplusplus >= 202002L)
-#    include <span>
-#    define SPSC_HAS_SPAN 1
+#if defined(_MSVC_LANG) && (_MSVC_LANG > __cplusplus)
+#  define SPSC_DETAIL_LANG_VERSION _MSVC_LANG
+#else
+#  define SPSC_DETAIL_LANG_VERSION __cplusplus
+#endif
+
+#ifndef SPSC_HAS_SPAN
+#  if defined(__has_include)
+#    if __has_include(<span>) && (SPSC_DETAIL_LANG_VERSION >= 202002L)
+#      define SPSC_HAS_SPAN 1
+#    else
+#      define SPSC_HAS_SPAN 0
+#    endif
 #  else
 #    define SPSC_HAS_SPAN 0
 #  endif
-#else
-#  define SPSC_HAS_SPAN 0
 #endif/* SPSC_HAS_SPAN */
 
+#if SPSC_HAS_SPAN
+#  if SPSC_DETAIL_LANG_VERSION < 202002L
+#    error "SPSC_HAS_SPAN=1 requires C++20 std::span; set SPSC_HAS_SPAN=0 for C++17 builds"
+#  endif
+#  include <span>
+#endif /* SPSC_HAS_SPAN */
+
+#undef SPSC_DETAIL_LANG_VERSION
 
 #endif /* SPSC_TOOLS_HPP_ */

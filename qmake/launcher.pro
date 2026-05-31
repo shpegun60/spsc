@@ -1,5 +1,5 @@
 QT += core gui widgets
-CONFIG += console c++20
+CONFIG += console c++17
 TEMPLATE = app
 TARGET = spsc_launcher
 

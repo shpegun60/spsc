@@ -15,7 +15,6 @@
 #include "fifo.hpp"         // ::spsc::fifo, ::spsc::policy::default_policy, reg
 #include "fifo_view.hpp"    //::spsc::fifo_view
 
-#include <limits>
 #include <utility>
 
 namespace spsc {
@@ -78,7 +77,9 @@ public:
     using Base::capacity;
     using Base::cbegin;
     using Base::cend;
+    using Base::claim;
     using Base::claim_read;
+    using Base::claim_write;
     using Base::clear;
     using Base::consume;
     using Base::consume_all;
@@ -96,100 +97,24 @@ public:
     using Base::make_snapshot;
     using Base::operator[];
     using Base::pop;
+    using Base::publish;
     using Base::rbegin;
     using Base::read_size;
     using Base::rend;
     using Base::reserve;
     using Base::resize;
     using Base::scoped_read;
+    using Base::scoped_write;
     using Base::size;
 #if SPSC_HAS_SPAN
     using Base::span;
 #endif
+    using Base::try_claim;
     using Base::try_consume;
     using Base::try_front;
     using Base::try_pop;
+    using Base::try_publish;
     using Base::write_size;
-
-    [[nodiscard]] reference claim() noexcept {
-        pointer slot = try_claim();
-        SPSC_ASSERT(slot != nullptr);
-        if (RB_UNLIKELY(slot == nullptr)) {
-            invalid_claim_slot_.clear();
-            return invalid_claim_slot_;
-        }
-        return *slot;
-    }
-
-    [[nodiscard]] pointer try_claim() noexcept {
-        pointer slot = Base::try_claim();
-        if (slot != nullptr) {
-            slot->clear();
-            pending_claim_slots_ = 1u;
-        } else {
-            pending_claim_slots_ = 0u;
-        }
-        return slot;
-    }
-
-    void publish() noexcept {
-        SPSC_ASSERT(pending_claim_slots_ != 0u);
-        SPSC_ASSERT(can_write());
-        if (RB_UNLIKELY(pending_claim_slots_ == 0u) || RB_UNLIKELY(!can_write())) {
-            return;
-        }
-        Base::publish();
-        --pending_claim_slots_;
-    }
-
-    [[nodiscard]] bool try_publish() noexcept {
-        if (RB_UNLIKELY(pending_claim_slots_ == 0u) || RB_UNLIKELY(!can_write())) {
-            return false;
-        }
-        const bool ok = Base::try_publish();
-        if (ok) {
-            --pending_claim_slots_;
-        }
-        return ok;
-    }
-
-    void publish(const ::spsc::unsafe_t tag, const size_type n) noexcept {
-        SPSC_ASSERT(n <= pending_claim_slots_);
-        SPSC_ASSERT(can_write(n));
-        if (RB_UNLIKELY(n > pending_claim_slots_) || RB_UNLIKELY(!can_write(n))) {
-            return;
-        }
-        Base::publish(tag, n);
-        pending_claim_slots_ = static_cast<size_type>(pending_claim_slots_ - n);
-    }
-
-    [[nodiscard]] bool try_publish(const ::spsc::unsafe_t tag, const size_type n) noexcept {
-        if (RB_UNLIKELY(n > pending_claim_slots_) || RB_UNLIKELY(!can_write(n))) {
-            return false;
-        }
-        const bool ok = Base::try_publish(tag, n);
-        if (ok) {
-            pending_claim_slots_ = static_cast<size_type>(pending_claim_slots_ - n);
-        }
-        return ok;
-    }
-
-    void publish(size_type) noexcept = delete;
-    [[nodiscard]] bool try_publish(size_type) noexcept = delete;
-
-    [[nodiscard]] regions
-    claim_write(const ::spsc::unsafe_t tag,
-                const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        regions regs = Base::claim_write(tag, max_count);
-        clear_regions_(regs);
-        pending_claim_slots_ = regs.total;
-        return regs;
-    }
-
-    [[nodiscard]] regions
-    claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        return claim_write(::spsc::unsafe, max_count);
-    }
 
     void swap(chunk_fifo& other) noexcept(noexcept(std::declval<Base&>().swap(std::declval<Base&>()))) {
         Base::swap(static_cast<Base&>(other));
@@ -227,26 +152,6 @@ public:
     template<class... Args>
     [[nodiscard]] value_type* try_emplace(Args&&...) = delete;
 
-    void scoped_write() = delete;
-    void scoped_write(size_type) = delete;
-
-private:
-    value_type invalid_claim_slot_{};
-    size_type pending_claim_slots_{0u};
-
-    static void clear_region_(const region& r) noexcept {
-        if (r.ptr == nullptr) {
-            return;
-        }
-        for (size_type i = 0u; i < r.count; ++i) {
-            r.ptr[i].clear();
-        }
-    }
-
-    static void clear_regions_(const regions& regs) noexcept {
-        clear_region_(regs.first);
-        clear_region_(regs.second);
-    }
 };
 
 
@@ -306,7 +211,9 @@ public:
     using Base::capacity;
     using Base::cbegin;
     using Base::cend;
+    using Base::claim;
     using Base::claim_read;
+    using Base::claim_write;
     using Base::clear;
     using Base::consume;
     using Base::consume_all;
@@ -323,100 +230,24 @@ public:
     using Base::make_snapshot;
     using Base::operator[];
     using Base::pop;
+    using Base::publish;
     using Base::rbegin;
     using Base::read_size;
     using Base::rend;
     using Base::reset;
     using Base::scoped_read;
+    using Base::scoped_write;
     using Base::size;
 #if SPSC_HAS_SPAN
     using Base::span;
 #endif
     using Base::state;
+    using Base::try_claim;
     using Base::try_consume;
     using Base::try_front;
     using Base::try_pop;
+    using Base::try_publish;
     using Base::write_size;
-
-    [[nodiscard]] reference claim() noexcept {
-        pointer slot = try_claim();
-        SPSC_ASSERT(slot != nullptr);
-        if (RB_UNLIKELY(slot == nullptr)) {
-            invalid_claim_slot_.clear();
-            return invalid_claim_slot_;
-        }
-        return *slot;
-    }
-
-    [[nodiscard]] pointer try_claim() noexcept {
-        pointer slot = Base::try_claim();
-        if (slot != nullptr) {
-            slot->clear();
-            pending_claim_slots_ = 1u;
-        } else {
-            pending_claim_slots_ = 0u;
-        }
-        return slot;
-    }
-
-    void publish() noexcept {
-        SPSC_ASSERT(pending_claim_slots_ != 0u);
-        SPSC_ASSERT(can_write());
-        if (RB_UNLIKELY(pending_claim_slots_ == 0u) || RB_UNLIKELY(!can_write())) {
-            return;
-        }
-        Base::publish();
-        --pending_claim_slots_;
-    }
-
-    [[nodiscard]] bool try_publish() noexcept {
-        if (RB_UNLIKELY(pending_claim_slots_ == 0u) || RB_UNLIKELY(!can_write())) {
-            return false;
-        }
-        const bool ok = Base::try_publish();
-        if (ok) {
-            --pending_claim_slots_;
-        }
-        return ok;
-    }
-
-    void publish(const ::spsc::unsafe_t tag, const size_type n) noexcept {
-        SPSC_ASSERT(n <= pending_claim_slots_);
-        SPSC_ASSERT(can_write(n));
-        if (RB_UNLIKELY(n > pending_claim_slots_) || RB_UNLIKELY(!can_write(n))) {
-            return;
-        }
-        Base::publish(tag, n);
-        pending_claim_slots_ = static_cast<size_type>(pending_claim_slots_ - n);
-    }
-
-    [[nodiscard]] bool try_publish(const ::spsc::unsafe_t tag, const size_type n) noexcept {
-        if (RB_UNLIKELY(n > pending_claim_slots_) || RB_UNLIKELY(!can_write(n))) {
-            return false;
-        }
-        const bool ok = Base::try_publish(tag, n);
-        if (ok) {
-            pending_claim_slots_ = static_cast<size_type>(pending_claim_slots_ - n);
-        }
-        return ok;
-    }
-
-    void publish(size_type) noexcept = delete;
-    [[nodiscard]] bool try_publish(size_type) noexcept = delete;
-
-    [[nodiscard]] regions
-    claim_write(const ::spsc::unsafe_t tag,
-                const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        regions regs = Base::claim_write(tag, max_count);
-        clear_regions_(regs);
-        pending_claim_slots_ = regs.total;
-        return regs;
-    }
-
-    [[nodiscard]] regions
-    claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        return claim_write(::spsc::unsafe, max_count);
-    }
 
     void swap(chunk_fifo_view& other) noexcept(noexcept(std::declval<Base&>().swap(std::declval<Base&>()))) {
         Base::swap(static_cast<Base&>(other));
@@ -446,26 +277,6 @@ public:
     template<class... Args>
     [[nodiscard]] value_type* try_emplace(Args&&...) = delete;
 
-    void scoped_write() = delete;
-    void scoped_write(size_type) = delete;
-
-private:
-    value_type invalid_claim_slot_{};
-    size_type pending_claim_slots_{0u};
-
-    static void clear_region_(const region& r) noexcept {
-        if (r.ptr == nullptr) {
-            return;
-        }
-        for (size_type i = 0u; i < r.count; ++i) {
-            r.ptr[i].clear();
-        }
-    }
-
-    static void clear_regions_(const regions& regs) noexcept {
-        clear_region_(regs.first);
-        clear_region_(regs.second);
-    }
 };
 
 } // namespace spsc

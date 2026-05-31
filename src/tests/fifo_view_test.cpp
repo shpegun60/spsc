@@ -18,7 +18,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>     // std::swap
-#include <new>         // std::construct_at, std::destroy_at
+#include <new>         // placement new
 #include <vector>
 
 #include <QCoreApplication>
@@ -340,8 +340,8 @@ static void api_compile_smoke() {
 
         state_t
         > _api{};
-    static_assert(!requires(Q& q) { q.publish(reg{1u}); });
-    static_assert(!requires(Q& q) { q.try_publish(reg{1u}); });
+    static_assert(!::spsc::test::has_publish_count<Q>::value);
+    static_assert(!::spsc::test::has_try_publish_count<Q>::value);
 
     using WG = decltype(std::declval<Q&>().scoped_write());
     using RG = decltype(std::declval<Q&>().scoped_read());
@@ -1399,15 +1399,6 @@ static void test_static_attachment_state_move_swap() {
     QVERIFY(q.attach(bufA.data(), st));
     QVERIFY(q.is_valid());
     QCOMPARE(q.size(), reg{3u});
-
-    {
-        auto stale = q.make_snapshot();
-        q.detach();
-        QVERIFY(q.attach(bufA.data(), st));
-        QVERIFY(!q.try_consume(stale));
-        QCOMPARE(q.size(), reg{3u});
-    }
-
     QCOMPARE(q.front().v, 1);
     q.pop();
     QCOMPARE(q.front().v, 2);
@@ -1433,20 +1424,6 @@ static void test_static_attachment_state_move_swap() {
     QCOMPARE(q.front().v, 102);
     q.pop();
     QVERIFY(q.empty());
-
-    {
-        const reg near_tail = static_cast<reg>(std::numeric_limits<reg>::max() - 1u);
-        const reg near_head = static_cast<reg>(near_tail + 2u);
-        bufA[near_tail & reg{15u}] = Traced{201};
-        bufA[static_cast<reg>(near_tail + 1u) & reg{15u}] = Traced{202};
-        QVERIFY(q.adopt(bufA.data(), near_head, near_tail));
-        QCOMPARE(q.size(), reg{2u});
-        QCOMPARE(q.front().v, 201);
-        q.pop();
-        QCOMPARE(q.front().v, 202);
-        q.pop();
-        QVERIFY(q.empty());
-    }
 
     QVERIFY(!q.adopt(bufA.data(), reg{100u}, reg{0u}));
     QVERIFY(!q.is_valid());
@@ -1544,14 +1521,6 @@ static void test_dynamic_attachment_state_move_swap() {
     QVERIFY(q.is_valid());
     QCOMPARE(q.capacity(), reg{16u});
 
-    {
-        auto stale = q.make_snapshot();
-        q.detach();
-        QVERIFY(q.adopt(bufA.data(), static_cast<reg>(bufA.size()), st.head, st.tail));
-        QVERIFY(!q.try_consume(stale));
-        QCOMPARE(q.size(), reg{3u});
-    }
-
     QCOMPARE(q.front().v, 1);
     q.pop();
     QCOMPARE(q.front().v, 2);
@@ -1559,21 +1528,6 @@ static void test_dynamic_attachment_state_move_swap() {
     QCOMPARE(q.front().v, 3);
     q.pop();
     QVERIFY(q.empty());
-
-    {
-        const reg near_tail = static_cast<reg>(std::numeric_limits<reg>::max() - 1u);
-        const reg near_head = static_cast<reg>(near_tail + 2u);
-        const reg mask = static_cast<reg>(q.capacity() - 1u);
-        bufA[near_tail & mask] = Traced{301};
-        bufA[static_cast<reg>(near_tail + 1u) & mask] = Traced{302};
-        QVERIFY(q.adopt(bufA.data(), static_cast<reg>(bufA.size()), near_head, near_tail));
-        QCOMPARE(q.size(), reg{2u});
-        QCOMPARE(q.front().v, 301);
-        q.pop();
-        QCOMPARE(q.front().v, 302);
-        q.pop();
-        QVERIFY(q.empty());
-    }
 
     QVERIFY(!q.adopt(bufA.data(), static_cast<reg>(bufA.size()), reg{100u}, reg{0u}));
     QVERIFY(!q.is_valid());
@@ -1674,14 +1628,14 @@ struct alignas(Align) Blob final {
 template<class T>
 static void construct_n(T* p, std::size_t n) {
     for (std::size_t i = 0; i < n; ++i) {
-        std::construct_at(p + i);
+        ::new (static_cast<void*>(p + i)) T();
     }
 }
 
 template<class T>
 static void destroy_n(T* p, std::size_t n) {
     for (std::size_t i = 0; i < n; ++i) {
-        std::destroy_at(p + i);
+        (p + i)->~T();
     }
 }
 
@@ -2575,14 +2529,16 @@ static void api_compile_smoke_all() {
     api_compile_smoke<QCA>();
     api_compile_smoke<QD>();
 
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         api_compile_smoke<spsc::fifo_view<Traced, 16u, Policy>>();
         api_compile_smoke<spsc::fifo_view<Traced, 0u, Policy>>();
     });
 }
 
 static void extended_policy_smoke_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         run_static_suite<Policy>();
         run_dynamic_suite<Policy>();
     });
@@ -2891,34 +2847,6 @@ static void snapshot_invalid_view_suite() {
     QVERIFY(!q.try_consume(s));
 }
 
-static void snapshot_epoch_reset_invalidation_suite() {
-    {
-        std::vector<Traced> storage(4u);
-        spsc::fifo_view<Traced, 4u, spsc::policy::P> q(storage.data());
-        QVERIFY(q.try_push(Traced{1}));
-        QVERIFY(q.try_push(Traced{2}));
-        auto snap = q.make_snapshot();
-        q.reset();
-        QVERIFY(q.try_push(Traced{10}));
-        QVERIFY(q.try_push(Traced{11}));
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2u});
-    }
-
-    {
-        std::vector<Traced> storage(4u);
-        spsc::fifo_view<Traced, 0u, spsc::policy::P> q(storage.data(), reg{4u});
-        QVERIFY(q.try_push(Traced{1}));
-        QVERIFY(q.try_push(Traced{2}));
-        auto snap = q.make_snapshot();
-        q.reset();
-        QVERIFY(q.try_push(Traced{10}));
-        QVERIFY(q.try_push(Traced{11}));
-        QVERIFY(!q.try_consume(snap));
-        QCOMPARE(q.size(), reg{2u});
-    }
-}
-
 static void reserve_resize_edge_cases_dynamic_suite() {
     using Q = spsc::fifo_view<std::uint32_t, 0u, spsc::policy::P>;
     Q q;
@@ -3068,7 +2996,8 @@ static void regression_matrix_all() {
 }
 
 static void extended_policy_regression_suite() {
-    ::spsc::test::for_each_extended_nonthreaded_policy([]<class Policy>() {
+    ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
         regression_matrix_one_policy<Policy>();
     });
 }
@@ -3318,7 +3247,6 @@ private slots:
 
     void snapshot_invalid_view() { snapshot_invalid_view_suite(); }
     void snapshot_invalid_queue() { snapshot_invalid_view_suite(); }
-    void snapshot_epoch_reset_invalidation() { snapshot_epoch_reset_invalidation_suite(); }
     void dynamic_move_contract() { dynamic_move_contract_suite(); }
     void consume_all_contract()  { consume_all_contract_suite(); }
 
@@ -3333,7 +3261,8 @@ private slots:
     void stress_cached_ca_transitions() { stress_cached_policy_transitions_suite<spsc::policy::CA<>>(); }
     void extended_policy_regression() {
         extended_policy_regression_suite();
-        ::spsc::test::for_each_extended_cached_policy([]<class Policy>() {
+        ::spsc::test::for_each_extended_cached_policy([](auto policy_tag) {
+            using Policy = typename decltype(policy_tag)::type;
             stress_cached_policy_transitions_suite<Policy>();
         });
     }

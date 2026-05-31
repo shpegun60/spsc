@@ -72,7 +72,7 @@
 /* --------------------------------------------------------------------
  * Optional: require lock-free atomics or allow fallback toolchains.
  *   - Set SPSC_REQUIRE_LOCK_FREE=1 to hard-fail when std::atomic<U> is not always lock-free.
- *   - Default 1 keeps atomic-policy builds genuinely lock-free unless callers opt out.
+ *   - Default 1 keeps accidental lock-based atomic fallback out of the stable API line.
  * -------------------------------------------------------------------- */
 #ifndef SPSC_REQUIRE_LOCK_FREE
 #  define SPSC_REQUIRE_LOCK_FREE 1
