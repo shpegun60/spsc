@@ -2749,8 +2749,17 @@ static void snapshot_try_consume_contract_suite() {
 
     {
         Q q;
+        Q other;
         fill_seq_tracked(q, 1u, 10u);
+        fill_seq_tracked(other, 100u, 3u);
         auto snap = q.make_snapshot();
+        auto other_snap = other.make_snapshot();
+
+        typename Q::snapshot mixed_snap(snap.begin(), other_snap.end());
+        QCOMPARE(mixed_snap.size(), reg{0u});
+        QVERIFY(mixed_snap.begin() == mixed_snap.end());
+        QVERIFY(!q.try_consume(mixed_snap));
+        QCOMPARE(q.size(), reg{10u});
 
         q.pop();
         QVERIFY(!q.try_consume(snap));
@@ -2762,6 +2771,45 @@ static void snapshot_try_consume_contract_suite() {
 
     QCOMPARE(Tracked::live.load(), 0);
     QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+}
+
+static void snapshot_epoch_invalidation_suite() {
+    {
+        spsc::fifo<std::uint32_t, 4u, spsc::policy::P> q;
+        fill_seq_u32(q, 1u, 2u);
+        auto snap = q.make_snapshot();
+        q.clear();
+        fill_seq_u32(q, 10u, 2u);
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2u});
+    }
+
+    {
+        spsc::fifo<std::uint32_t, 0u, spsc::policy::P> q;
+        QVERIFY(q.resize(4u));
+        fill_seq_u32(q, 1u, 2u);
+        auto snap = q.make_snapshot();
+        q.clear();
+        fill_seq_u32(q, 10u, 2u);
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2u});
+        q.destroy();
+    }
+
+    {
+        spsc::fifo<std::uint32_t, 0u, spsc::policy::P> a;
+        spsc::fifo<std::uint32_t, 0u, spsc::policy::P> b;
+        QVERIFY(a.resize(4u));
+        QVERIFY(b.resize(4u));
+        fill_seq_u32(a, 1u, 2u);
+        fill_seq_u32(b, 100u, 2u);
+        auto snap = a.make_snapshot();
+        a.swap(b);
+        QVERIFY(!a.try_consume(snap));
+        QVERIFY(!b.try_consume(snap));
+        a.destroy();
+        b.destroy();
+    }
 }
 
 static void snapshot_iteration_contract_suite() {
@@ -3432,6 +3480,7 @@ static void api_compile_smoke_all() {
     using AFCached = spsc::array_fifo<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
     using AFVPlain = spsc::array_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::P>;
     using AFVCached = spsc::array_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
+    using CAFVPlain = spsc::carray_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::P>;
 
     api_compile_smoke_one<QP>();
     api_compile_smoke_one<QV>();
@@ -3450,6 +3499,40 @@ static void api_compile_smoke_all() {
     static_assert(std::is_base_of_v<typename AFVCached::array_type, typename AFVCached::value_type>);
     static_assert((sizeof(typename AFCached::value_type) % alignof(typename AFCached::value_type)) == 0u);
     static_assert((sizeof(typename AFVCached::value_type) % alignof(typename AFVCached::value_type)) == 0u);
+
+    using AFBase = spsc::fifo<typename AFPlain::value_type, 4u, spsc::policy::P,
+                              typename AFPlain::base_allocator_type>;
+    using AFVBase = spsc::fifo_view<typename AFVPlain::value_type, 4u, spsc::policy::P>;
+    using CAFVBase = spsc::fifo_view<typename CAFVPlain::value_type, 4u, spsc::policy::P>;
+    static_assert(std::is_base_of_v<AFBase, AFPlain>);
+    static_assert(!std::is_convertible_v<AFPlain*, AFBase*>);
+    static_assert(std::is_base_of_v<AFVBase, AFVPlain>);
+    static_assert(!std::is_convertible_v<AFVPlain*, AFVBase*>);
+    static_assert(std::is_base_of_v<CAFVBase, CAFVPlain>);
+    static_assert(!std::is_convertible_v<CAFVPlain*, CAFVBase*>);
+
+    using AFSR = decltype(std::declval<AFPlain&>().scoped_read());
+    using AFBSR = decltype(std::declval<AFPlain&>().scoped_read(reg{1u}));
+    using AFVSR = decltype(std::declval<AFVPlain&>().scoped_read());
+    using AFVBSR = decltype(std::declval<AFVPlain&>().scoped_read(reg{1u}));
+    using CAFVSR = decltype(std::declval<CAFVPlain&>().scoped_read());
+    using CAFVBSR = decltype(std::declval<CAFVPlain&>().scoped_read(reg{1u}));
+    static_assert(std::is_move_constructible_v<AFSR>);
+    static_assert(std::is_move_constructible_v<AFBSR>);
+    static_assert(std::is_move_constructible_v<AFVSR>);
+    static_assert(std::is_move_constructible_v<AFVBSR>);
+    static_assert(std::is_move_constructible_v<CAFVSR>);
+    static_assert(std::is_move_constructible_v<CAFVBSR>);
+#if SPSC_HAS_SPAN
+    static_assert(std::is_same_v<decltype(std::declval<AFPlain&>().span()), std::span<typename AFPlain::value_type>>);
+    static_assert(std::is_same_v<decltype(std::declval<const AFPlain&>().span()), std::span<const typename AFPlain::value_type>>);
+    static_assert(std::is_same_v<decltype(std::declval<AFVPlain&>().span()), std::span<typename AFVPlain::value_type>>);
+    static_assert(std::is_same_v<decltype(std::declval<const AFVPlain&>().span()), std::span<const typename AFVPlain::value_type>>);
+    static_assert(std::is_same_v<decltype(std::declval<CAFVPlain&>().span()), std::span<typename CAFVPlain::value_type>>);
+    static_assert(std::is_same_v<decltype(std::declval<const CAFVPlain&>().span()), std::span<const typename CAFVPlain::value_type>>);
+#endif
+    static_assert(std::is_void_v<decltype(std::declval<AFVPlain&>().reset())>);
+    static_assert(std::is_void_v<decltype(std::declval<CAFVPlain&>().reset())>);
 }
 
 static void extended_policy_smoke_suite() {
@@ -3601,6 +3684,7 @@ private slots:
     void state_machine_fuzz_sweep() { state_machine_fuzz_sweep_suite(); }
     void resize_migration_order()   { resize_migration_order_suite(); }
     void snapshot_try_consume_contract() { snapshot_try_consume_contract_suite(); }
+    void snapshot_epoch_invalidation() { snapshot_epoch_invalidation_suite(); }
 
     void bulk_regions_wraparound() {
         spsc::fifo<Traced, 64u, spsc::policy::P> q;

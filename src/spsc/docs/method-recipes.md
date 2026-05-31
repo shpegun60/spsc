@@ -16,7 +16,7 @@ Use it together with the per-container pages:
 | `claim` / `try_claim` + `publish` | almost all queue-like containers |
 | `front` / `try_front` + `pop` | almost all queue-like containers |
 | snapshots | `fifo`, `fifo_view`, `queue`, `pool`, `pool_view`, `typed_pool`, wrappers built on them |
-| bulk `claim_write` / `claim_read` | `fifo`, `fifo_view`, `queue`, `pool`, `pool_view`, `typed_pool` |
+| bulk `claim_write` / `claim_read` | `fifo`, `fifo_view`, `queue`, `pool`, `pool_view`, `typed_pool`, wrappers built on `fifo`/`fifo_view` |
 | `attach` / `adopt` / `state` | `fifo_view`, `pool_view`, wrappers built on `fifo_view` |
 | typed raw-slot overlays | `pool`, `pool_view` via `claim_as`, `front_as`, `try_peek` |
 | newest-only sticky read | `latest` |
@@ -563,7 +563,6 @@ if (auto* frame = rxFrames.try_claim()) {
 
 ```cpp
 if (auto* block = audioBlocks.try_claim()) {
-    block->clear();
     block->push_back(left);
     block->push_back(right);
     audioBlocks.publish();

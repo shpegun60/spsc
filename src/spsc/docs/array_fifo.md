@@ -106,6 +106,7 @@ q.attach(backing.data(), backing.size(), st);
 - `try_push`
 - `emplace`
 - `try_emplace`
+- `scoped_write`
 
 ## Good Fits
 
@@ -148,6 +149,7 @@ These wrappers inherit most of the queue-like API from `fifo` / `fifo_view`.
 - `try_push`
 - `emplace`
 - `try_emplace`
+- `scoped_write`
 
 That is deliberate: these wrappers are meant to push users toward explicit zero-copy frame filling.
 

@@ -122,6 +122,14 @@ static void sigabrt_handler_(int) noexcept {
         require_valid(q);
         auto g = q.scoped_write(1u);
         (void)g.write_next(nullptr, 1u); // Must assert: non-zero copy from nullptr.
+    } else if (std::strcmp(mode, "bulk_write_next_oversized") == 0) {
+        struct Oversized final {
+            std::array<std::byte, 256u> bytes{};
+        };
+        Q q(reg{64u});
+        require_valid(q);
+        auto g = q.scoped_write(1u);
+        (void)g.write_next(Oversized{}); // Must assert: typed value cannot fit in a slot.
     } else if (std::strcmp(mode, "consume_foreign_snapshot") == 0) {
         Q q1(reg{64u});
         Q q2(reg{64u});
@@ -829,12 +837,18 @@ static void test_snapshot_contracts(Q& q) {
     QVERIFY(q.try_push(make_blob(1u, rng)));
     QVERIFY(q.try_push(make_blob(2u, rng)));
 
-    const auto snap = q.make_snapshot();
+    auto snap = q.make_snapshot();
 
     // Snapshot must not be consumable by another pool.
     {
         Q other;
         ensure_valid(other);
+        std::mt19937 other_rng(4242u);
+        QVERIFY(other.try_push(make_blob(900u, other_rng)));
+        auto other_snap = other.make_snapshot();
+        typename Q::snapshot mixed_snap(snap.begin(), other_snap.end());
+        QVERIFY(!q.try_consume(mixed_snap));
+        QCOMPARE(q.size(), reg{2u});
         QVERIFY(!other.try_consume(snap));
     }
 
@@ -846,6 +860,102 @@ static void test_snapshot_contracts(Q& q) {
     const auto snap2 = q.make_snapshot();
     QVERIFY(q.try_consume(snap2));
     QVERIFY(q.empty());
+}
+
+static void test_snapshot_epoch_invalidation() {
+    {
+        spsc::pool<4u, spsc::policy::P> q(reg{kBufSz});
+        QVERIFY(q.is_valid());
+        std::mt19937 rng(7u);
+        QVERIFY(q.try_push(make_blob(1u, rng)));
+        QVERIFY(q.try_push(make_blob(2u, rng)));
+        const auto snap = q.make_snapshot();
+        q.clear();
+        QVERIFY(q.try_push(make_blob(10u, rng)));
+        QVERIFY(q.try_push(make_blob(11u, rng)));
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2u});
+        q.destroy();
+    }
+
+    {
+        spsc::pool<0u, spsc::policy::P> q(reg{4u}, reg{kBufSz});
+        QVERIFY(q.is_valid());
+        std::mt19937 rng(9u);
+        QVERIFY(q.try_push(make_blob(1u, rng)));
+        QVERIFY(q.try_push(make_blob(2u, rng)));
+        const auto snap = q.make_snapshot();
+        q.clear();
+        QVERIFY(q.try_push(make_blob(10u, rng)));
+        QVERIFY(q.try_push(make_blob(11u, rng)));
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2u});
+        q.destroy();
+    }
+}
+
+static void test_release_safe_push_guards() {
+    struct Oversized {
+        std::byte bytes[kBufSz + 1u]{};
+    };
+    static_assert(std::is_trivially_copyable_v<Oversized>);
+
+    spsc::pool<4u, spsc::policy::P> q(reg{kBufSz});
+    QVERIFY(q.is_valid());
+
+    Oversized big{};
+    QVERIFY(!q.try_push(big));
+    QVERIFY(!q.try_push(nullptr, reg{1u}));
+    QVERIFY(q.empty());
+
+#if defined(NDEBUG)
+    q.push(big);
+    q.push(nullptr, reg{1u});
+    QVERIFY(q.empty());
+#endif
+
+    q.destroy();
+}
+
+static void test_release_safe_nontry_guards() {
+#if !defined(NDEBUG)
+    QSKIP("release-only non-try misuse guards are covered in release builds");
+#else
+    {
+        spsc::pool<0u, spsc::policy::P> q;
+        QVERIFY(!q.is_valid());
+        QVERIFY(q.claim() == nullptr);
+        q.publish();
+        q.publish(::spsc::unsafe, reg{1u});
+        QVERIFY(q.front() == nullptr);
+        q.pop();
+        q.pop(reg{1u});
+        QVERIFY(!q.is_valid());
+        QCOMPARE(q.size(), reg{0u});
+    }
+
+    {
+        spsc::pool<2u, spsc::policy::P> q(reg{kBufSz});
+        QVERIFY(q.is_valid());
+        std::mt19937 rng(55u);
+        QVERIFY(q.try_push(make_blob(1u, rng)));
+        QVERIFY(q.try_push(make_blob(2u, rng)));
+        QCOMPARE(q.size(), reg{2u});
+
+        QVERIFY(q.claim() == nullptr);
+        q.publish();
+        q.publish(::spsc::unsafe, reg{1u});
+        QCOMPARE(q.size(), reg{2u});
+
+        q.pop();
+        q.pop();
+        QVERIFY(q.empty());
+        q.pop();
+        q.pop(reg{1u});
+        QVERIFY(q.empty());
+        q.destroy();
+    }
+#endif
 }
 
 template <class Q>
@@ -971,6 +1081,26 @@ static void test_bulk_limit_contracts(Q& q) {
     QVERIFY(!q.empty());
     q.consume_all();
     QVERIFY(q.empty());
+
+    // Typed write_next must reject oversized values in release too.
+#if defined(NDEBUG)
+    {
+        struct Oversized final {
+            std::array<std::byte, 256u> bytes{};
+        };
+        static_assert(std::is_trivially_copyable_v<Oversized>);
+
+        q.consume_all();
+        const reg before = q.size();
+        auto bw = q.scoped_write(1u);
+        QVERIFY(static_cast<bool>(bw));
+        QVERIFY(static_cast<std::size_t>(q.buffer_size()) < sizeof(Oversized));
+        QVERIFY(bw.write_next(Oversized{}) == nullptr);
+        QCOMPARE(bw.constructed(), reg{0u});
+        bw.commit();
+        QCOMPARE(q.size(), before);
+    }
+#endif
 }
 
 template <class Q>
@@ -2526,6 +2656,7 @@ static void death_tests_debug_only_suite() {
     SPSC_EXPECT_DEATH_CASE("write_guard_arm_without_slot");
     SPSC_EXPECT_DEATH_CASE("bulk_get_next_without_claim");
     SPSC_EXPECT_DEATH_CASE("bulk_write_next_null_nonzero");
+    SPSC_EXPECT_DEATH_CASE("bulk_write_next_oversized");
     SPSC_EXPECT_DEATH_CASE("consume_foreign_snapshot");
     SPSC_EXPECT_DEATH_CASE("pop_n_too_many");
     SPSC_EXPECT_DEATH_CASE("publish_n_too_many");
@@ -2567,6 +2698,9 @@ private slots:
     void extended_policy_threaded_atomic_like();
 
     void dynamic_capacity_sweep();
+    void snapshot_epoch_invalidation();
+    void release_safe_push_guards();
+    void release_safe_nontry_guards();
     void death_tests_debug_only();
 
     void alignment_default_alloc();
@@ -2861,6 +2995,18 @@ void tst_pool_api_paranoid::extended_policy_threaded_atomic_like() {
 
 void tst_pool_api_paranoid::dynamic_capacity_sweep() {
     dynamic_capacity_sweep_suite();
+}
+
+void tst_pool_api_paranoid::snapshot_epoch_invalidation() {
+    test_snapshot_epoch_invalidation();
+}
+
+void tst_pool_api_paranoid::release_safe_push_guards() {
+    test_release_safe_push_guards();
+}
+
+void tst_pool_api_paranoid::release_safe_nontry_guards() {
+    test_release_safe_nontry_guards();
 }
 
 void tst_pool_api_paranoid::extended_policy_regression() {

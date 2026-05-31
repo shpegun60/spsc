@@ -51,6 +51,8 @@ Use when:
 - the queue is effectively local or single-threaded
 
 Do not treat `P` as the normal choice for task/task or ISR/task synchronization.
+The library default is atomic (`A<>`) unless `SPSC_DEFAULT_POLICY_ATOMIC=0` is
+defined before including the headers.
 
 ### `V` / `VV`
 
@@ -458,7 +460,6 @@ void AudioFillTask(void*)
 {
     for (;;) {
         if (auto* block = audioBlocks.try_claim()) {
-            block->clear();
             fill_audio_block(*block);
             audioBlocks.publish();
         }

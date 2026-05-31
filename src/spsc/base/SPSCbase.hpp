@@ -197,6 +197,12 @@ protected:
             return false;
         }
 
+        if (capacity() == 0u) {
+            clear();
+            sync_cache();
+            return initial_head == 0u && initial_tail == 0u;
+        }
+
         const reg used = static_cast<reg>(initial_head - initial_tail);
         if (RB_UNLIKELY(used > capacity())) {
             clear();

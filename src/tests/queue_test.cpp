@@ -225,6 +225,14 @@ static const Runner_ g_runner_{};
 
 namespace {
 
+struct DynamicBaseProbe final : public spsc::SPSCbase<0u, spsc::policy::P> {
+    using Base = spsc::SPSCbase<0u, spsc::policy::P>;
+    using Base::capacity;
+    using Base::empty;
+    using Base::init;
+    using Base::size;
+};
+
 constexpr reg kSmallCap = 16u;
 constexpr reg kMedCap   = 256u;
 constexpr reg kBigCap   = 1024u;
@@ -1934,6 +1942,56 @@ static void snapshot_invalid_queue_suite() {
     QVERIFY(!q.try_consume(s));
 }
 
+static void spscbase_zero_capacity_restore_contract_suite() {
+    DynamicBaseProbe b;
+
+    QVERIFY(b.init(0u));
+    QCOMPARE(b.capacity(), reg{0});
+    QCOMPARE(b.size(), reg{0});
+    QVERIFY(b.empty());
+
+    QVERIFY(!b.init(0u, reg{1u}, reg{0u}));
+    QCOMPARE(b.capacity(), reg{0});
+    QCOMPARE(b.size(), reg{0});
+    QVERIFY(b.empty());
+
+    QVERIFY(!b.init(0u, reg{0u}, reg{1u}));
+    QCOMPARE(b.capacity(), reg{0});
+    QCOMPARE(b.size(), reg{0});
+    QVERIFY(b.empty());
+
+    QVERIFY(b.init(0u, reg{0u}, reg{0u}));
+    QCOMPARE(b.capacity(), reg{0});
+    QCOMPARE(b.size(), reg{0});
+    QVERIFY(b.empty());
+}
+
+static void snapshot_epoch_invalidation_suite() {
+    {
+        spsc::queue<Blob, 4, spsc::policy::P> q;
+        QVERIFY(q.is_valid());
+        fill_seq(q, 1, 2);
+        auto snap = q.make_snapshot();
+        q.clear();
+        fill_seq(q, 10, 2);
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2});
+        q.destroy();
+    }
+
+    {
+        spsc::queue<Blob, 0, spsc::policy::P> q;
+        QVERIFY(q.resize(4));
+        fill_seq(q, 1, 2);
+        auto snap = q.make_snapshot();
+        q.clear();
+        fill_seq(q, 10, 2);
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2});
+        q.destroy();
+    }
+}
+
 // ----------------------------------------
 // Dynamic move semantics contract
 // ----------------------------------------
@@ -2529,17 +2587,10 @@ private slots:
         }
         QCOMPARE(n, reg{30});
 
-        // Mutating the queue after snapshot must not mutate the snapshot view.
+        // A snapshot is a ring-storage view, not an owning copy. Once the
+        // consumer advances, do not dereference it; only validate rejection.
         q.pop(10);
         fill_seq(q, 1000, 10);
-
-        n = 0;
-        exp = 1;
-        for (auto it = s.begin(); it != s.end(); ++it) {
-            QCOMPARE(it->seq, exp++);
-            ++n;
-        }
-        QCOMPARE(n, reg{30});
 
         // try_consume must fail because consumer advanced.
         QVERIFY(!q.try_consume(s));
@@ -2585,6 +2636,14 @@ private slots:
 
     void snapshot_invalid_queue() {
         snapshot_invalid_queue_suite();
+    }
+
+    void spscbase_zero_capacity_restore_contract() {
+        spscbase_zero_capacity_restore_contract_suite();
+    }
+
+    void snapshot_epoch_invalidation() {
+        snapshot_epoch_invalidation_suite();
     }
 
     void dynamic_move_contract() {

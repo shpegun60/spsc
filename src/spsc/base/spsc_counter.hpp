@@ -53,7 +53,7 @@
  *     you want to avoid cache-line contention.
  *
  * Configuration:
- *   - SPSC_REQUIRE_LOCK_FREE (default 0):
+ *   - SPSC_REQUIRE_LOCK_FREE (default 1):
  *       * 0 → Allow std::atomic<U> even if it is not always lock-free. Toolchain
  *             may use libatomic or fallback code paths.
  *       * 1 → static_assert if std::atomic<U>::is_always_lock_free is false.
@@ -72,10 +72,10 @@
 /* --------------------------------------------------------------------
  * Optional: require lock-free atomics or allow fallback toolchains.
  *   - Set SPSC_REQUIRE_LOCK_FREE=1 to hard-fail when std::atomic<U> is not always lock-free.
- *   - Default 0 keeps portability (some MCUs need libatomic or are not LF).
+ *   - Default 1 keeps atomic-policy builds genuinely lock-free unless callers opt out.
  * -------------------------------------------------------------------- */
 #ifndef SPSC_REQUIRE_LOCK_FREE
-#  define SPSC_REQUIRE_LOCK_FREE 0
+#  define SPSC_REQUIRE_LOCK_FREE 1
 #endif /* SPSC_REQUIRE_LOCK_FREE */
 
 namespace spsc::cnt {
@@ -177,6 +177,9 @@ struct default_orders {
 };
 
 struct relaxed_orders {
+    // Not valid for SPSC container publication. Kept only as a named marker for
+    // externally synchronized experiments; AtomicCounter/FastAtomicCounter will
+    // reject it when instantiated by normal container policies.
     static constexpr std::memory_order load  = std::memory_order_relaxed;
     static constexpr std::memory_order store = std::memory_order_relaxed;
     static constexpr std::memory_order rmw   = std::memory_order_relaxed;
@@ -219,6 +222,20 @@ namespace detail {
             default:
                 return false; // consume invalid for RMW
         }
+    }
+
+    constexpr bool has_acquire_for_load(std::memory_order mo) {
+        return (mo == std::memory_order_acquire) || (mo == std::memory_order_seq_cst);
+    }
+
+    constexpr bool has_release_for_store(std::memory_order mo) {
+        return (mo == std::memory_order_release) || (mo == std::memory_order_seq_cst);
+    }
+
+    constexpr bool has_release_for_rmw(std::memory_order mo) {
+        return (mo == std::memory_order_release) ||
+               (mo == std::memory_order_acq_rel) ||
+               (mo == std::memory_order_seq_cst);
     }
 
     /* --------------------------------------------------------------------
@@ -265,7 +282,8 @@ namespace detail {
 
 /* ------------------------------ AtomicCounter ------------------------------
  * Acquire for loads, release for stores, acq_rel for RMW by default.
- * Turn on SPSC_REQUIRE_LOCK_FREE=1 if you want to hard-enforce lock-free.
+ * Define SPSC_REQUIRE_LOCK_FREE=0 only if you explicitly want to allow
+ * non-lock-free atomics.
  * --------------------------------------------------------------------------- */
 template<typename T, typename Orders = default_orders>
 class AtomicCounter {
@@ -281,6 +299,12 @@ private:
     static_assert(detail::valid_load_order(Orders::load),   "AtomicCounter: invalid load memory_order");
     static_assert(detail::valid_store_order(Orders::store), "AtomicCounter: invalid store memory_order");
     static_assert(detail::valid_rmw_order(Orders::rmw),     "AtomicCounter: invalid RMW memory_order");
+    static_assert(detail::has_acquire_for_load(Orders::load),
+                  "AtomicCounter: SPSC payload publication requires acquire/seq_cst loads");
+    static_assert(detail::has_release_for_store(Orders::store),
+                  "AtomicCounter: SPSC payload publication requires release/seq_cst stores");
+    static_assert(detail::has_release_for_rmw(Orders::rmw),
+                  "AtomicCounter: SPSC payload publication requires release/acq_rel/seq_cst RMW operations");
 
     std::atomic<U> v{0};
 
@@ -318,11 +342,15 @@ private:
     static_assert(detail::valid_load_order(Orders::load),   "FastAtomicCounter: invalid load memory_order");
     static_assert(detail::valid_store_order(Orders::store), "FastAtomicCounter: invalid store memory_order");
     static_assert(detail::valid_rmw_order(Orders::rmw),     "FastAtomicCounter: invalid RMW memory_order");
+    static_assert(detail::has_acquire_for_load(Orders::load),
+                  "FastAtomicCounter: SPSC payload publication requires acquire/seq_cst loads");
+    static_assert(detail::has_release_for_store(Orders::store),
+                  "FastAtomicCounter: SPSC payload publication requires release/seq_cst stores");
 
     std::atomic<U> v{0};
 
 #if SPSC_REQUIRE_LOCK_FREE
-    static_assert(std::atomic<U>::is_always_lock_free, "AtomicCounter<U>: not always lock-free on this target");
+    static_assert(std::atomic<U>::is_always_lock_free, "FastAtomicCounter<U>: not always lock-free on this target");
 #endif /* SPSC_REQUIRE_LOCK_FREE */
 
 public:

@@ -114,7 +114,7 @@ Notes:
 ## What Is Here
 
 - `src/spsc/`: core SPSC library headers (`fifo`, `queue`, `typed_pool`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, etc.).
-- `src/*_test.cpp`: paranoid test suites for each buffer type.
+- `src/tests/*_test.cpp`: paranoid test suites for each buffer type.
 - `spsc_test.pro`: Qt/qmake project file.
 - `mainwindow.cpp`: Qt dashboard that runs suites, shows `PASS/FAIL`, logs, and timeout status.
 
@@ -138,6 +138,7 @@ mkdir build
 cd build
 qmake ..\spsc_test.pro
 mingw32-make -j8
+mingw32-make release -j8
 ```
 
 If you use Qt Creator, opening `spsc_test.pro` is enough.
@@ -147,7 +148,7 @@ If you use Qt Creator, opening `spsc_test.pro` is enough.
 Launch the Qt dashboard:
 
 ```powershell
-.\debug\spsc_test.exe
+.\bin\debug\spsc_launcher.exe
 ```
 
 The dashboard:
@@ -159,6 +160,7 @@ The dashboard:
 
 Main suites include:
 
+- `buffer_pool`
 - `fifo`
 - `fifo_view`
 - `pool`
@@ -168,9 +170,22 @@ Main suites include:
 - `queue`
 - `typed_pool`
 
-## Latest Test Report (Integrated Run)
+Direct runner variants are also built:
 
-Run source: `build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/debug/spsc_test.exe`
+```powershell
+.\bin\debug\spsc_test_shadow_off.exe --run-suite fifo
+.\bin\debug\spsc_test_shadow_on.exe --run-suite fifo
+.\bin\debug\spsc_test_shadow_heur.exe --run-suite fifo
+```
+
+Release builds use the same names under `.\bin\release\`.
+
+## Latest Test Report (Matrix Run)
+
+Run source:
+
+- `build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/bin/debug/spsc_test_shadow_*.exe`
+- `build/Desktop_Qt_6_10_1_MinGW_64_bit-Debug/bin/release/spsc_test_shadow_*.exe`
 
 Environment:
 
@@ -178,24 +193,36 @@ Environment:
 - GCC 13.1.0
 - Windows 11
 
-Observed startup warning (non-test-fatal):
+Matrix:
 
-- `qt.qpa.window: SetProcessDpiAwarenessContext() failed: Access is denied.`
+- variants: `shadow_off`, `shadow_on`, `shadow_heur`
+- suites: `buffer_pool`, `fifo`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, `queue`, `typed_pool`
+- debug: 27/27 suite runs passed
+- release: 27/27 suite runs passed
 
-Per-suite totals:
+Debug per-suite totals, same for all variants:
 
-- `fifo`: 46 passed, 0 failed
-- `fifo_view`: 47 passed, 0 failed
-- `pool`: 19 passed, 0 failed
-- `pool_view`: 12 passed, 0 failed
-- `latest`: 28 passed, 0 failed
+- `buffer_pool`: 28 passed, 0 failed
+- `fifo`: 50 passed, 0 failed
+- `fifo_view`: 51 passed, 0 failed
+- `pool`: 24 passed, 0 failed, 1 skipped
+- `pool_view`: 16 passed, 0 failed
+- `latest`: 31 passed, 0 failed
 - `chunk`: 11 passed, 0 failed
-- `queue`: 47 passed, 0 failed
-- `typed_pool`: 60 passed, 0 failed
+- `queue`: 52 passed, 0 failed
+- `typed_pool`: 65 passed, 0 failed
 
-Conclusion:
+Release per-suite totals, same for all variants:
 
-- All suites passed, including `death_tests_debug_only`.
+- `buffer_pool`: 27 passed, 0 failed, 1 skipped
+- `fifo`: 49 passed, 0 failed, 1 skipped
+- `fifo_view`: 50 passed, 0 failed, 1 skipped
+- `pool`: 24 passed, 0 failed, 1 skipped
+- `pool_view`: 16 passed, 0 failed
+- `latest`: 30 passed, 0 failed, 1 skipped
+- `chunk`: 10 passed, 0 failed, 1 skipped
+- `queue`: 51 passed, 0 failed, 1 skipped
+- `typed_pool`: 64 passed, 0 failed, 1 skipped
 
 ## Notes About Death Tests
 

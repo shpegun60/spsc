@@ -55,13 +55,13 @@
  * 0 = fastest single-core by default (Plain), 1 = Atomic by default.
  */
 #ifndef SPSC_DEFAULT_POLICY_ATOMIC
-#  define SPSC_DEFAULT_POLICY_ATOMIC 0
+#  define SPSC_DEFAULT_POLICY_ATOMIC 1
 #endif /* SPSC_DEFAULT_POLICY_ATOMIC */
 
 /* --------------------------------------------------------------------
  * Optional: require lock-free atomics or allow fallback toolchains.
  *   - Set SPSC_REQUIRE_LOCK_FREE=1 to hard-fail when std::atomic<U> is not always lock-free.
- *   - Default 0 keeps portability (some MCUs need libatomic or are not LF).
+ *   - Default 1 keeps atomic-policy builds genuinely lock-free unless callers opt out.
  * -------------------------------------------------------------------- */
 #ifndef SPSC_REQUIRE_LOCK_FREE
 #  define SPSC_REQUIRE_LOCK_FREE 1

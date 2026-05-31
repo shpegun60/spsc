@@ -229,6 +229,32 @@ static void api_smoke_compile() {
     static_assert(std::is_base_of_v<typename CFVCached::chunk_type, typename CFVCached::value_type>);
     static_assert((sizeof(typename CFCached::value_type) % alignof(typename CFCached::value_type)) == 0u);
     static_assert((sizeof(typename CFVCached::value_type) % alignof(typename CFVCached::value_type)) == 0u);
+
+    using CFBase = spsc::fifo<typename CFPlain::value_type, 4u, spsc::policy::P,
+                              typename CFPlain::base_allocator_type>;
+    using CFVBase = spsc::fifo_view<typename CFVPlain::value_type, 4u, spsc::policy::P>;
+    static_assert(std::is_base_of_v<CFBase, CFPlain>);
+    static_assert(!std::is_convertible_v<CFPlain*, CFBase*>);
+    static_assert(std::is_base_of_v<CFVBase, CFVPlain>);
+    static_assert(!std::is_convertible_v<CFVPlain*, CFVBase*>);
+
+    using CFSR = decltype(std::declval<CFPlain&>().scoped_read());
+    using CFBSR = decltype(std::declval<CFPlain&>().scoped_read(reg{1u}));
+    using CFVSR = decltype(std::declval<CFVPlain&>().scoped_read());
+    using CFVBSR = decltype(std::declval<CFVPlain&>().scoped_read(reg{1u}));
+    static_assert(std::is_move_constructible_v<CFSR>);
+    static_assert(std::is_move_constructible_v<CFBSR>);
+    static_assert(std::is_move_constructible_v<CFVSR>);
+    static_assert(std::is_move_constructible_v<CFVBSR>);
+    static_assert(std::is_same_v<decltype(std::declval<CFPlain&>().claim_write()), typename CFPlain::regions>);
+    static_assert(std::is_same_v<decltype(std::declval<CFVPlain&>().claim_write()), typename CFVPlain::regions>);
+#if SPSC_HAS_SPAN
+    static_assert(std::is_same_v<decltype(std::declval<CFPlain&>().span()), std::span<typename CFPlain::value_type>>);
+    static_assert(std::is_same_v<decltype(std::declval<const CFPlain&>().span()), std::span<const typename CFPlain::value_type>>);
+    static_assert(std::is_same_v<decltype(std::declval<CFVPlain&>().span()), std::span<typename CFVPlain::value_type>>);
+    static_assert(std::is_same_v<decltype(std::declval<const CFVPlain&>().span()), std::span<const typename CFVPlain::value_type>>);
+#endif
+    static_assert(std::is_void_v<decltype(std::declval<CFVPlain&>().reset())>);
 }
 
 static void static_contract_suite() {
@@ -744,6 +770,96 @@ static void chunk_fifo_alignment_contract_suite() {
     }
 }
 
+template <class Q>
+static void verify_chunk_fifo_reclaim_clears(Q& q) {
+    QVERIFY(q.is_valid());
+    q.consume_all();
+    QVERIFY(q.empty());
+    QVERIFY(q.capacity() >= reg{2u});
+
+    const reg cap = q.capacity();
+    for (reg i = 0u; i < cap; ++i) {
+        auto* slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        QVERIFY2(slot->empty(), "chunk_fifo must clear each claimed chunk before producer reuse");
+        QVERIFY(slot->try_push(static_cast<std::uint32_t>(1000u + i)));
+        QVERIFY(q.try_publish());
+
+        auto* front = q.try_front();
+        QVERIFY(front != nullptr);
+        QCOMPARE(front->size(), reg{1u});
+        QCOMPARE(front->front(), static_cast<std::uint32_t>(1000u + i));
+        QVERIFY(q.try_pop());
+    }
+
+    auto* reused = q.try_claim();
+    QVERIFY(reused != nullptr);
+    QVERIFY2(reused->empty(), "reclaimed wrapped chunk slot must not expose stale logical size");
+    QVERIFY(reused->try_push(0xCAFEu));
+    QVERIFY(q.try_publish());
+    QVERIFY(q.try_pop());
+
+    auto& claimed = q.claim();
+    QVERIFY2(claimed.empty(), "chunk_fifo::claim() must clear the claimed chunk");
+    QVERIFY(claimed.try_push(0xBEEFu));
+    q.publish();
+    QVERIFY(q.try_pop());
+
+    auto regs = q.claim_write(reg{2u});
+    QVERIFY(regs.total != 0u);
+    bool checked = false;
+    auto check_region = [&](const typename Q::region& r) {
+        for (reg i = 0u; i < r.count; ++i) {
+            QVERIFY2(r.ptr[i].empty(), "chunk_fifo::claim_write() must clear each claimed chunk");
+            checked = true;
+        }
+    };
+    check_region(regs.first);
+    check_region(regs.second);
+    QVERIFY(checked);
+}
+
+static void chunk_fifo_reuse_contract_suite() {
+    {
+        using Q = spsc::chunk_fifo<std::uint32_t, 8u, 4u, spsc::policy::P>;
+        Q q;
+        verify_chunk_fifo_reclaim_clears(q);
+    }
+
+    {
+        using Q = spsc::chunk_fifo<std::uint32_t, 8u, 4u, spsc::policy::CA<>>;
+        Q q;
+        verify_chunk_fifo_reclaim_clears(q);
+    }
+
+    {
+        using Q = spsc::chunk_fifo<std::uint32_t, 0u, 0u, spsc::policy::CA<>>;
+        Q q;
+        QVERIFY(q.resize(4u));
+        for (reg i = 0u; i < q.capacity(); ++i) {
+            QVERIFY(q.data()[i].reserve(8u));
+        }
+        verify_chunk_fifo_reclaim_clears(q);
+    }
+
+    {
+        using V = spsc::chunk_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::P>;
+        std::array<typename V::value_type, 4u> backing{};
+        V q(backing);
+        verify_chunk_fifo_reclaim_clears(q);
+    }
+
+    {
+        using V = spsc::chunk_fifo_view<std::uint32_t, 0u, 0u, spsc::policy::CA<>>;
+        std::array<typename V::value_type, 4u> backing{};
+        for (auto& slot : backing) {
+            QVERIFY(slot.reserve(8u));
+        }
+        V q(backing.data(), static_cast<reg>(backing.size()));
+        verify_chunk_fifo_reclaim_clears(q);
+    }
+}
+
 #if SPSC_HAS_SPAN
 static void span_contract_suite() {
     {
@@ -809,6 +925,7 @@ private slots:
     void alignment_sweep() {
         alignment_sweep_suite();
         chunk_fifo_alignment_contract_suite();
+        chunk_fifo_reuse_contract_suite();
     }
 
 #if SPSC_HAS_SPAN

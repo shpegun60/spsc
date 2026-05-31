@@ -25,6 +25,7 @@ ui_*.h
 *.moc
 
 # qmake / make artifacts
+.qmake.stash
 Makefile*
 *.o
 *.obj

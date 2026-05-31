@@ -1,4 +1,5 @@
 #include "test_suite_registry.h"
+#include "test_suite_entries.h"
 
 #include "src/tests/chunk_test.h"
 #include "src/tests/buffer_pool_test.h"
@@ -10,7 +11,8 @@
 #include "src/tests/queue_test.h"
 #include "src/tests/typed_pool_test.h"
 
-#include <array>
+#include <iterator>
+#include <QTextStream>
 
 namespace {
 
@@ -21,19 +23,23 @@ struct SuiteEntry {
     Runner      runner;
 };
 
-constexpr std::array<SuiteEntry, 9> kSuites{{
-    {"buffer_pool", &run_tst_buffer_pool_api_paranoid},
-    {"fifo", &run_tst_fifo_api_paranoid},
-    {"fifo_view", &run_tst_fifo_view_api_paranoid},
-    {"pool", &run_tst_pool_api_paranoid},
-    {"pool_view", &run_tst_pool_view_api_paranoid},
-    {"latest", &run_tst_latest_api_paranoid},
-    {"chunk", &run_tst_chunk_api_paranoid},
-    {"queue", &run_tst_queue_api_paranoid},
-    {"typed_pool", &run_tst_typed_pool_api_paranoid}
-}};
+constexpr SuiteEntry kSuites[] = {
+#define SPSC_TEST_SUITE_REGISTRY_ENTRY(name, runner) {name, &runner},
+    SPSC_TEST_SUITE_TABLE(SPSC_TEST_SUITE_REGISTRY_ENTRY)
+#undef SPSC_TEST_SUITE_REGISTRY_ENTRY
+};
 
 } // namespace
+
+QVector<QString> registered_test_suite_names()
+{
+    QVector<QString> names;
+    names.reserve(static_cast<int>(std::size(kSuites)));
+    for (const SuiteEntry& suite : kSuites) {
+        names.push_back(QString::fromLatin1(suite.name));
+    }
+    return names;
+}
 
 int run_named_test_suite(const QString& suiteName, int argc, char** argv)
 {
@@ -42,5 +48,7 @@ int run_named_test_suite(const QString& suiteName, int argc, char** argv)
             return suite.runner(argc, argv);
         }
     }
-    return -1;
+    QTextStream err(stderr);
+    err << "Unknown suite: " << suiteName << '\n';
+    return 4;
 }

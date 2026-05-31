@@ -3,6 +3,13 @@
 
 #include "test_config.hpp"
 
+#if !defined(SPSC_ASSERT) && !defined(NDEBUG)
+#  include <cstdlib>
+#  define SPSC_ASSERT(expr) do { if (!(expr)) { std::abort(); } } while (0)
+#endif
+
+#include "../spsc/base/SPSCbase.hpp"
+
 #if SPSC_TESTS_WITH_QT
 
 #include <QDebug>
@@ -30,6 +37,10 @@
 #  define SPSC_TEST_EXPECTED_VARIANT_NAME "unspecified"
 #endif
 
+#ifndef SPSC_TEST_ACTUAL_TARGET_NAME
+#  define SPSC_TEST_ACTUAL_TARGET_NAME "unspecified"
+#endif
+
 #ifndef SPSC_TEST_EXPECTED_ENABLE_SHADOW_INDICES
 #  define SPSC_TEST_EXPECTED_ENABLE_SHADOW_INDICES SPSC_ENABLE_SHADOW_INDICES
 #endif
@@ -44,47 +55,54 @@
 
 namespace spsc_test {
 
-inline constexpr int kActualEnableShadowIndices = SPSC_ENABLE_SHADOW_INDICES;
-inline constexpr int kActualShadowAllow32Bit = SPSC_SHADOW_ALLOW_32BIT;
-inline constexpr int kActualShadowRefreshHeuristic = SPSC_SHADOW_REFRESH_HEURISTIC;
+static constexpr int kActualEnableShadowIndices = SPSC_ENABLE_SHADOW_INDICES;
+static constexpr int kActualShadowAllow32Bit = SPSC_SHADOW_ALLOW_32BIT;
+static constexpr int kActualShadowRefreshHeuristic = SPSC_SHADOW_REFRESH_HEURISTIC;
 
-inline constexpr int kExpectedEnableShadowIndices = SPSC_TEST_EXPECTED_ENABLE_SHADOW_INDICES;
-inline constexpr int kExpectedShadowAllow32Bit = SPSC_TEST_EXPECTED_SHADOW_ALLOW_32BIT;
-inline constexpr int kExpectedShadowRefreshHeuristic = SPSC_TEST_EXPECTED_SHADOW_REFRESH_HEURISTIC;
+static constexpr int kExpectedEnableShadowIndices = SPSC_TEST_EXPECTED_ENABLE_SHADOW_INDICES;
+static constexpr int kExpectedShadowAllow32Bit = SPSC_TEST_EXPECTED_SHADOW_ALLOW_32BIT;
+static constexpr int kExpectedShadowRefreshHeuristic = SPSC_TEST_EXPECTED_SHADOW_REFRESH_HEURISTIC;
 
-inline constexpr int kRegBits = std::numeric_limits<reg>::digits;
+static constexpr int kRegBits = std::numeric_limits<reg>::digits;
 
-inline constexpr bool shadow_enabled_for_atomic_backend(int enable_shadow_indices,
+static constexpr bool shadow_enabled_for_atomic_backend(int enable_shadow_indices,
                                                         int shadow_allow_32bit) noexcept
 {
     return (enable_shadow_indices != 0) &&
            ((kRegBits >= 64) || (shadow_allow_32bit != 0));
 }
 
-inline constexpr bool kActualAtomicShadow =
-    shadow_enabled_for_atomic_backend(kActualEnableShadowIndices, kActualShadowAllow32Bit);
+static constexpr bool kActualAtomicShadow =
+    ::spsc::detail::rb_use_shadow_v<::spsc::policy::A<>>;
 
-inline constexpr bool kActualCachedShadow =
-    shadow_enabled_for_atomic_backend(kActualEnableShadowIndices, kActualShadowAllow32Bit);
+static constexpr bool kActualCachedShadow =
+    ::spsc::detail::rb_use_shadow_v<::spsc::policy::CA<>>;
 
-inline constexpr bool kExpectedAtomicShadow =
+static constexpr bool kExpectedAtomicShadow =
     shadow_enabled_for_atomic_backend(kExpectedEnableShadowIndices, kExpectedShadowAllow32Bit);
 
-inline constexpr bool kExpectedCachedShadow =
+static constexpr bool kExpectedCachedShadow =
     shadow_enabled_for_atomic_backend(kExpectedEnableShadowIndices, kExpectedShadowAllow32Bit);
 
-inline QString expected_variant_name()
+static inline QString expected_variant_name()
 {
     return QString::fromUtf8(SPSC_TEST_EXPECTED_VARIANT_NAME);
 }
 
-inline QString format_build_config_summary(QStringView suite_name,
-                                          QStringView variant_name,
-                                          int enable_shadow_indices,
-                                          int shadow_allow_32bit,
-                                          int shadow_refresh_heuristic,
-                                          bool atomic_shadow,
-                                          bool cached_shadow)
+static inline QString actual_variant_name()
+{
+    const QString target = QString::fromUtf8(SPSC_TEST_ACTUAL_TARGET_NAME);
+    const QString prefix = QStringLiteral("spsc_test_");
+    return target.startsWith(prefix) ? target.mid(prefix.size()) : target;
+}
+
+static inline QString format_build_config_summary(QStringView suite_name,
+                                                  QStringView variant_name,
+                                                  int enable_shadow_indices,
+                                                  int shadow_allow_32bit,
+                                                  int shadow_refresh_heuristic,
+                                                  bool atomic_shadow,
+                                                  bool cached_shadow)
 {
     QString summary = QStringLiteral(
         "suite=%1 variant=%2 macros{enable_shadow=%3 allow_32bit=%4 refresh_heuristic=%5} "
@@ -100,10 +118,10 @@ inline QString format_build_config_summary(QStringView suite_name,
     return summary;
 }
 
-inline QString actual_build_config_summary(QStringView suite_name)
+static inline QString actual_build_config_summary(QStringView suite_name)
 {
     return format_build_config_summary(suite_name,
-                                       expected_variant_name(),
+                                       actual_variant_name(),
                                        kActualEnableShadowIndices,
                                        kActualShadowAllow32Bit,
                                        kActualShadowRefreshHeuristic,
@@ -111,7 +129,7 @@ inline QString actual_build_config_summary(QStringView suite_name)
                                        kActualCachedShadow);
 }
 
-inline QString expected_build_config_summary(QStringView suite_name)
+static inline QString expected_build_config_summary(QStringView suite_name)
 {
     return format_build_config_summary(suite_name,
                                        expected_variant_name(),
@@ -122,7 +140,7 @@ inline QString expected_build_config_summary(QStringView suite_name)
                                        kExpectedCachedShadow);
 }
 
-inline void log_build_config(QStringView suite_name)
+static inline void log_build_config(QStringView suite_name)
 {
     qInfo().noquote() << "[spsc-test-config]" << actual_build_config_summary(suite_name);
 }

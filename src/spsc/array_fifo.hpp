@@ -15,6 +15,7 @@
 #include "fifo.hpp"            // ::spsc::fifo
 #include "fifo_view.hpp"       // ::spsc::fifo_view
 #include <array>
+#include <utility>
 
 namespace spsc {
 
@@ -31,7 +32,7 @@ template <class T, reg N, reg FifoCapacity = 0,
          typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
              Policy, std::array<T, N>, ::spsc::alloc::default_alloc>>
 class array_fifo
-    : public ::spsc::fifo<
+    : private ::spsc::fifo<
           ::spsc::detail::cache_aligned_slot_t<std::array<T, N>, Policy>,
           FifoCapacity,
           Policy,
@@ -46,12 +47,75 @@ public:
     using array_type = ArrayT;
     using slot_type = SlotT;
     using value_type = typename Base::value_type;
+    using pointer = typename Base::pointer;
+    using const_pointer = typename Base::const_pointer;
     using size_type = typename Base::size_type;
     using reference = typename Base::reference;
     using const_reference = typename Base::const_reference;
+    using difference_type = typename Base::difference_type;
+    using region = typename Base::region;
+    using regions = typename Base::regions;
+    using iterator = typename Base::iterator;
+    using const_iterator = typename Base::const_iterator;
+    using reverse_iterator = typename Base::reverse_iterator;
+    using const_reverse_iterator = typename Base::const_reverse_iterator;
+    using snapshot = typename Base::snapshot;
+    using const_snapshot = typename Base::const_snapshot;
+    using base_allocator_type = typename Base::base_allocator_type;
+    using allocator_type = typename Base::allocator_type;
     using policy_type = Policy;
 
     using Base::Base; // inherit fifo constructors
+
+    using Base::begin;
+    using Base::can_read;
+    using Base::can_write;
+    using Base::capacity;
+    using Base::cbegin;
+    using Base::cend;
+    using Base::claim;
+    using Base::claim_read;
+    using Base::claim_write;
+    using Base::clear;
+    using Base::consume;
+    using Base::consume_all;
+    using Base::crbegin;
+    using Base::crend;
+    using Base::data;
+    using Base::destroy;
+    using Base::empty;
+    using Base::end;
+    using Base::free;
+    using Base::front;
+    using Base::full;
+    using Base::get_allocator;
+    using Base::is_valid;
+    using Base::make_snapshot;
+    using Base::operator[];
+    using Base::pop;
+    using Base::publish;
+    using Base::rbegin;
+    using Base::read_size;
+    using Base::rend;
+    using Base::reserve;
+    using Base::resize;
+    using Base::scoped_read;
+    using Base::size;
+#if SPSC_HAS_SPAN
+    using Base::span;
+#endif
+    using Base::try_claim;
+    using Base::try_consume;
+    using Base::try_front;
+    using Base::try_pop;
+    using Base::try_publish;
+    using Base::write_size;
+
+    void swap(array_fifo& other) noexcept(noexcept(std::declval<Base&>().swap(std::declval<Base&>()))) {
+        Base::swap(static_cast<Base&>(other));
+    }
+
+    friend void swap(array_fifo& a, array_fifo& b) noexcept(noexcept(a.swap(b))) { a.swap(b); }
 
     static_assert(alignof(value_type) >= alignof(array_type),
                   "[spsc::array_fifo]: slot alignment must not weaken std::array alignment.");
@@ -79,6 +143,9 @@ public:
 
     template <class... Args>
     [[nodiscard]] value_type *try_emplace(Args &&...) = delete;
+
+    void scoped_write() = delete;
+    void scoped_write(size_type) = delete;
 };
 
 /* ========================================================================
@@ -91,7 +158,7 @@ public:
 template <class T, reg N, reg FifoCapacity = 0,
          typename Policy = ::spsc::policy::default_policy>
 class array_fifo_view
-    : public ::spsc::fifo_view<
+    : private ::spsc::fifo_view<
           ::spsc::detail::cache_aligned_slot_t<std::array<T, N>, Policy>,
           FifoCapacity,
           Policy> {
@@ -105,12 +172,75 @@ public:
     using array_type = ArrayT;
     using slot_type = SlotT;
     using value_type = typename Base::value_type;
+    using pointer = typename Base::pointer;
+    using const_pointer = typename Base::const_pointer;
     using size_type = typename Base::size_type;
     using reference = typename Base::reference;
     using const_reference = typename Base::const_reference;
+    using difference_type = typename Base::difference_type;
+    using state_t = typename Base::state_t;
+    using region = typename Base::region;
+    using regions = typename Base::regions;
+    using iterator = typename Base::iterator;
+    using const_iterator = typename Base::const_iterator;
+    using reverse_iterator = typename Base::reverse_iterator;
+    using const_reverse_iterator = typename Base::const_reverse_iterator;
+    using snapshot = typename Base::snapshot;
+    using const_snapshot = typename Base::const_snapshot;
     using policy_type = Policy;
 
     using Base::Base; // inherit fifo_view constructors
+
+    using Base::adopt;
+    using Base::attach;
+    using Base::begin;
+    using Base::can_read;
+    using Base::can_write;
+    using Base::capacity;
+    using Base::cbegin;
+    using Base::cend;
+    using Base::claim;
+    using Base::claim_read;
+    using Base::claim_write;
+    using Base::clear;
+    using Base::consume;
+    using Base::consume_all;
+    using Base::crbegin;
+    using Base::crend;
+    using Base::data;
+    using Base::detach;
+    using Base::empty;
+    using Base::end;
+    using Base::free;
+    using Base::front;
+    using Base::full;
+    using Base::is_valid;
+    using Base::make_snapshot;
+    using Base::operator[];
+    using Base::pop;
+    using Base::publish;
+    using Base::rbegin;
+    using Base::read_size;
+    using Base::rend;
+    using Base::reset;
+    using Base::scoped_read;
+    using Base::size;
+#if SPSC_HAS_SPAN
+    using Base::span;
+#endif
+    using Base::state;
+    using Base::try_claim;
+    using Base::try_consume;
+    using Base::try_front;
+    using Base::try_pop;
+    using Base::try_publish;
+    using Base::write_size;
+
+    void swap(array_fifo_view& other) noexcept(noexcept(std::declval<Base&>().swap(std::declval<Base&>()))) {
+        Base::swap(static_cast<Base&>(other));
+    }
+
+    friend void swap(array_fifo_view& a, array_fifo_view& b) noexcept(noexcept(a.swap(b))) { a.swap(b); }
 
     static_assert(alignof(value_type) >= alignof(array_type),
                   "[spsc::array_fifo_view]: slot alignment must not weaken std::array alignment.");
@@ -130,6 +260,9 @@ public:
 
     template <class... Args>
     [[nodiscard]] value_type *try_emplace(Args &&...) = delete;
+
+    void scoped_write() = delete;
+    void scoped_write(size_type) = delete;
 };
 
 /* ========================================================================
@@ -140,8 +273,8 @@ public:
  *  - Same rule: only claim() / try_claim() / publish() on producer side.
  * ======================================================================== */
 template <class T, reg N, reg FifoCapacity = 0,
-         typename Policy = ::spsc::policy::default_policy>
-class carray_fifo_view : public ::spsc::fifo_view<T[N], FifoCapacity, Policy> {
+          typename Policy = ::spsc::policy::default_policy>
+class carray_fifo_view : private ::spsc::fifo_view<T[N], FifoCapacity, Policy> {
     static_assert(N > 0, "spsc::c_array_fifo_view<T,N>: N must be > 0");
 
     using array_type = T[N];
@@ -149,14 +282,78 @@ class carray_fifo_view : public ::spsc::fifo_view<T[N], FifoCapacity, Policy> {
 
 public:
     using value_type = typename Base::value_type; // T[N]
+    using pointer = typename Base::pointer;
+    using const_pointer = typename Base::const_pointer;
     using size_type = typename Base::size_type;
     using reference = typename Base::reference;             // T (&)[N]
     using const_reference = typename Base::const_reference; // const T (&)[N]
+    using difference_type = typename Base::difference_type;
+    using state_t = typename Base::state_t;
+    using region = typename Base::region;
+    using regions = typename Base::regions;
+    using iterator = typename Base::iterator;
+    using const_iterator = typename Base::const_iterator;
+    using reverse_iterator = typename Base::reverse_iterator;
+    using const_reverse_iterator = typename Base::const_reverse_iterator;
+    using snapshot = typename Base::snapshot;
+    using const_snapshot = typename Base::const_snapshot;
 
     using Base::Base; // inherit fifo_view constructors
 
+    using Base::adopt;
+    using Base::attach;
+    using Base::begin;
+    using Base::can_read;
+    using Base::can_write;
+    using Base::capacity;
+    using Base::cbegin;
+    using Base::cend;
+    using Base::claim;
+    using Base::claim_read;
+    using Base::claim_write;
+    using Base::clear;
+    using Base::consume;
+    using Base::consume_all;
+    using Base::crbegin;
+    using Base::crend;
+    using Base::data;
+    using Base::detach;
+    using Base::empty;
+    using Base::end;
+    using Base::free;
+    using Base::front;
+    using Base::full;
+    using Base::is_valid;
+    using Base::make_snapshot;
+    using Base::operator[];
+    using Base::pop;
+    using Base::publish;
+    using Base::rbegin;
+    using Base::read_size;
+    using Base::rend;
+    using Base::reset;
+    using Base::scoped_read;
+    using Base::size;
+#if SPSC_HAS_SPAN
+    using Base::span;
+#endif
+    using Base::state;
+    using Base::try_claim;
+    using Base::try_consume;
+    using Base::try_front;
+    using Base::try_pop;
+    using Base::try_publish;
+    using Base::write_size;
+
+    void swap(carray_fifo_view& other) noexcept(noexcept(std::declval<Base&>().swap(std::declval<Base&>()))) {
+        Base::swap(static_cast<Base&>(other));
+    }
+
+    friend void swap(carray_fifo_view& a, carray_fifo_view& b) noexcept(noexcept(a.swap(b))) { a.swap(b); }
+
     // Element meta for convenience
     using element_type = T;
+    using policy_type = Policy;
     static constexpr size_type array_size = static_cast<size_type>(N);
 
     // --------------------------------------------------------------------
@@ -171,6 +368,9 @@ public:
 
     template <class... Args>
     [[nodiscard]] value_type *try_emplace(Args &&...) = delete;
+
+    void scoped_write() = delete;
+    void scoped_write(size_type) = delete;
 };
 
 } // namespace spsc

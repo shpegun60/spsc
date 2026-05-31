@@ -83,8 +83,8 @@ QVector<TestVariant> configuredVariants()
 {
     return {
         {QStringLiteral("shadow_off"), QStringLiteral("Shadow Off"), QStringLiteral("spsc_test_shadow_off"), 0, 0, 0},
-        {QStringLiteral("shadow_on"), QStringLiteral("Shadow On"), QStringLiteral("spsc_test_shadow_on"), 1, 0, 0},
-        {QStringLiteral("shadow_heur"), QStringLiteral("Shadow Heuristic"), QStringLiteral("spsc_test_shadow_heur"), 1, 0, 1}
+        {QStringLiteral("shadow_on"), QStringLiteral("Shadow On"), QStringLiteral("spsc_test_shadow_on"), 1, 1, 0},
+        {QStringLiteral("shadow_heur"), QStringLiteral("Shadow Heuristic"), QStringLiteral("spsc_test_shadow_heur"), 1, 1, 1}
     };
 }
 
@@ -637,8 +637,7 @@ MainWindow::TestSuiteResult MainWindow::runSuite(const TestSuiteSpec& spec, cons
         if (!runnerConfigError.isEmpty()) {
             result.configMismatch = true;
             result.configError = runnerConfigError;
-        } else if (parsedConfig.valid &&
-                   !launcherMismatchReason.isEmpty() &&
+        } else if (!launcherMismatchReason.isEmpty() &&
                    (!result.timedOut && !result.crashed)) {
             result.configMismatch = true;
             result.configError = QStringLiteral("[launcher-config-check] %1")

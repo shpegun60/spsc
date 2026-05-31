@@ -286,6 +286,9 @@ public:
             SPSC_ASSERT(ok1 && ok2);
             (void)ok1; (void)ok2;
         }
+
+        bump_snapshot_epoch_();
+        other.bump_snapshot_epoch_();
     }
 
     friend void swap(pool& a, pool& b) noexcept { a.swap(b); }
@@ -313,7 +316,10 @@ public:
     [[nodiscard]] bool can_read (size_type n = 1u) const noexcept { return is_valid() && Base::can_read(n); }
     [[nodiscard]] size_type write_size() const noexcept { return is_valid() ? Base::write_size() : 0u; }
     [[nodiscard]] size_type read_size()  const noexcept { return is_valid() ? Base::read_size()  : 0u; }
-    void clear() noexcept { Base::clear(); }
+    void clear() noexcept {
+        Base::clear();
+        bump_snapshot_epoch_();
+    }
     [[nodiscard]] base_allocator_type get_allocator() const noexcept { return {}; }
 
     // ------------------------------------------------------------------------------------------
@@ -379,7 +385,7 @@ public:
     [[nodiscard]] snapshot make_snapshot() noexcept {
         using it = snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
-            return snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
+            return snapshot(it(nullptr, 0u, 0u, 0u), it(nullptr, 0u, 0u, 0u));
         }
 
         // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
@@ -388,13 +394,13 @@ public:
         const size_type h    = static_cast<size_type>(t + used);
 
         const size_type m = Base::mask();
-        return snapshot(it(data(), m, t), it(data(), m, h));
+        return snapshot(it(data(), m, t, snapshot_epoch_), it(data(), m, h, snapshot_epoch_));
     }
 
     [[nodiscard]] const_snapshot make_snapshot() const noexcept {
         using it = const_snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
-            return const_snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
+            return const_snapshot(it(nullptr, 0u, 0u, 0u), it(nullptr, 0u, 0u, 0u));
         }
 
         // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
@@ -403,25 +409,14 @@ public:
         const size_type h    = static_cast<size_type>(t + used);
 
         const size_type m = Base::mask();
-        return const_snapshot(it(data(), m, t), it(data(), m, h));
+        return const_snapshot(it(data(), m, t, snapshot_epoch_), it(data(), m, h, snapshot_epoch_));
     }
 
     template<class Snap>
     void consume(const Snap& s) noexcept {
-        SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(s.begin().data() == data());
-        SPSC_ASSERT(s.begin().mask() == Base::mask());
-
-        const size_type cur_tail = static_cast<size_type>(Base::tail());
-        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
-
-        const size_type new_tail = static_cast<size_type>(s.head_index());
-
-        // Wrap-safe: allow unsigned wrap, but bound by capacity to reject impossible snapshots.
-        const size_type n = static_cast<size_type>(new_tail - cur_tail);
-        SPSC_ASSERT(n <= Base::capacity());
-
-        pop(n);
+        const bool ok = try_consume(s);
+        SPSC_ASSERT(ok);
+        (void)ok;
     }
 
     template<class Snap>
@@ -439,7 +434,11 @@ public:
         const auto* my_data     = data();
         const size_type my_mask = Base::mask();
         if (RB_UNLIKELY(s.begin().data() != my_data)) { return false; }
+        if (RB_UNLIKELY(s.end().data() != my_data)) { return false; }
         if (RB_UNLIKELY(s.begin().mask() != my_mask)) { return false; }
+        if (RB_UNLIKELY(s.end().mask() != my_mask)) { return false; }
+        if (RB_UNLIKELY(s.begin().epoch() != snapshot_epoch_)) { return false; }
+        if (RB_UNLIKELY(s.end().epoch() != snapshot_epoch_)) { return false; }
 
         // Consumer must not have advanced since snapshot.
         if (RB_UNLIKELY(snap_tail != cur_tail)) { return false; }
@@ -464,6 +463,7 @@ public:
     void consume_all() noexcept {
         if (RB_UNLIKELY(!is_valid())) { return; }
         Base::sync_tail_to_head();
+        bump_snapshot_epoch_();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -591,10 +591,14 @@ public:
     template<class U>
     RB_FORCEINLINE void push(const U& v) noexcept {
         static_assert(std::is_trivially_copyable_v<U>, "[pool]: U must be trivially copyable");
-        SPSC_ASSERT(!full());
-        SPSC_ASSERT(sizeof(U) <= bufferSize_.load());
+        if (RB_UNLIKELY(full())) { SPSC_ASSERT(!full()); return; }
+        if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) {
+            SPSC_ASSERT(sizeof(U) <= bufferSize_.load());
+            return;
+        }
 
         pointer dst = slots_[Base::write_index()];
+        if (RB_UNLIKELY(dst == nullptr)) { SPSC_ASSERT(dst != nullptr); return; }
         std::memcpy(dst, &v, sizeof(U));
         Base::increment_head();
     }
@@ -606,19 +610,24 @@ public:
         if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { return false; }
 
         pointer dst = slots_[Base::write_index()];
+        if (RB_UNLIKELY(dst == nullptr)) { return false; }
         std::memcpy(dst, &v, sizeof(U));
         Base::increment_head();
         return true;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
-        SPSC_ASSERT(!full());
-        return slots_[Base::write_index()];
+        if (RB_UNLIKELY(full())) { SPSC_ASSERT(!full()); return nullptr; }
+        pointer p = slots_[Base::write_index()];
+        if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
+        return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
         if (RB_UNLIKELY(full())) { return nullptr; }
-        return slots_[Base::write_index()];
+        pointer p = slots_[Base::write_index()];
+        if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
+        return p;
     }
 
     template<class U>
@@ -651,23 +660,41 @@ public:
 
 
     RB_FORCEINLINE void publish() noexcept {
-        SPSC_ASSERT(!full());
+        if (RB_UNLIKELY(full())) { SPSC_ASSERT(!full()); return; }
+        if (RB_UNLIKELY(slots_[Base::write_index()] == nullptr)) {
+            SPSC_ASSERT(slots_[Base::write_index()] != nullptr);
+            return;
+        }
         Base::increment_head();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
         if (RB_UNLIKELY(full())) { return false; }
+        if (RB_UNLIKELY(slots_[Base::write_index()] == nullptr)) { return false; }
         Base::increment_head();
         return true;
     }
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        SPSC_ASSERT(can_write(n));
+        if (RB_UNLIKELY(!can_write(n))) { SPSC_ASSERT(can_write(n)); return; }
+        const size_type h = static_cast<size_type>(Base::head());
+        const size_type m = Base::mask();
+        for (size_type i = 0u; i < n; ++i) {
+            if (RB_UNLIKELY(slots_[(h + i) & m] == nullptr)) {
+                SPSC_ASSERT(slots_[(h + i) & m] != nullptr);
+                return;
+            }
+        }
         Base::advance_head(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!can_write(n))) { return false; }
+        const size_type h = static_cast<size_type>(Base::head());
+        const size_type m = Base::mask();
+        for (size_type i = 0u; i < n; ++i) {
+            if (RB_UNLIKELY(slots_[(h + i) & m] == nullptr)) { return false; }
+        }
         Base::advance_head(n);
         return true;
     }
@@ -687,14 +714,18 @@ public:
      * - Asserts !full().
      */
     RB_FORCEINLINE void push(const void* data, const size_type size) noexcept {
-        SPSC_ASSERT(!full());
+        if (RB_UNLIKELY(full())) { SPSC_ASSERT(!full()); return; }
 
         const size_type bufferSize = bufferSize_.load();
         // Clamp copy size to buffer capacity (saturation)
         const size_type copy_n = (size < bufferSize) ? size : bufferSize;
-        SPSC_ASSERT((copy_n == 0u) || (data != nullptr));
+        if (RB_UNLIKELY((copy_n != 0u) && (data == nullptr))) {
+            SPSC_ASSERT((copy_n == 0u) || (data != nullptr));
+            return;
+        }
 
         pointer dst = slots_[Base::write_index()];
+        if (RB_UNLIKELY(dst == nullptr)) { SPSC_ASSERT(dst != nullptr); return; }
         if (copy_n != 0u) {
             std::memcpy(dst, data, copy_n);
         }
@@ -715,6 +746,7 @@ public:
         if (RB_UNLIKELY((copy_n != 0u) && (data == nullptr))) { return false; }
 
         pointer dst = slots_[Base::write_index()];
+        if (RB_UNLIKELY(dst == nullptr)) { return false; }
         if (copy_n != 0u) {
             std::memcpy(dst, data, copy_n);
         }
@@ -726,23 +758,31 @@ public:
     // Consumer Operations
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
-        SPSC_ASSERT(!empty());
-        return slots_[Base::read_index()];
+        if (RB_UNLIKELY(empty())) { SPSC_ASSERT(!empty()); return nullptr; }
+        pointer p = slots_[Base::read_index()];
+        if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
+        return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
-        SPSC_ASSERT(!empty());
-        return slots_[Base::read_index()];
+        if (RB_UNLIKELY(empty())) { SPSC_ASSERT(!empty()); return nullptr; }
+        const_pointer p = slots_[Base::read_index()];
+        if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
+        return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
         if (RB_UNLIKELY(empty())) { return nullptr; }
-        return slots_[Base::read_index()];
+        pointer p = slots_[Base::read_index()];
+        if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
+        return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
         if (RB_UNLIKELY(empty())) { return nullptr; }
-        return slots_[Base::read_index()];
+        const_pointer p = slots_[Base::read_index()];
+        if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
+        return p;
     }
 
     template<class U>
@@ -756,24 +796,32 @@ public:
     }
 
     RB_FORCEINLINE void pop() noexcept {
-        SPSC_ASSERT(!empty());
+        if (RB_UNLIKELY(empty())) { SPSC_ASSERT(!empty()); return; }
         Base::increment_tail();
+        bump_snapshot_epoch_();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
         if (RB_UNLIKELY(empty())) { return false; }
         Base::increment_tail();
+        bump_snapshot_epoch_();
         return true;
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
-        SPSC_ASSERT(can_read(n));
+        if (RB_UNLIKELY(!can_read(n))) { SPSC_ASSERT(can_read(n)); return; }
         Base::advance_tail(n);
+        if (n != 0u) {
+            bump_snapshot_epoch_();
+        }
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!can_read(n))) { return false; }
         Base::advance_tail(n);
+        if (n != 0u) {
+            bump_snapshot_epoch_();
+        }
         return true;
     }
 
@@ -840,6 +888,7 @@ public:
             slots_      = nullptr;
             bufferSize_.store(0u);
             (void)Base::init(0u);
+            bump_snapshot_epoch_();
 
             if (ptr != nullptr && cap != 0u && bs != 0u) {
                 free_buffers(ptr, cap, bs);
@@ -855,6 +904,7 @@ public:
             slots_.fill(nullptr);
             bufferSize_.store(0u);
             Base::clear();
+            bump_snapshot_epoch_();
         }
     }
     // ------------------------------------------------------------------------------------------
@@ -904,8 +954,8 @@ public:
         }
 
         [[nodiscard]] pointer peek_next() const noexcept {
-            SPSC_ASSERT(p_ != nullptr);
-            SPSC_ASSERT(written_ < regs_.total);
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return nullptr; }
+            if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return nullptr; }
             return slot_ptr_at_(written_);
         }
 
@@ -920,11 +970,13 @@ public:
         [[nodiscard]] pointer write_next(const U& v) noexcept {
             static_assert(std::is_trivially_copyable_v<U>, "[pool::bulk_write_guard]: U must be trivially copyable");
 
-            SPSC_ASSERT(p_ != nullptr);
-            SPSC_ASSERT(written_ < regs_.total);
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return nullptr; }
+            if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return nullptr; }
             SPSC_ASSERT(sizeof(U) <= p_->buffer_size());
+            if (RB_UNLIKELY(sizeof(U) > p_->buffer_size())) { return nullptr; }
 
             pointer dst = slot_ptr_at_(written_);
+            if (RB_UNLIKELY(dst == nullptr)) { return nullptr; }
             std::memcpy(dst, &v, sizeof(U));
             ++written_;
             publish_on_destroy_ = true;
@@ -932,13 +984,15 @@ public:
         }
 
         [[nodiscard]] pointer write_next(const void* src, const size_type size) noexcept {
-            SPSC_ASSERT(p_ != nullptr);
-            SPSC_ASSERT(written_ < regs_.total);
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return nullptr; }
+            if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return nullptr; }
 
             pointer dst = slot_ptr_at_(written_);
+            if (RB_UNLIKELY(dst == nullptr)) { return nullptr; }
             const size_type bs = p_->buffer_size();
             const size_type n = (size < bs) ? size : bs;
             SPSC_ASSERT((n == 0u) || (src != nullptr));
+            if (RB_UNLIKELY((n != 0u) && (src == nullptr))) { return nullptr; }
             if (n != 0u) {
                 std::memcpy(dst, src, n);
             }
@@ -948,14 +1002,15 @@ public:
         }
 
         void mark_written() noexcept {
-            SPSC_ASSERT(p_ != nullptr);
-            SPSC_ASSERT(written_ < regs_.total);
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return; }
+            if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return; }
             ++written_;
         }
 
         void arm_publish() noexcept {
-            SPSC_ASSERT(p_ != nullptr);
+            if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return; }
             SPSC_ASSERT(written_ != 0u && "arm_publish() requires at least one written element");
+            if (RB_UNLIKELY(written_ == 0u)) { return; }
             publish_on_destroy_ = true;
         }
 
@@ -975,10 +1030,11 @@ public:
     private:
         [[nodiscard]] pointer slot_ptr_at_(const size_type i) const noexcept {
             SPSC_ASSERT(i < regs_.total);
+            if (RB_UNLIKELY(i >= regs_.total)) { return nullptr; }
             if (i < regs_.first.count) {
-                return regs_.first.ptr[i];
+                return (regs_.first.ptr != nullptr) ? regs_.first.ptr[i] : nullptr;
             }
-            return regs_.second.ptr[i - regs_.first.count];
+            return (regs_.second.ptr != nullptr) ? regs_.second.ptr[i - regs_.first.count] : nullptr;
         }
 
         void reset_() noexcept {
@@ -1007,6 +1063,7 @@ public:
 
             [[nodiscard]] pointer ptr(const size_type i) const noexcept {
                 SPSC_ASSERT(i < count_);
+                if (RB_UNLIKELY(i >= count_) || RB_UNLIKELY(slts_ == nullptr)) { return nullptr; }
                 return slts_[i];
             }
 
@@ -1256,6 +1313,7 @@ private:
             if (RB_UNLIKELY(old_cap != 0u && old_size > old_cap)) {
                 // Corrupted state: drop queued data to avoid OOB migration.
                 Base::clear();
+                bump_snapshot_epoch_();
                 old_head = 0u;
                 old_tail = 0u;
                 old_size = 0u;
@@ -1384,6 +1442,7 @@ private:
                 free_buffers(ptr, target_depth, requested_buffer_size);
                 slot_allocator_type sa{};
                 slot_alloc_traits::deallocate(sa, ptr, target_depth);
+                bump_snapshot_epoch_();
                 return false;
             }
         } else {
@@ -1394,6 +1453,7 @@ private:
             (void)ok;
         }
 
+        bump_snapshot_epoch_();
         return true;
     }
 
@@ -1413,10 +1473,18 @@ private:
         if (!is_valid()) { destroy(); return false; }
 
         const size_type sz = other.size();
-        if (sz == 0u) { Base::clear(); return true; }
+        if (sz == 0u) {
+            Base::clear();
+            bump_snapshot_epoch_();
+            return true;
+        }
 
         const size_type cap = Base::capacity();
-        if (RB_UNLIKELY(sz > cap)) { Base::clear(); return true; }
+        if (RB_UNLIKELY(sz > cap)) {
+            Base::clear();
+            bump_snapshot_epoch_();
+            return true;
+        }
 
         const size_type m = other.Base::mask();
         const size_type t = other.Base::tail();
@@ -1442,6 +1510,7 @@ private:
         }
         SPSC_ASSERT(ok);
         (void)ok;
+        bump_snapshot_epoch_();
         return true;
     }
 
@@ -1459,6 +1528,7 @@ private:
                 slots_      = nullptr;
                 bufferSize_.store(0u);
                 (void)Base::init(0u);
+                bump_snapshot_epoch_();
                 return;
             }
             if (RB_UNLIKELY((bs == 0u) != (cap == 0u))) {
@@ -1466,6 +1536,7 @@ private:
                 slots_      = nullptr;
                 bufferSize_.store(0u);
                 (void)Base::init(0u);
+                bump_snapshot_epoch_();
                 return;
             }
 
@@ -1476,6 +1547,7 @@ private:
                     slots_      = nullptr;
                     bufferSize_.store(0u);
                     (void)Base::init(0u);
+                    bump_snapshot_epoch_();
                     return;
                 }
 
@@ -1491,6 +1563,8 @@ private:
             other.slots_      = nullptr;
             other.bufferSize_.store(0u);
             (void)other.Base::init(0u);
+            bump_snapshot_epoch_();
+            other.bump_snapshot_epoch_();
         } else {
             slots_      = other.slots_;
             bufferSize_.store(other.bufferSize_.load());
@@ -1503,12 +1577,23 @@ private:
             other.slots_.fill(nullptr);
             other.bufferSize_.store(0u);
             other.Base::clear();
+            bump_snapshot_epoch_();
+            other.bump_snapshot_epoch_();
+        }
+    }
+
+private:
+    void bump_snapshot_epoch_() noexcept {
+        ++snapshot_epoch_;
+        if (snapshot_epoch_ == 0u) {
+            snapshot_epoch_ = 1u;
         }
     }
 
 private:
     slots_storage 	slots_{};     // void** (dynamic) or array<void*, Capacity> (static)
     geometry_type  	bufferSize_{};
+    size_type       snapshot_epoch_{1u};
 };
 
 } // namespace spsc

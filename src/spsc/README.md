@@ -48,6 +48,10 @@ For FreeRTOS and MCU examples, see [Concurrency and FreeRTOS](docs/concurrency-a
 ## Policy Cheat Sheet
 
 The policy controls only the queue metadata behavior: counters, geometry, atomicity, and cacheline padding.
+By default, containers use `spsc::policy::default_policy`, which is `A<>` unless
+`SPSC_DEFAULT_POLICY_ATOMIC` is explicitly set to `0` before including the library.
+If you opt into `P`, treat that instance as single-thread/single-core only; it is
+not a task/task or thread/thread synchronization policy.
 
 Common ready-made policies from [`base/spsc_policy.hpp`](base/spsc_policy.hpp):
 
@@ -234,7 +238,6 @@ using Blocks = spsc::chunk_fifo<std::uint16_t, 256, 8>;
 Blocks q;
 
 if (auto* block = q.try_claim()) {
-    block->clear();
     block->push_back(10);
     block->push_back(20);
     block->push_back(30);

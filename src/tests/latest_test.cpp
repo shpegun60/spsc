@@ -1188,6 +1188,190 @@ static void threaded_spsc_latest_raw(Q& q) {
     QVERIFY(q.empty());
 }
 
+template <class Q>
+static void threaded_clear_while_producing(Q& q) {
+    using T = typename Q::value_type;
+
+    q.clear();
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> prod_done{false};
+    std::atomic<bool> abort{false};
+    std::atomic<int>  fail{0};
+    std::atomic<int>  clears{0};
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kThreadTimeoutMs);
+    auto timed_out = [&]() noexcept {
+        return std::chrono::steady_clock::now() > deadline;
+    };
+
+    std::thread prod([&]() {
+        while (!start.load(std::memory_order_acquire)) {
+            if (timed_out()) {
+                abort.store(true, std::memory_order_relaxed);
+                fail.store(50, std::memory_order_relaxed);
+                return;
+            }
+            std::this_thread::yield();
+        }
+
+        for (std::uint32_t seq = 1u; seq <= static_cast<std::uint32_t>(kThreadIters); ++seq) {
+            if (abort.load(std::memory_order_relaxed)) {
+                return;
+            }
+
+            const T v{.seq = seq, .a = seq ^ 0x33333333u, .b = seq + 0x4444u, .c = ~seq};
+            unsigned spins = 0;
+            while (!q.try_push(v)) {
+                if (timed_out()) {
+                    abort.store(true, std::memory_order_relaxed);
+                    fail.store(51, std::memory_order_relaxed);
+                    return;
+                }
+                spin_pause(spins);
+            }
+        }
+
+        prod_done.store(true, std::memory_order_release);
+    });
+
+    std::thread cons([&]() {
+        start.store(true, std::memory_order_release);
+
+        std::uint32_t last = 0u;
+        for (;;) {
+            if (abort.load(std::memory_order_relaxed)) {
+                return;
+            }
+            if (timed_out()) {
+                abort.store(true, std::memory_order_relaxed);
+                fail.store(60, std::memory_order_relaxed);
+                return;
+            }
+
+            const T* f = q.try_front();
+            if (f != nullptr) {
+                const std::uint32_t seq = f->seq;
+                if (seq < last) {
+                    abort.store(true, std::memory_order_relaxed);
+                    fail.store(61, std::memory_order_relaxed);
+                    return;
+                }
+                if (f->a != (seq ^ 0x33333333u) || f->b != (seq + 0x4444u) || f->c != ~seq) {
+                    abort.store(true, std::memory_order_relaxed);
+                    fail.store(62, std::memory_order_relaxed);
+                    return;
+                }
+                last = seq;
+            } else if (prod_done.load(std::memory_order_acquire)) {
+                q.clear();
+                return;
+            }
+
+            q.clear();
+            clears.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    prod.join();
+    cons.join();
+
+    QVERIFY2(!abort.load(std::memory_order_relaxed), "threaded_clear_while_producing: timed out or invariant failed");
+    QCOMPARE(fail.load(std::memory_order_relaxed), 0);
+    QVERIFY(clears.load(std::memory_order_relaxed) > 0);
+    q.clear();
+    QVERIFY(q.empty());
+}
+
+template <class Q>
+static void threaded_clear_while_producing_raw(Q& q) {
+    q.clear();
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> prod_done{false};
+    std::atomic<bool> abort{false};
+    std::atomic<int>  fail{0};
+    std::atomic<int>  clears{0};
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kThreadTimeoutMs);
+    auto timed_out = [&]() noexcept {
+        return std::chrono::steady_clock::now() > deadline;
+    };
+
+    std::thread prod([&]() {
+        while (!start.load(std::memory_order_acquire)) {
+            if (timed_out()) {
+                abort.store(true, std::memory_order_relaxed);
+                fail.store(70, std::memory_order_relaxed);
+                return;
+            }
+            std::this_thread::yield();
+        }
+
+        for (std::uint32_t seq = 1u; seq <= static_cast<std::uint32_t>(kThreadIters); ++seq) {
+            if (abort.load(std::memory_order_relaxed)) {
+                return;
+            }
+
+            const std::uint32_t v = seq;
+            unsigned spins = 0;
+            while (!q.try_push(v)) {
+                if (timed_out()) {
+                    abort.store(true, std::memory_order_relaxed);
+                    fail.store(71, std::memory_order_relaxed);
+                    return;
+                }
+                spin_pause(spins);
+            }
+        }
+
+        prod_done.store(true, std::memory_order_release);
+    });
+
+    std::thread cons([&]() {
+        start.store(true, std::memory_order_release);
+
+        std::uint32_t last = 0u;
+        for (;;) {
+            if (abort.load(std::memory_order_relaxed)) {
+                return;
+            }
+            if (timed_out()) {
+                abort.store(true, std::memory_order_relaxed);
+                fail.store(80, std::memory_order_relaxed);
+                return;
+            }
+
+            const void* f = q.try_front();
+            if (f != nullptr) {
+                std::uint32_t v{};
+                std::memcpy(&v, f, sizeof(v));
+                if (v < last) {
+                    abort.store(true, std::memory_order_relaxed);
+                    fail.store(81, std::memory_order_relaxed);
+                    return;
+                }
+                last = v;
+            } else if (prod_done.load(std::memory_order_acquire)) {
+                q.clear();
+                return;
+            }
+
+            q.clear();
+            clears.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    prod.join();
+    cons.join();
+
+    QVERIFY2(!abort.load(std::memory_order_relaxed), "threaded_clear_while_producing_raw: timed out or invariant failed");
+    QCOMPARE(fail.load(std::memory_order_relaxed), 0);
+    QVERIFY(clears.load(std::memory_order_relaxed) > 0);
+    q.clear();
+    QVERIFY(q.empty());
+}
+
 // -------------------------
 // Suite runners
 // -------------------------
@@ -2361,11 +2545,13 @@ static void extended_policy_threaded_atomic_like_suite() {
             spsc::latest<Blob, 0u, Policy> q;
             QVERIFY(q.init(1024u));
             threaded_spsc_latest(q);
+            threaded_clear_while_producing(q);
         }
         {
             spsc::latest<void, 0u, Policy> q;
             QVERIFY(q.init(1024u, sizeof(std::uint32_t)));
             threaded_spsc_latest_raw(q);
+            threaded_clear_while_producing_raw(q);
         }
     });
 }
@@ -2406,11 +2592,13 @@ private slots:
             spsc::latest<Blob, 0u, spsc::policy::A<>> q;
             QVERIFY(q.init(1024u));
             threaded_spsc_latest(q);
+            threaded_clear_while_producing(q);
         }
         {
             spsc::latest<void, 0u, spsc::policy::A<>> q;
             QVERIFY(q.init(1024u, sizeof(std::uint32_t)));
             threaded_spsc_latest_raw(q);
+            threaded_clear_while_producing_raw(q);
         }
     }
 
@@ -2419,11 +2607,13 @@ private slots:
             spsc::latest<Blob, 0u, spsc::policy::CA<>> q;
             QVERIFY(q.init(1024u));
             threaded_spsc_latest(q);
+            threaded_clear_while_producing(q);
         }
         {
             spsc::latest<void, 0u, spsc::policy::CA<>> q;
             QVERIFY(q.init(1024u, sizeof(std::uint32_t)));
             threaded_spsc_latest_raw(q);
+            threaded_clear_while_producing_raw(q);
         }
     }
     void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }

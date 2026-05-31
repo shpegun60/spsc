@@ -42,7 +42,6 @@ using Blocks = spsc::chunk_fifo<std::uint16_t, 256, 8>;
 Blocks q;
 
 if (auto* block = q.try_claim()) {
-    block->clear();
     block->push_back(10);
     block->push_back(20);
     block->push_back(30);
@@ -137,6 +136,7 @@ q.consume(snap);
 - `try_push`
 - `emplace`
 - `try_emplace`
+- `scoped_write`
 
 ## Good Fits
 
@@ -179,12 +179,17 @@ The producer usually:
 
 `chunk_fifo_view` inherits the `fifo_view`-style attach/adopt/state model, but over externally owned chunk storage.
 
+Every successful `claim()` / `try_claim()` / `claim_write()` clears the claimed
+chunk before handing it to the producer. Reused FIFO slots therefore do not carry
+stale logical size from a previous block.
+
 ### Disabled Intentionally
 
 - `push`
 - `try_push`
 - `emplace`
 - `try_emplace`
+- `scoped_write`
 
 This is by design, because block production is expected to be zero-copy and explicit.
 
@@ -194,7 +199,6 @@ This is by design, because block production is expected to be zero-copy and expl
 
 ```cpp
 if (auto* block = q.try_claim()) {
-    block->clear();
     block->push_back(1);
     block->push_back(2);
     q.publish();
@@ -203,7 +207,6 @@ if (auto* block = q.try_claim()) {
 
 ```cpp
 auto& block = q.claim();
-block.clear();
 fill_block(block);
 q.publish();
 ```

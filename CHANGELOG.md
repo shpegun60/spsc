@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and the project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Default public policy selection is now safe-by-default atomic (`A<>`) unless `SPSC_DEFAULT_POLICY_ATOMIC=0` is defined before including the library.
+- Atomic counter policies now reject memory orders that cannot publish SPSC payloads safely, including `relaxed_orders` for normal container policies.
+
+### Fixed
+
+- Hardened snapshot consumption against stale lifecycle epochs and mismatched begin/end iterators.
+- Hardened release builds for invalid/full/empty non-try pool and typed-pool paths that previously relied on debug assertions.
+
 ## [1.0.0] - 2026-03-21
 
 First stable public release of the `spsc` container library.

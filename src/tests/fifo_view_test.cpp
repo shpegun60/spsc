@@ -1399,6 +1399,15 @@ static void test_static_attachment_state_move_swap() {
     QVERIFY(q.attach(bufA.data(), st));
     QVERIFY(q.is_valid());
     QCOMPARE(q.size(), reg{3u});
+
+    {
+        auto stale = q.make_snapshot();
+        q.detach();
+        QVERIFY(q.attach(bufA.data(), st));
+        QVERIFY(!q.try_consume(stale));
+        QCOMPARE(q.size(), reg{3u});
+    }
+
     QCOMPARE(q.front().v, 1);
     q.pop();
     QCOMPARE(q.front().v, 2);
@@ -1424,6 +1433,20 @@ static void test_static_attachment_state_move_swap() {
     QCOMPARE(q.front().v, 102);
     q.pop();
     QVERIFY(q.empty());
+
+    {
+        const reg near_tail = static_cast<reg>(std::numeric_limits<reg>::max() - 1u);
+        const reg near_head = static_cast<reg>(near_tail + 2u);
+        bufA[near_tail & reg{15u}] = Traced{201};
+        bufA[static_cast<reg>(near_tail + 1u) & reg{15u}] = Traced{202};
+        QVERIFY(q.adopt(bufA.data(), near_head, near_tail));
+        QCOMPARE(q.size(), reg{2u});
+        QCOMPARE(q.front().v, 201);
+        q.pop();
+        QCOMPARE(q.front().v, 202);
+        q.pop();
+        QVERIFY(q.empty());
+    }
 
     QVERIFY(!q.adopt(bufA.data(), reg{100u}, reg{0u}));
     QVERIFY(!q.is_valid());
@@ -1521,6 +1544,14 @@ static void test_dynamic_attachment_state_move_swap() {
     QVERIFY(q.is_valid());
     QCOMPARE(q.capacity(), reg{16u});
 
+    {
+        auto stale = q.make_snapshot();
+        q.detach();
+        QVERIFY(q.adopt(bufA.data(), static_cast<reg>(bufA.size()), st.head, st.tail));
+        QVERIFY(!q.try_consume(stale));
+        QCOMPARE(q.size(), reg{3u});
+    }
+
     QCOMPARE(q.front().v, 1);
     q.pop();
     QCOMPARE(q.front().v, 2);
@@ -1528,6 +1559,21 @@ static void test_dynamic_attachment_state_move_swap() {
     QCOMPARE(q.front().v, 3);
     q.pop();
     QVERIFY(q.empty());
+
+    {
+        const reg near_tail = static_cast<reg>(std::numeric_limits<reg>::max() - 1u);
+        const reg near_head = static_cast<reg>(near_tail + 2u);
+        const reg mask = static_cast<reg>(q.capacity() - 1u);
+        bufA[near_tail & mask] = Traced{301};
+        bufA[static_cast<reg>(near_tail + 1u) & mask] = Traced{302};
+        QVERIFY(q.adopt(bufA.data(), static_cast<reg>(bufA.size()), near_head, near_tail));
+        QCOMPARE(q.size(), reg{2u});
+        QCOMPARE(q.front().v, 301);
+        q.pop();
+        QCOMPARE(q.front().v, 302);
+        q.pop();
+        QVERIFY(q.empty());
+    }
 
     QVERIFY(!q.adopt(bufA.data(), static_cast<reg>(bufA.size()), reg{100u}, reg{0u}));
     QVERIFY(!q.is_valid());
@@ -2845,6 +2891,34 @@ static void snapshot_invalid_view_suite() {
     QVERIFY(!q.try_consume(s));
 }
 
+static void snapshot_epoch_reset_invalidation_suite() {
+    {
+        std::vector<Traced> storage(4u);
+        spsc::fifo_view<Traced, 4u, spsc::policy::P> q(storage.data());
+        QVERIFY(q.try_push(Traced{1}));
+        QVERIFY(q.try_push(Traced{2}));
+        auto snap = q.make_snapshot();
+        q.reset();
+        QVERIFY(q.try_push(Traced{10}));
+        QVERIFY(q.try_push(Traced{11}));
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2u});
+    }
+
+    {
+        std::vector<Traced> storage(4u);
+        spsc::fifo_view<Traced, 0u, spsc::policy::P> q(storage.data(), reg{4u});
+        QVERIFY(q.try_push(Traced{1}));
+        QVERIFY(q.try_push(Traced{2}));
+        auto snap = q.make_snapshot();
+        q.reset();
+        QVERIFY(q.try_push(Traced{10}));
+        QVERIFY(q.try_push(Traced{11}));
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2u});
+    }
+}
+
 static void reserve_resize_edge_cases_dynamic_suite() {
     using Q = spsc::fifo_view<std::uint32_t, 0u, spsc::policy::P>;
     Q q;
@@ -3244,6 +3318,7 @@ private slots:
 
     void snapshot_invalid_view() { snapshot_invalid_view_suite(); }
     void snapshot_invalid_queue() { snapshot_invalid_view_suite(); }
+    void snapshot_epoch_reset_invalidation() { snapshot_epoch_reset_invalidation_suite(); }
     void dynamic_move_contract() { dynamic_move_contract_suite(); }
     void consume_all_contract()  { consume_all_contract_suite(); }
 

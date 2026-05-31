@@ -3,17 +3,23 @@ CONFIG += console c++20
 TEMPLATE = app
 TARGET = spsc_launcher
 
+CONFIG(debug, debug|release) {
+    BUILD_CONFIG_NAME = debug
+} else {
+    BUILD_CONFIG_NAME = release
+}
+
 INCLUDEPATH += \
     $$PWD/..
 
 DEPENDPATH += \
     $$PWD/..
 
-DESTDIR = $$OUT_PWD/../bin
-OBJECTS_DIR = $$OUT_PWD/.obj
-MOC_DIR = $$OUT_PWD/.moc
-RCC_DIR = $$OUT_PWD/.rcc
-UI_DIR = $$OUT_PWD/.ui
+DESTDIR = $$OUT_PWD/../bin/$${BUILD_CONFIG_NAME}
+OBJECTS_DIR = $$OUT_PWD/.obj/$${BUILD_CONFIG_NAME}/$${TARGET}
+MOC_DIR = $$OUT_PWD/.moc/$${BUILD_CONFIG_NAME}/$${TARGET}
+RCC_DIR = $$OUT_PWD/.rcc/$${BUILD_CONFIG_NAME}/$${TARGET}
+UI_DIR = $$OUT_PWD/.ui/$${BUILD_CONFIG_NAME}/$${TARGET}
 
 SOURCES += \
     ../main.cpp \
@@ -22,7 +28,8 @@ SOURCES += \
 
 HEADERS += \
     ../mainwindow.h \
-    ../test_suite_catalog.h
+    ../test_suite_catalog.h \
+    ../test_suite_entries.h
 
 FORMS += \
     ../mainwindow.ui

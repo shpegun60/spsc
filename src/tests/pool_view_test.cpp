@@ -1159,6 +1159,46 @@ static void test_snapshots(Q& q) {
     QVERIFY(q.empty());
 }
 
+static void test_snapshot_epoch_reset_invalidation() {
+    {
+        static_storage<4u> st;
+        st.init(kBufSz);
+        spsc::pool_view<4u, spsc::policy::P> q(st.slot_table, kBufSz);
+        std::mt19937 rng(33u);
+        QVERIFY(q.try_push(make_blob(1u, rng)));
+        QVERIFY(q.try_push(make_blob(2u, rng)));
+        auto snap = q.make_snapshot();
+        static_storage<4u> other_st;
+        other_st.init(kBufSz);
+        spsc::pool_view<4u, spsc::policy::P> other(other_st.slot_table, kBufSz);
+        QVERIFY(other.try_push(make_blob(99u, rng)));
+        auto other_snap = other.make_snapshot();
+        typename spsc::pool_view<4u, spsc::policy::P>::snapshot mixed_snap(snap.begin(), other_snap.end());
+        QVERIFY(!q.try_consume(mixed_snap));
+        QCOMPARE(q.size(), reg{2u});
+        q.reset();
+        QVERIFY(q.try_push(make_blob(10u, rng)));
+        QVERIFY(q.try_push(make_blob(11u, rng)));
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2u});
+    }
+
+    {
+        dynamic_storage<> st;
+        st.init(4u, kBufSz);
+        spsc::pool_view<0u, spsc::policy::P> q(st.slot_table.data(), st.depth, kBufSz);
+        std::mt19937 rng(44u);
+        QVERIFY(q.try_push(make_blob(1u, rng)));
+        QVERIFY(q.try_push(make_blob(2u, rng)));
+        const auto snap = q.make_snapshot();
+        q.reset();
+        QVERIFY(q.try_push(make_blob(10u, rng)));
+        QVERIFY(q.try_push(make_blob(11u, rng)));
+        QVERIFY(!q.try_consume(snap));
+        QCOMPARE(q.size(), reg{2u});
+    }
+}
+
 // ------------------------------ tests: RAII guards + alignment paranoia ------------------------------
 
 template <class Q>
@@ -2358,6 +2398,7 @@ private slots:
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>(); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>(); }
     void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }
+    void snapshot_epoch_reset_invalidation() { test_snapshot_epoch_reset_invalidation(); }
 };
 
 int run_tst_pool_view_api_paranoid(int argc, char** argv)

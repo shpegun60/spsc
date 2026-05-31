@@ -302,6 +302,9 @@ public:
             other.Base::set_tail(a_tail);
             other.Base::sync_cache();
         }
+
+        bump_snapshot_epoch_();
+        other.bump_snapshot_epoch_();
     }
 
     friend void swap(fifo &a, fifo &b) noexcept(noexcept(a.swap(b))) {
@@ -347,7 +350,10 @@ public:
         return is_valid() ? Base::read_size() : 0u;
     }
 
-    void clear() noexcept { Base::clear(); }
+    void clear() noexcept {
+        Base::clear();
+        bump_snapshot_epoch_();
+    }
 
     [[nodiscard]] allocator_type get_allocator() const noexcept { return {}; }
 
@@ -436,7 +442,7 @@ public:
     [[nodiscard]] snapshot make_snapshot() noexcept {
         using it = snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
-            return snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
+            return snapshot(it(nullptr, 0u, 0u, 0u), it(nullptr, 0u, 0u, 0u));
         }
 
         // Use a validated "used" snapshot to avoid impossible head<tail ranges
@@ -446,13 +452,13 @@ public:
         const size_type h    = static_cast<size_type>(t + used);
 
         const size_type m = Base::mask();
-        return snapshot(it(data(), m, t), it(data(), m, h));
+        return snapshot(it(data(), m, t, snapshot_epoch_), it(data(), m, h, snapshot_epoch_));
     }
 
     [[nodiscard]] const_snapshot make_snapshot() const noexcept {
         using it = const_snapshot_iterator;
         if (RB_UNLIKELY(!is_valid())) {
-            return const_snapshot(it(nullptr, 0u, 0u), it(nullptr, 0u, 0u));
+            return const_snapshot(it(nullptr, 0u, 0u, 0u), it(nullptr, 0u, 0u, 0u));
         }
 
         // Use a validated "used" snapshot to avoid impossible head<tail ranges
@@ -462,21 +468,13 @@ public:
         const size_type h    = static_cast<size_type>(t + used);
 
         const size_type m = Base::mask();
-        return const_snapshot(it(data(), m, t), it(data(), m, h));
+        return const_snapshot(it(data(), m, t, snapshot_epoch_), it(data(), m, h, snapshot_epoch_));
     }
 
     template <class Snap> void consume(const Snap &s) noexcept {
-        SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(s.begin().data() == data());
-        SPSC_ASSERT(s.begin().mask() == Base::mask());
-
-        const size_type cur_tail = static_cast<size_type>(Base::tail());
-        SPSC_ASSERT(static_cast<size_type>(s.tail_index()) == cur_tail);
-
-        const size_type new_tail = static_cast<size_type>(s.head_index());
-        const size_type n = static_cast<size_type>(new_tail - cur_tail); // wrap-safe
-        SPSC_ASSERT(n <= Base::capacity()); // Guards against impossible snapshots
-        pop(n);
+        const bool ok = try_consume(s);
+        SPSC_ASSERT(ok);
+        (void)ok;
     }
 
     template <class Snap> [[nodiscard]] bool try_consume(const Snap &s) noexcept {
@@ -497,7 +495,19 @@ public:
         if (RB_UNLIKELY(s.begin().data() != my_data)) {
             return false;
         }
+        if (RB_UNLIKELY(s.end().data() != my_data)) {
+            return false;
+        }
         if (RB_UNLIKELY(s.begin().mask() != my_mask)) {
+            return false;
+        }
+        if (RB_UNLIKELY(s.end().mask() != my_mask)) {
+            return false;
+        }
+        if (RB_UNLIKELY(s.begin().epoch() != snapshot_epoch_)) {
+            return false;
+        }
+        if (RB_UNLIKELY(s.end().epoch() != snapshot_epoch_)) {
             return false;
         }
 
@@ -533,6 +543,7 @@ public:
         }
 
         Base::sync_tail_to_head();
+        bump_snapshot_epoch_();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -780,6 +791,7 @@ public:
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(!empty());
         Base::increment_tail();
+        bump_snapshot_epoch_();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
@@ -787,12 +799,16 @@ public:
             return false;
         }
         Base::increment_tail();
+        bump_snapshot_epoch_();
         return true;
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(can_read(n));
         Base::advance_tail(n);
+        if (n != 0u) {
+            bump_snapshot_epoch_();
+        }
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
@@ -800,6 +816,9 @@ public:
             return false;
         }
         Base::advance_tail(n);
+        if (n != 0u) {
+            bump_snapshot_epoch_();
+        }
         return true;
     }
 
@@ -870,6 +889,7 @@ public:
             if (RB_UNLIKELY(old_size > old_cap)) {
                 // Corrupted state: drop queued data to avoid OOB copy.
                 Base::clear();
+                bump_snapshot_epoch_();
                 old_size = 0u;
             }
         }
@@ -994,6 +1014,7 @@ public:
 
         // Non-concurrent operation: keep shadow caches coherent after changing indices.
         Base::sync_cache();
+        bump_snapshot_epoch_();
 
         return true;
     }
@@ -1022,9 +1043,11 @@ public:
                     alloc_traits::deallocate(alloc, ptr, cap);
                 }
             }
+            bump_snapshot_epoch_();
             return;
         }
         Base::clear();
+        bump_snapshot_epoch_();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1376,12 +1399,14 @@ private:
                 // Corrupted source state: safest is to produce an empty/invalid fifo.
                 storage_ = nullptr;
                 (void)Base::init(0u);
+                bump_snapshot_epoch_();
                 return;
             }
 
             if (cap == 0u || !other.is_valid()) {
                 storage_ = nullptr;
                 (void)Base::init(0u);
+                bump_snapshot_epoch_();
                 return;
             }
 
@@ -1389,6 +1414,7 @@ private:
             if (!new_buf) {
                 storage_ = nullptr;
                 (void)Base::init(0u);
+                bump_snapshot_epoch_();
                 return;
             }
 
@@ -1443,6 +1469,7 @@ private:
                     std::destroy_n(ptr, cap);
                 }
                 alloc_traits::deallocate(alloc, ptr, cap);
+                bump_snapshot_epoch_();
                 return;
             }
 
@@ -1460,6 +1487,7 @@ private:
 
             if (RB_UNLIKELY(sz > cap)) {
                 // Corrupted source: keep *this empty and valid
+                bump_snapshot_epoch_();
                 return;
             }
 
@@ -1477,6 +1505,7 @@ private:
 
         // Non-concurrent operation: keep shadow caches coherent after restoring indices.
         Base::sync_cache();
+        bump_snapshot_epoch_();
     }
 
     void move_from(fifo &&other) noexcept(kNoThrowMoveOps) {
@@ -1489,6 +1518,7 @@ private:
             if (RB_UNLIKELY((ptr == nullptr) != (cap == 0u))) {
                 storage_ = nullptr;
                 (void)Base::init(0u);
+                bump_snapshot_epoch_();
                 return;
             }
 
@@ -1497,6 +1527,7 @@ private:
                 if (RB_UNLIKELY(!ok)) {
                     storage_ = nullptr;
                     (void)Base::init(0u);
+                    bump_snapshot_epoch_();
                     return;
                 }
 
@@ -1509,12 +1540,15 @@ private:
             // Steal and reset other
             other.storage_ = nullptr;
             (void)other.Base::init(0u);
+            bump_snapshot_epoch_();
+            other.bump_snapshot_epoch_();
         } else {
             const size_type h = other.Base::head();
             const size_type t = other.Base::tail();
             const bool ok = Base::init(h, t);
             if (RB_UNLIKELY(!ok)) {
                 Base::clear();
+                bump_snapshot_epoch_();
                 return;
             }
 
@@ -1525,12 +1559,23 @@ private:
             }
 
             other.Base::clear();
+            bump_snapshot_epoch_();
+            other.bump_snapshot_epoch_();
+        }
+    }
+
+private:
+    void bump_snapshot_epoch_() noexcept {
+        ++snapshot_epoch_;
+        if (snapshot_epoch_ == 0u) {
+            snapshot_epoch_ = 1u;
         }
     }
 
 private:
     alignas(::spsc::alloc::policy_storage_alignment_v<policy_type, value_type>)
         storage_type storage_{};
+    size_type snapshot_epoch_{1u};
 };
 
 // ---------------------------------------------------------------------------

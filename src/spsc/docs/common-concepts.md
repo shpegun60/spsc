@@ -111,6 +111,7 @@ All main containers use a `Policy` parameter controlling the metadata counters.
 
 Ready-made families:
 
+- `default_policy`: `A<>` by default; define `SPSC_DEFAULT_POLICY_ATOMIC=0` only when you deliberately want `P` as the default
 - `P`: plain counters, fastest on simple single-core paths
 - `V`: volatile counters for ISR/task style communication
 - `VV`: both counters and geometry volatile
@@ -129,6 +130,10 @@ Example:
 using Policy = spsc::policy::CA<>;
 spsc::fifo<int, 1024, Policy> q;
 ```
+
+Do not use `P` for normal thread/thread or task/task handoff. It has plain
+non-atomic counters and relies on external synchronization or a genuinely
+single-context execution model.
 
 For task/ISR guidance and policy selection under RTOS-style concurrency, read [Concurrency and FreeRTOS](concurrency-and-freertos.md).
 

@@ -15,6 +15,9 @@
 #include "fifo.hpp"         // ::spsc::fifo, ::spsc::policy::default_policy, reg
 #include "fifo_view.hpp"    //::spsc::fifo_view
 
+#include <limits>
+#include <utility>
+
 namespace spsc {
 
 /* ========================================================================
@@ -34,7 +37,7 @@ template<
         Policy, ::spsc::chunk<T, ChunkCapacity>, ::spsc::alloc::default_alloc>
     >
 class chunk_fifo
-    : public ::spsc::fifo<
+    : private ::spsc::fifo<
           ::spsc::detail::cache_aligned_slot_t<::spsc::chunk<T, ChunkCapacity, Alloc>, Policy>,
           FifoCapacity,
           Policy,
@@ -49,12 +52,99 @@ public:
     using chunk_type      = ChunkT;
     using slot_type       = SlotT;
     using value_type      = typename Base::value_type;
+    using pointer         = typename Base::pointer;
+    using const_pointer   = typename Base::const_pointer;
     using size_type       = typename Base::size_type;
     using reference       = typename Base::reference;
     using const_reference = typename Base::const_reference;
+    using difference_type = typename Base::difference_type;
+    using region          = typename Base::region;
+    using regions         = typename Base::regions;
+    using iterator        = typename Base::iterator;
+    using const_iterator  = typename Base::const_iterator;
+    using reverse_iterator = typename Base::reverse_iterator;
+    using const_reverse_iterator = typename Base::const_reverse_iterator;
+    using snapshot        = typename Base::snapshot;
+    using const_snapshot  = typename Base::const_snapshot;
+    using base_allocator_type = typename Base::base_allocator_type;
+    using allocator_type  = typename Base::allocator_type;
     using policy_type     = Policy;
 
     using Base::Base;   // inherit fifo constructors
+
+    using Base::begin;
+    using Base::can_read;
+    using Base::can_write;
+    using Base::capacity;
+    using Base::cbegin;
+    using Base::cend;
+    using Base::claim_read;
+    using Base::clear;
+    using Base::consume;
+    using Base::consume_all;
+    using Base::crbegin;
+    using Base::crend;
+    using Base::data;
+    using Base::destroy;
+    using Base::empty;
+    using Base::end;
+    using Base::free;
+    using Base::front;
+    using Base::full;
+    using Base::get_allocator;
+    using Base::is_valid;
+    using Base::make_snapshot;
+    using Base::operator[];
+    using Base::pop;
+    using Base::publish;
+    using Base::rbegin;
+    using Base::read_size;
+    using Base::rend;
+    using Base::reserve;
+    using Base::resize;
+    using Base::scoped_read;
+    using Base::size;
+#if SPSC_HAS_SPAN
+    using Base::span;
+#endif
+    using Base::try_consume;
+    using Base::try_front;
+    using Base::try_pop;
+    using Base::try_publish;
+    using Base::write_size;
+
+    [[nodiscard]] reference claim() noexcept {
+        reference slot = Base::claim();
+        slot.clear();
+        return slot;
+    }
+
+    [[nodiscard]] pointer try_claim() noexcept {
+        pointer slot = Base::try_claim();
+        if (slot != nullptr) {
+            slot->clear();
+        }
+        return slot;
+    }
+
+    [[nodiscard]] regions
+    claim_write(const ::spsc::unsafe_t tag,
+                const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        regions regs = Base::claim_write(tag, max_count);
+        clear_regions_(regs);
+        return regs;
+    }
+
+    [[nodiscard]] regions
+    claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        return claim_write(::spsc::unsafe, max_count);
+    }
+
+    void swap(chunk_fifo& other) noexcept(noexcept(std::declval<Base&>().swap(std::declval<Base&>()))) {
+        Base::swap(static_cast<Base&>(other));
+    }
+
+    friend void swap(chunk_fifo& a, chunk_fifo& b) noexcept(noexcept(a.swap(b))) { a.swap(b); }
 
     static_assert(alignof(value_type) >= alignof(chunk_type),
                   "[spsc::chunk_fifo]: slot alignment must not weaken chunk alignment.");
@@ -85,6 +175,24 @@ public:
 
     template<class... Args>
     [[nodiscard]] value_type* try_emplace(Args&&...) = delete;
+
+    void scoped_write() = delete;
+    void scoped_write(size_type) = delete;
+
+private:
+    static void clear_region_(const region& r) noexcept {
+        if (r.ptr == nullptr) {
+            return;
+        }
+        for (size_type i = 0u; i < r.count; ++i) {
+            r.ptr[i].clear();
+        }
+    }
+
+    static void clear_regions_(const regions& regs) noexcept {
+        clear_region_(regs.first);
+        clear_region_(regs.second);
+    }
 };
 
 
@@ -103,7 +211,7 @@ template<
     typename Alloc      = ::spsc::alloc::default_alloc
     >
 class chunk_fifo_view
-    : public ::spsc::fifo_view<
+    : private ::spsc::fifo_view<
           ::spsc::detail::cache_aligned_slot_t<::spsc::chunk<T, ChunkCapacity, Alloc>, Policy>,
           FifoCapacity,
           Policy
@@ -117,12 +225,99 @@ public:
     using chunk_type      = ChunkT;
     using slot_type       = SlotT;
     using value_type      = typename Base::value_type;
+    using pointer         = typename Base::pointer;
+    using const_pointer   = typename Base::const_pointer;
     using size_type       = typename Base::size_type;
     using reference       = typename Base::reference;
     using const_reference = typename Base::const_reference;
+    using difference_type = typename Base::difference_type;
+    using state_t         = typename Base::state_t;
+    using region          = typename Base::region;
+    using regions         = typename Base::regions;
+    using iterator        = typename Base::iterator;
+    using const_iterator  = typename Base::const_iterator;
+    using reverse_iterator = typename Base::reverse_iterator;
+    using const_reverse_iterator = typename Base::const_reverse_iterator;
+    using snapshot        = typename Base::snapshot;
+    using const_snapshot  = typename Base::const_snapshot;
     using policy_type     = Policy;
 
     using Base::Base;   // inherit fifo_view constructors
+
+    using Base::adopt;
+    using Base::attach;
+    using Base::begin;
+    using Base::can_read;
+    using Base::can_write;
+    using Base::capacity;
+    using Base::cbegin;
+    using Base::cend;
+    using Base::claim_read;
+    using Base::clear;
+    using Base::consume;
+    using Base::consume_all;
+    using Base::crbegin;
+    using Base::crend;
+    using Base::data;
+    using Base::detach;
+    using Base::empty;
+    using Base::end;
+    using Base::free;
+    using Base::front;
+    using Base::full;
+    using Base::is_valid;
+    using Base::make_snapshot;
+    using Base::operator[];
+    using Base::pop;
+    using Base::publish;
+    using Base::rbegin;
+    using Base::read_size;
+    using Base::rend;
+    using Base::reset;
+    using Base::scoped_read;
+    using Base::size;
+#if SPSC_HAS_SPAN
+    using Base::span;
+#endif
+    using Base::state;
+    using Base::try_consume;
+    using Base::try_front;
+    using Base::try_pop;
+    using Base::try_publish;
+    using Base::write_size;
+
+    [[nodiscard]] reference claim() noexcept {
+        reference slot = Base::claim();
+        slot.clear();
+        return slot;
+    }
+
+    [[nodiscard]] pointer try_claim() noexcept {
+        pointer slot = Base::try_claim();
+        if (slot != nullptr) {
+            slot->clear();
+        }
+        return slot;
+    }
+
+    [[nodiscard]] regions
+    claim_write(const ::spsc::unsafe_t tag,
+                const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        regions regs = Base::claim_write(tag, max_count);
+        clear_regions_(regs);
+        return regs;
+    }
+
+    [[nodiscard]] regions
+    claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+        return claim_write(::spsc::unsafe, max_count);
+    }
+
+    void swap(chunk_fifo_view& other) noexcept(noexcept(std::declval<Base&>().swap(std::declval<Base&>()))) {
+        Base::swap(static_cast<Base&>(other));
+    }
+
+    friend void swap(chunk_fifo_view& a, chunk_fifo_view& b) noexcept(noexcept(a.swap(b))) { a.swap(b); }
 
     static_assert(alignof(value_type) >= alignof(chunk_type),
                   "[spsc::chunk_fifo_view]: slot alignment must not weaken chunk alignment.");
@@ -145,6 +340,24 @@ public:
 
     template<class... Args>
     [[nodiscard]] value_type* try_emplace(Args&&...) = delete;
+
+    void scoped_write() = delete;
+    void scoped_write(size_type) = delete;
+
+private:
+    static void clear_region_(const region& r) noexcept {
+        if (r.ptr == nullptr) {
+            return;
+        }
+        for (size_type i = 0u; i < r.count; ++i) {
+            r.ptr[i].clear();
+        }
+    }
+
+    static void clear_regions_(const regions& regs) noexcept {
+        clear_region_(regs.first);
+        clear_region_(regs.second);
+    }
 };
 
 } // namespace spsc
