@@ -255,6 +255,28 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<CFVPlain&>().claim_write()), typename CFVPlain::regions>);
     static_assert(std::is_move_constructible_v<decltype(std::declval<CFPlain&>().scoped_write())>);
     static_assert(std::is_move_constructible_v<decltype(std::declval<CFVPlain&>().scoped_write())>);
+    static_assert(std::is_same_v<typename CFPlain::snapshot_iterator, typename CFPlain::snapshot_traits::iterator>);
+    static_assert(std::is_same_v<typename CFPlain::const_snapshot_iterator, typename CFPlain::snapshot_traits::const_iterator>);
+    static_assert(std::is_same_v<typename CFPlain::counter_type, typename spsc::policy::P::counter_type>);
+    static_assert(std::is_same_v<typename CFPlain::geometry_type, typename spsc::policy::P::geometry_type>);
+    static_assert(std::is_same_v<typename CFPlain::counter_value, typename CFPlain::counter_type::value_type>);
+    static_assert(std::is_same_v<typename CFPlain::geometry_value, typename CFPlain::geometry_type::value_type>);
+    static_assert(std::is_same_v<typename CFPlain::alloc_pointer, typename CFPlain::alloc_traits::pointer>);
+    static_assert(std::is_same_v<typename CFPlain::alloc_pointer, typename CFPlain::pointer>);
+    static_assert(std::is_move_constructible_v<typename CFPlain::write_guard>);
+    static_assert(std::is_move_constructible_v<typename CFPlain::read_guard>);
+    static_assert(std::is_move_constructible_v<typename CFPlain::bulk_write_guard>);
+    static_assert(std::is_move_constructible_v<typename CFPlain::bulk_read_guard>);
+    static_assert(std::is_same_v<typename CFVPlain::snapshot_iterator, typename CFVPlain::snapshot_traits::iterator>);
+    static_assert(std::is_same_v<typename CFVPlain::const_snapshot_iterator, typename CFVPlain::snapshot_traits::const_iterator>);
+    static_assert(std::is_same_v<typename CFVPlain::counter_type, typename spsc::policy::P::counter_type>);
+    static_assert(std::is_same_v<typename CFVPlain::geometry_type, typename spsc::policy::P::geometry_type>);
+    static_assert(std::is_same_v<typename CFVPlain::counter_value, typename CFVPlain::counter_type::value_type>);
+    static_assert(std::is_same_v<typename CFVPlain::geometry_value, typename CFVPlain::geometry_type::value_type>);
+    static_assert(std::is_move_constructible_v<typename CFVPlain::write_guard>);
+    static_assert(std::is_move_constructible_v<typename CFVPlain::read_guard>);
+    static_assert(std::is_move_constructible_v<typename CFVPlain::bulk_write_guard>);
+    static_assert(std::is_move_constructible_v<typename CFVPlain::bulk_read_guard>);
 #if SPSC_HAS_SPAN
     static_assert(std::is_same_v<decltype(std::declval<CFPlain&>().span()), std::span<typename CFPlain::value_type>>);
     static_assert(std::is_same_v<decltype(std::declval<const CFPlain&>().span()), std::span<const typename CFPlain::value_type>>);

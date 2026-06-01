@@ -31,6 +31,7 @@
 #include <deque>
 #include <limits>
 #include <memory>
+#include <new>
 #include <random>
 #include <thread>
 #include <type_traits>
@@ -105,6 +106,18 @@ static inline void store_to_slot(void* p, const Blob& b) noexcept {
 
 static inline void load_from_slot(const void* p, Blob& b) noexcept {
     load_from_slot(p, &b, sizeof(Blob));
+}
+
+template<class U, class... Args>
+static inline U* construct_object_in_slot(U* p, Args&&... args) noexcept {
+    return ::new (static_cast<void*>(p)) U{std::forward<Args>(args)...};
+}
+
+template<class U>
+static inline U load_object_from_slot(const U* p) noexcept {
+    U out{};
+    std::memcpy(&out, static_cast<const void*>(p), sizeof(U));
+    return out;
 }
 
 static inline void expect_blob_eq(const Blob& a, const Blob& b) {
@@ -756,7 +769,7 @@ static void test_typed_and_raw_helpers(Q& q) {
         expect_blob_eq(peek, b);
 
         if (auto* fb = q.template front_as<Blob>(); fb != nullptr) {
-            expect_blob_eq(*fb, b);
+            expect_blob_eq(load_object_from_slot(fb), b);
         } else {
             Blob got{};
             load_from_slot(q.front(), got);
@@ -771,7 +784,7 @@ static void test_typed_and_raw_helpers(Q& q) {
     {
         const Blob b = make_blob(902u, rng);
         if (auto* typed_slot = q.template claim_as<Blob>(); typed_slot != nullptr) {
-            *typed_slot = b;
+            construct_object_in_slot(typed_slot, b);
             QVERIFY(q.try_publish());
         } else {
             void* raw_slot = q.try_claim();
@@ -1190,7 +1203,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
             QVERIFY(wg);
             Blob* b = wg.template as<Blob>();
             QVERIFY(b != nullptr);
-            *b = make_blob(777u, rng);
+            construct_object_in_slot(b, make_blob(777u, rng));
         }
         QCOMPARE(q.size(), static_cast<reg>(before + 1u));
 
@@ -1198,7 +1211,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
         QVERIFY(rg);
         const Blob* b = rg.template as<Blob>();
         QVERIFY(b != nullptr);
-        QCOMPARE(b->seq, 777u);
+        QCOMPARE(load_object_from_slot(b).seq, 777u);
         rg.commit();
     }
 
@@ -1209,7 +1222,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
         Blob* b = wg.template as<Blob>();
         QVERIFY(b != nullptr);
-        *b = make_blob(780u, rng);
+        construct_object_in_slot(b, make_blob(780u, rng));
 
         // Probe alignment without scribbling over the Blob (same memory).
         const Align16* a16_probe = wg.template as<Align16>();
@@ -1225,6 +1238,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
         Align16* a16 = wg.template as<Align16>();
         QVERIFY(a16 != nullptr);
+        construct_object_in_slot(a16);
         a16->x.fill(std::byte{0});
         a16->x[0] = std::byte{0x42};
 
@@ -1271,7 +1285,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
         const Blob* b = rg.template as<Blob>();
         QVERIFY(b != nullptr);
-        QCOMPARE(b->seq, 780u);
+        QCOMPARE(load_object_from_slot(b).seq, 780u);
 
         rg.commit();
     }
@@ -1283,7 +1297,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
         const Align16* a16 = rg.template as<Align16>();
         QVERIFY(a16 != nullptr);
-        QCOMPARE(a16->x[0], std::byte{0x42});
+        QCOMPARE(load_object_from_slot(a16).x[0], std::byte{0x42});
 
         rg.commit();
     }
@@ -1295,7 +1309,7 @@ static void test_raii_guards_alignment_aligned(Q& q) {
 
         const Blob* b = rg.template as<Blob>();
         QVERIFY(b != nullptr);
-        QCOMPARE(b->seq, 779u);
+        QCOMPARE(load_object_from_slot(b).seq, 779u);
 
         rg.commit();
     }

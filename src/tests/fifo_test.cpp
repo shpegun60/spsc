@@ -3451,6 +3451,43 @@ static void api_compile_smoke_all() {
     static_assert(std::is_base_of_v<typename AFVCached::array_type, typename AFVCached::value_type>);
     static_assert((sizeof(typename AFCached::value_type) % alignof(typename AFCached::value_type)) == 0u);
     static_assert((sizeof(typename AFVCached::value_type) % alignof(typename AFVCached::value_type)) == 0u);
+
+    using CAFVPlain = spsc::carray_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::P>;
+
+    static_assert(std::is_same_v<typename AFPlain::snapshot_iterator, typename AFPlain::snapshot_traits::iterator>);
+    static_assert(std::is_same_v<typename AFPlain::const_snapshot_iterator, typename AFPlain::snapshot_traits::const_iterator>);
+    static_assert(std::is_same_v<typename AFPlain::counter_type, typename spsc::policy::P::counter_type>);
+    static_assert(std::is_same_v<typename AFPlain::geometry_type, typename spsc::policy::P::geometry_type>);
+    static_assert(std::is_same_v<typename AFPlain::counter_value, typename AFPlain::counter_type::value_type>);
+    static_assert(std::is_same_v<typename AFPlain::geometry_value, typename AFPlain::geometry_type::value_type>);
+    static_assert(std::is_same_v<typename AFPlain::alloc_pointer, typename AFPlain::alloc_traits::pointer>);
+    static_assert(std::is_same_v<typename AFPlain::alloc_pointer, typename AFPlain::pointer>);
+    static_assert(std::is_move_constructible_v<typename AFPlain::write_guard>);
+    static_assert(std::is_move_constructible_v<typename AFPlain::read_guard>);
+    static_assert(std::is_move_constructible_v<typename AFPlain::bulk_write_guard>);
+    static_assert(std::is_move_constructible_v<typename AFPlain::bulk_read_guard>);
+
+    static_assert(std::is_same_v<typename AFVPlain::snapshot_iterator, typename AFVPlain::snapshot_traits::iterator>);
+    static_assert(std::is_same_v<typename AFVPlain::const_snapshot_iterator, typename AFVPlain::snapshot_traits::const_iterator>);
+    static_assert(std::is_same_v<typename AFVPlain::counter_type, typename spsc::policy::P::counter_type>);
+    static_assert(std::is_same_v<typename AFVPlain::geometry_type, typename spsc::policy::P::geometry_type>);
+    static_assert(std::is_same_v<typename AFVPlain::counter_value, typename AFVPlain::counter_type::value_type>);
+    static_assert(std::is_same_v<typename AFVPlain::geometry_value, typename AFVPlain::geometry_type::value_type>);
+    static_assert(std::is_move_constructible_v<typename AFVPlain::write_guard>);
+    static_assert(std::is_move_constructible_v<typename AFVPlain::read_guard>);
+    static_assert(std::is_move_constructible_v<typename AFVPlain::bulk_write_guard>);
+    static_assert(std::is_move_constructible_v<typename AFVPlain::bulk_read_guard>);
+
+    static_assert(std::is_same_v<typename CAFVPlain::snapshot_iterator, typename CAFVPlain::snapshot_traits::iterator>);
+    static_assert(std::is_same_v<typename CAFVPlain::const_snapshot_iterator, typename CAFVPlain::snapshot_traits::const_iterator>);
+    static_assert(std::is_same_v<typename CAFVPlain::counter_type, typename spsc::policy::P::counter_type>);
+    static_assert(std::is_same_v<typename CAFVPlain::geometry_type, typename spsc::policy::P::geometry_type>);
+    static_assert(std::is_same_v<typename CAFVPlain::counter_value, typename CAFVPlain::counter_type::value_type>);
+    static_assert(std::is_same_v<typename CAFVPlain::geometry_value, typename CAFVPlain::geometry_type::value_type>);
+    static_assert(std::is_move_constructible_v<typename CAFVPlain::write_guard>);
+    static_assert(std::is_move_constructible_v<typename CAFVPlain::read_guard>);
+    static_assert(std::is_move_constructible_v<typename CAFVPlain::bulk_write_guard>);
+    static_assert(std::is_move_constructible_v<typename CAFVPlain::bulk_read_guard>);
 }
 
 template <class Q>

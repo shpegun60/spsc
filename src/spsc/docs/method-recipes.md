@@ -241,16 +241,19 @@ Producer typed overlay:
 
 ```cpp
 if (auto* hdr = q.claim_as<Header>()) {
-    hdr->magic = 0x12345678u;
-    hdr->len = 64;
+    ::new (static_cast<void*>(hdr)) Header{0x12345678u, 64};
     q.publish();
 }
 ```
+
+`claim_as<U>()` checks size and alignment only. In C++17, placement-new is what
+starts `U` lifetime in the raw slot.
 
 Consumer typed overlay:
 
 ```cpp
 if (auto* hdr = q.front_as<Header>()) {
+    // Only valid if the producer started Header lifetime in the slot.
     handle_header(*hdr);
     q.pop();
 }
@@ -300,8 +303,7 @@ if (auto guard = q.scoped_read()) {
 ```cpp
 if (auto guard = q.scoped_write()) {
     if (auto* hdr = guard.as<Header>()) {
-        hdr->magic = 0x12345678u;
-        hdr->len = 64;
+        ::new (static_cast<void*>(hdr)) Header{0x12345678u, 64};
     }
 }
 ```

@@ -25,7 +25,9 @@ namespace spsc {
  *  - Uses ::spsc::fifo<std::array<T, N>, FifoCapacity, Policy, Alloc>.
  *  - Value-based producer API (push / try_push / emplace / try_emplace)
  *    is hard-disabled.
- *  - You must use zero-copy claim() / try_claim() / publish() instead.
+ *  - Direct value-based producer methods are disabled. Use claim() /
+ *    try_claim() / publish(), or the scoped/bulk helpers when that is the
+ *    intended contract for the whole slot.
  * ======================================================================== */
 template <class T, reg N, reg FifoCapacity = 0,
          typename Policy = ::spsc::policy::default_policy,
@@ -59,11 +61,24 @@ public:
     using const_iterator = typename Base::const_iterator;
     using reverse_iterator = typename Base::reverse_iterator;
     using const_reverse_iterator = typename Base::const_reverse_iterator;
+    using snapshot_traits = typename Base::snapshot_traits;
     using snapshot = typename Base::snapshot;
     using const_snapshot = typename Base::const_snapshot;
+    using snapshot_iterator = typename Base::snapshot_iterator;
+    using const_snapshot_iterator = typename Base::const_snapshot_iterator;
     using base_allocator_type = typename Base::base_allocator_type;
     using allocator_type = typename Base::allocator_type;
+    using alloc_traits = typename Base::alloc_traits;
+    using alloc_pointer = typename Base::alloc_pointer;
     using policy_type = Policy;
+    using counter_type = typename Base::counter_type;
+    using geometry_type = typename Base::geometry_type;
+    using counter_value = typename Base::counter_value;
+    using geometry_value = typename Base::geometry_value;
+    using write_guard = typename Base::write_guard;
+    using read_guard = typename Base::read_guard;
+    using bulk_write_guard = typename Base::bulk_write_guard;
+    using bulk_read_guard = typename Base::bulk_read_guard;
 
     using Base::Base; // inherit fifo constructors
 
@@ -134,7 +149,8 @@ public:
     //   Any declaration of push / try_push / emplace / try_emplace in this
     //   class hides all overloads with the same name from Base, regardless
     //   of signature. These templates therefore cut off Base's value-based
-    //   producer API, forcing zero-copy claim()/try_claim()/publish().
+    //   producer API, forcing explicit slot ownership through claim/scoped
+    //   producer APIs.
     // --------------------------------------------------------------------
     template <class... Args> void push(Args &&...) = delete;
 
@@ -152,7 +168,7 @@ public:
  *
  *  - Uses ::spsc::fifo_view<std::array<T, N>, FifoCapacity, Policy>.
  *  - Storage is user-provided.
- *  - Same rule: only claim() / try_claim() / publish() on producer side.
+ *  - Same rule: direct value-based producer methods are disabled.
  * ======================================================================== */
 template <class T, reg N, reg FifoCapacity = 0,
          typename Policy = ::spsc::policy::default_policy>
@@ -184,9 +200,20 @@ public:
     using const_iterator = typename Base::const_iterator;
     using reverse_iterator = typename Base::reverse_iterator;
     using const_reverse_iterator = typename Base::const_reverse_iterator;
+    using snapshot_traits = typename Base::snapshot_traits;
     using snapshot = typename Base::snapshot;
     using const_snapshot = typename Base::const_snapshot;
+    using snapshot_iterator = typename Base::snapshot_iterator;
+    using const_snapshot_iterator = typename Base::const_snapshot_iterator;
     using policy_type = Policy;
+    using counter_type = typename Base::counter_type;
+    using geometry_type = typename Base::geometry_type;
+    using counter_value = typename Base::counter_value;
+    using geometry_value = typename Base::geometry_value;
+    using write_guard = typename Base::write_guard;
+    using read_guard = typename Base::read_guard;
+    using bulk_write_guard = typename Base::bulk_write_guard;
+    using bulk_read_guard = typename Base::bulk_read_guard;
 
     using Base::Base; // inherit fifo_view constructors
 
@@ -268,7 +295,7 @@ public:
  *
  *  - Uses ::spsc::fifo_view<T[N], FifoCapacity, Policy>.
  *  - Storage is user-provided: T buf[FifoCapacity][N] or T buf[maxCap][N].
- *  - Same rule: only claim() / try_claim() / publish() on producer side.
+ *  - Same rule: direct value-based producer methods are disabled.
  * ======================================================================== */
 template <class T, reg N, reg FifoCapacity = 0,
           typename Policy = ::spsc::policy::default_policy>
@@ -293,8 +320,11 @@ public:
     using const_iterator = typename Base::const_iterator;
     using reverse_iterator = typename Base::reverse_iterator;
     using const_reverse_iterator = typename Base::const_reverse_iterator;
+    using snapshot_traits = typename Base::snapshot_traits;
     using snapshot = typename Base::snapshot;
     using const_snapshot = typename Base::const_snapshot;
+    using snapshot_iterator = typename Base::snapshot_iterator;
+    using const_snapshot_iterator = typename Base::const_snapshot_iterator;
 
     using Base::Base; // inherit fifo_view constructors
 
@@ -353,11 +383,19 @@ public:
     // Element meta for convenience
     using element_type = T;
     using policy_type = Policy;
+    using counter_type = typename Base::counter_type;
+    using geometry_type = typename Base::geometry_type;
+    using counter_value = typename Base::counter_value;
+    using geometry_value = typename Base::geometry_value;
+    using write_guard = typename Base::write_guard;
+    using read_guard = typename Base::read_guard;
+    using bulk_write_guard = typename Base::bulk_write_guard;
+    using bulk_read_guard = typename Base::bulk_read_guard;
     static constexpr size_type array_size = static_cast<size_type>(N);
 
     // --------------------------------------------------------------------
     // Hard ban on value-based producers (same idea as array_fifo_view).
-    // Producer must use claim()/try_claim() + publish().
+    // Producer must use explicit slot ownership through claim/scoped APIs.
     // --------------------------------------------------------------------
     template <class... Args> void push(Args &&...) = delete;
 

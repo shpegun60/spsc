@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <new>
 #include <random>
 #include <thread>
 #include <type_traits>
@@ -402,6 +403,18 @@ static inline void load_blob_from_slot(const void* p, Blob& out) noexcept {
 
 static inline void store_blob_to_slot(void* p, const Blob& in) noexcept {
     std::memcpy(p, &in, sizeof(Blob));
+}
+
+template<class U, class... Args>
+static inline U* construct_object_in_slot(U* p, Args&&... args) noexcept {
+    return ::new (static_cast<void*>(p)) U{std::forward<Args>(args)...};
+}
+
+template<class U>
+static inline U load_object_from_slot(const U* p) noexcept {
+    U out{};
+    std::memcpy(&out, static_cast<const void*>(p), sizeof(U));
+    return out;
 }
 
 static inline void expect_blob_eq(const Blob& a, const Blob& b) {
@@ -892,7 +905,7 @@ static void test_typed_view_contracts(Q& q) {
 
     auto* f0 = q.template front_as<Blob>();
     QVERIFY(f0 != nullptr);
-    expect_blob_eq(*f0, first);
+    expect_blob_eq(load_object_from_slot(f0), first);
     q.pop();
     QVERIFY(q.empty());
 
@@ -927,7 +940,8 @@ static void test_typed_view_contracts(Q& q) {
         QVERIFY(static_cast<bool>(g));
         auto* p = g.template as<Blob>();
         QVERIFY(p != nullptr);
-        QCOMPARE(p->seq, std::uint32_t{0x2222u});
+        const Blob got = load_object_from_slot(p);
+        QCOMPARE(got.seq, std::uint32_t{0x2222u});
     }
     QVERIFY(q.empty());
 }
@@ -1020,7 +1034,7 @@ static void test_raii_guards(Q& q) {
             if (g) {
                 auto* p = g.template as<Blob>();
                 QVERIFY(p != nullptr);
-                *p = make_blob(0xA0022u, rng);
+                construct_object_in_slot(p, make_blob(0xA0022u, rng));
             }
         }
         QCOMPARE(q.size(), expected);
@@ -1104,7 +1118,8 @@ static void test_raii_guards(Q& q) {
             if (g) {
                 auto* p = g.template as<Blob>();
                 QVERIFY(p != nullptr);
-                QVERIFY(p->inv == ~p->seq);
+                const Blob got = load_object_from_slot(p);
+                QVERIFY(got.inv == ~got.seq);
             }
         }
         QCOMPARE(q.size(), static_cast<reg>(before - (before ? 1u : 0u)));
@@ -1396,6 +1411,7 @@ static void test_api_coverage_smoke(Q& q) {
 
         auto* p = q.template claim_as<A8>();
         if (p != nullptr) {
+            construct_object_in_slot(p);
             p->a = 0x11223344u;
             p->b = 0x55667788u;
             QVERIFY(q.try_publish());
@@ -1412,8 +1428,9 @@ static void test_api_coverage_smoke(Q& q) {
             // try_front_as is const and must be safe.
             auto* f = safe_try_front_as<Q, A8>(cq);
             QVERIFY(f != nullptr);
-            QCOMPARE(f->a, 0x11223344u);
-            QCOMPARE(f->b, 0x55667788u);
+            const A8 got = load_object_from_slot(f);
+            QCOMPARE(got.a, 0x11223344u);
+            QCOMPARE(got.b, 0x55667788u);
 
             // try_pop(count)
             QVERIFY(q.try_pop(1u));
@@ -2096,6 +2113,7 @@ static void test_alignment_behavior(bool require_claim_as_success) {
         QVERIFY((reinterpret_cast<std::uintptr_t>(p) % alignof(U)) == 0u);
 
         // Write + publish exactly one.
+        construct_object_in_slot(p);
         p->x = 0x1122334455667788ull;
         p->y = 0x99AABBCCDDEEFF00ull;
         q.publish();
@@ -2116,8 +2134,9 @@ static void test_alignment_behavior(bool require_claim_as_success) {
         // Typed front view must succeed.
         auto* f = q.template front_as<U>();
         QVERIFY(f != nullptr);
-        QCOMPARE(f->x, 0x1122334455667788ull);
-        QCOMPARE(f->y, 0x99AABBCCDDEEFF00ull);
+        const U got = load_object_from_slot(f);
+        QCOMPARE(got.x, 0x1122334455667788ull);
+        QCOMPARE(got.y, 0x99AABBCCDDEEFF00ull);
 
         q.pop();
         QVERIFY(q.empty());
@@ -2133,6 +2152,7 @@ static void test_alignment_behavior(bool require_claim_as_success) {
     if (p != nullptr) {
         QVERIFY((reinterpret_cast<std::uintptr_t>(p) % alignof(U)) == 0u);
 
+        construct_object_in_slot(p);
         p->x = 0xA5A5A5A5A5A5A5A5ull;
         p->y = 0x5A5A5A5A5A5A5A5Aull;
         q.publish();
@@ -2144,8 +2164,9 @@ static void test_alignment_behavior(bool require_claim_as_success) {
         auto* f = safe_try_front_as<Q, U>(cq);
         QVERIFY(f != nullptr);
 
-        QCOMPARE(f->x, 0xA5A5A5A5A5A5A5A5ull);
-        QCOMPARE(f->y, 0x5A5A5A5A5A5A5A5Aull);
+        const U got = load_object_from_slot(f);
+        QCOMPARE(got.x, 0xA5A5A5A5A5A5A5A5ull);
+        QCOMPARE(got.y, 0x5A5A5A5A5A5A5A5Aull);
 
         q.pop();
         QVERIFY(q.empty());

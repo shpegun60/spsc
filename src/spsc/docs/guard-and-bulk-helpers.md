@@ -322,8 +322,7 @@ if (auto guard = q.scoped_write()) {
 ```cpp
 if (auto guard = q.scoped_write()) {
     if (auto* hdr = guard.as<Header>()) {
-        hdr->magic = 0x12345678u;
-        hdr->len = 32u;
+        ::new (static_cast<void*>(hdr)) Header{0x12345678u, 32u};
     }
 }
 ```
@@ -333,8 +332,7 @@ if (auto guard = q.scoped_write()) {
 ```cpp
 auto guard = q.scoped_write();
 if (auto* hdr = guard.as<Header>()) {
-    hdr->magic = 0x12345678u;
-    hdr->len = 32u;
+    ::new (static_cast<void*>(hdr)) Header{0x12345678u, 32u};
     guard.disarm_publish();
 }
 ```
@@ -344,6 +342,7 @@ if (auto* hdr = guard.as<Header>()) {
 ```cpp
 if (auto guard = q.scoped_read()) {
     if (auto* hdr = guard.as<Header>()) {
+        // Only valid if the producer started Header lifetime in the slot.
         handle_header(*hdr);
     }
 }

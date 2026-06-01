@@ -75,9 +75,7 @@ struct Header {
 };
 
 if (auto* slot = q.try_claim()) {
-    auto* hdr = static_cast<Header*>(slot);
-    hdr->type = 7u;
-    hdr->payloadSize = 48u;
+    auto* hdr = ::new (slot) Header{7u, 48u};
 
     auto* payload = reinterpret_cast<std::byte*>(hdr + 1);
     fill_payload(payload, hdr->payloadSize);
@@ -202,7 +200,8 @@ The container gives you aligned slots on the default path, but hardware cache ma
 ### Producer Methods
 
 - `claim()` / `try_claim()` return the writable slot pointer
-- `claim_as<U>()` returns `U*` only if size and alignment fit
+- `claim_as<U>()` returns `U*` only if size and alignment fit; in C++17 it
+  does not start `U` lifetime by itself
 - `publish()` / `try_publish()` commit one slot
 - `publish(unsafe, n)` / `try_publish(unsafe, n)` commit several prepared slots
 - `push(const U&)` / `try_push(const U&)` memcpy a trivially-copyable object into the slot
@@ -218,8 +217,7 @@ struct Header {
 };
 
 if (auto* hdr = q.claim_as<Header>()) {
-    hdr->magic = 0x12345678u;
-    hdr->len = 42;
+    ::new (static_cast<void*>(hdr)) Header{0x12345678u, 42};
     q.publish();
 }
 ```
@@ -227,7 +225,8 @@ if (auto* hdr = q.claim_as<Header>()) {
 ### Consumer Methods
 
 - `front()` / `try_front()` return the current slot pointer
-- `front_as<U>()` returns `U*` when the slot is large enough and aligned
+- `front_as<U>()` returns `U*` when the slot is large enough and aligned; only
+  dereference it when the producer started `U` lifetime in that slot
 - `try_peek(out)` memcpy-reads the current slot into a trivially-copyable object
 - `pop()` / `try_pop()` consume one slot
 - `pop(n)` / `try_pop(n)` consume several slots
@@ -256,14 +255,14 @@ Guard example:
 ```cpp
 if (auto guard = q.scoped_write()) {
     if (auto* hdr = guard.as<Header>()) {
-        hdr->magic = 0x12345678u;
-        hdr->len = 42;
+        ::new (static_cast<void*>(hdr)) Header{0x12345678u, 42};
     }
     // publish() happens on scope exit after as<U>() arms it
 }
 
 if (auto guard = q.scoped_read()) {
     if (auto* hdr = guard.as<Header>()) {
+        // Only valid if the producer started Header lifetime in the slot.
         handle_header(*hdr);
     }
     // pop() happens on scope exit
@@ -296,8 +295,7 @@ if (void* slot = q.try_claim()) {
 
 ```cpp
 if (auto* hdr = q.claim_as<Header>()) {
-    hdr->magic = 0x12345678u;
-    hdr->len = 64u;
+    ::new (static_cast<void*>(hdr)) Header{0x12345678u, 64u};
     q.publish();
 }
 ```
@@ -360,6 +358,7 @@ if (void* slot = q.try_front()) {
 
 ```cpp
 if (auto* hdr = q.front_as<Header>()) {
+    // Only valid if the producer started Header lifetime in the slot.
     handle_header(*hdr);
 }
 ```
@@ -406,13 +405,13 @@ auto r = q.claim_read(spsc::unsafe, 4);
 ```cpp
 if (auto guard = q.scoped_write()) {
     if (auto* hdr = guard.as<Header>()) {
-        hdr->magic = 0x12345678u;
-        hdr->len = 16u;
+        ::new (static_cast<void*>(hdr)) Header{0x12345678u, 16u};
     }
 }
 
 if (auto guard = q.scoped_read()) {
     if (auto* hdr = guard.as<Header>()) {
+        // Only valid if the producer started Header lifetime in the slot.
         handle_header(*hdr);
     }
 }
