@@ -156,13 +156,34 @@ So a requested `100` bytes can become `128` bytes under a 32-byte alignment poli
 using Q = spsc::pool<0, spsc::policy::CA<>>;
 Q q{32, 128};
 
-if (void* slot = q.try_claim()) {
-    start_dma_into(slot, 128);
+static void* activeRxSlot = nullptr;
+
+void arm_rx_dma()
+{
+    if (!activeRxSlot) {
+        activeRxSlot = q.try_claim();
+    }
+
+    if (activeRxSlot) {
+        start_dma_into(activeRxSlot, 128);
+    }
+}
+
+void on_rx_dma_complete(std::size_t bytesWritten)
+{
+    if (!activeRxSlot) {
+        return;
+    }
+
+    platform_invalidate_dma_rx_buffer(activeRxSlot, bytesWritten);
     q.publish();
+    activeRxSlot = nullptr;
 }
 ```
 
-The container gives you aligned slots on the default path, but hardware cache maintenance still belongs outside the container.
+Publish only after asynchronous DMA is complete. The container gives you
+aligned slots on the default path, but hardware cache maintenance still belongs
+outside the container.
 
 ## Good Fits
 

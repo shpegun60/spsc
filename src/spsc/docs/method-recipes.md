@@ -530,6 +530,8 @@ DMA-style logical-size commit:
 
 ```cpp
 start_dma(block.data(), block.capacity());
+
+// Later, after DMA completion and platform cache maintenance:
 block.commit_size(actualCount);
 ```
 

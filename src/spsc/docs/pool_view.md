@@ -79,6 +79,10 @@ for (std::size_t i = 0; i < kDepth; ++i) {
 spsc::pool_view<kDepth, spsc::policy::CA<>> q{slots, kBytes};
 ```
 
+`pool_view` does not allocate, round, or validate the external payload buffers.
+For STM32F7/STM32H7-style DMA, make each slot start cache-line aligned and
+make the maintained byte span cover whole cache lines.
+
 ### Typed Overlay On External Storage
 
 ```cpp

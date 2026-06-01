@@ -510,18 +510,56 @@ void adc_isr()
 
 ## 10. DMA, Cache, And Embedded Examples
 
-On cacheful MCUs such as `STM32H7`:
+On cacheful Cortex-M MCUs such as `STM32F7` / `STM32H7`:
 
 - `CacheAligned` improves metadata layout
 - typed payload alignment still depends on `T` and allocator choice
 - raw-slot containers can benefit from policy-derived aligned allocation
 - cache maintenance is still outside the queue
+- make sure `SPSC_CACHELINE_BYTES` is 32; pass `-DSPSC_FORCE_CACHELINE=32`
+  when your build does not expose a suitable Cortex-M or STM32 family macro
 
 Practical advice:
 
 - `pool` / `latest<void>` are strong fits for aligned raw DMA buffers
 - `fifo<T>` / `queue<T>` need explicit payload alignment when the payload itself must be line-aware
 - `*_view` containers require already-correct external storage
+- avoid sharing a maintained cache line with unrelated dirty data
+
+CMSIS by-address cache maintenance must cover whole cache lines. Keep that in
+your platform layer:
+
+```cpp
+static_assert((SPSC_CACHELINE_BYTES & (SPSC_CACHELINE_BYTES - 1u)) == 0u);
+
+inline std::size_t dma_cache_span(const void* p,
+                                  std::size_t bytes,
+                                  std::uintptr_t& alignedBegin)
+{
+    constexpr std::uintptr_t line = SPSC_CACHELINE_BYTES;
+    const auto begin = reinterpret_cast<std::uintptr_t>(p);
+    const auto end = begin + bytes;
+    alignedBegin = begin & ~(line - 1u);
+    const auto alignedEnd = (end + line - 1u) & ~(line - 1u);
+    return static_cast<std::size_t>(alignedEnd - alignedBegin);
+}
+
+inline void clean_dma_tx_buffer(const void* p, std::size_t bytes)
+{
+    std::uintptr_t begin = 0u;
+    const auto span = dma_cache_span(p, bytes, begin);
+    SCB_CleanDCache_by_Addr(reinterpret_cast<std::uint32_t*>(begin),
+                            static_cast<std::int32_t>(span));
+}
+
+inline void invalidate_dma_rx_buffer(void* p, std::size_t bytes)
+{
+    std::uintptr_t begin = 0u;
+    const auto span = dma_cache_span(p, bytes, begin);
+    SCB_InvalidateDCache_by_Addr(reinterpret_cast<std::uint32_t*>(begin),
+                                 static_cast<std::int32_t>(span));
+}
+```
 
 ### External DMA Slot Table With `pool_view`
 
@@ -551,17 +589,29 @@ void init_dma_pool()
 
 ```cpp
 static TaskHandle_t dmaTaskHandle = nullptr;
+static void* activeRxSlot = nullptr;
+
+void arm_next_rx_dma()
+{
+    if (!activeRxSlot) {
+        activeRxSlot = dmaPool.try_claim();
+    }
+
+    if (activeRxSlot) {
+        invalidate_dma_rx_buffer(activeRxSlot, kBytes);
+        start_dma_into(activeRxSlot, kBytes);
+    }
+}
 
 extern "C" void DMA1_Stream0_IRQHandler(void)
 {
     BaseType_t higherPriorityTaskWoken = pdFALSE;
 
-    if (void* slot = dmaPool.try_claim()) {
-        // Platform-level cache maintenance belongs here, not inside the container.
-        SCB_InvalidateDCache_by_Addr(reinterpret_cast<std::uint32_t*>(slot), kBytes);
-
-        finish_dma_into(slot, kBytes);
+    if (activeRxSlot) {
+        invalidate_dma_rx_buffer(activeRxSlot, kBytes);
+        finish_dma_rx(activeRxSlot, kBytes);
         dmaPool.publish();
+        activeRxSlot = nullptr;
         vTaskNotifyGiveFromISR(dmaTaskHandle, &higherPriorityTaskWoken);
     }
 
@@ -572,6 +622,7 @@ extern "C" void DMA1_Stream0_IRQHandler(void)
 void DmaConsumerTask(void*)
 {
     dmaTaskHandle = xTaskGetCurrentTaskHandle();
+    arm_next_rx_dma();
 
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -580,6 +631,8 @@ void DmaConsumerTask(void*)
             process_dma_block(static_cast<std::byte*>(slot), dmaPool.buffer_size());
             dmaPool.pop();
         }
+
+        arm_next_rx_dma();
     }
 }
 ```

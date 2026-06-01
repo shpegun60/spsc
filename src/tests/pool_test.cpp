@@ -215,25 +215,28 @@ template<class Q>
 static void test_policy_default_round_up_cached() {
     constexpr std::size_t kPolicyAlign =
         ::spsc::alloc::policy_allocator_alignment_v<typename Q::policy_type>;
-    constexpr reg requested = 100u;
-    constexpr reg expected  = expected_pool_buffer_size<Q>(requested);
 
     static_assert(kPolicyAlign > 1u);
-    static_assert((expected % static_cast<reg>(kPolicyAlign)) == 0u);
-    static_assert(expected >= requested);
 
-    Q q;
-    if constexpr (pool_capacity_v<Q> == 0u) {
-        QVERIFY(q.resize(kDepth, requested));
-    } else {
-        QVERIFY(q.resize(requested));
+    const std::array<reg, 7> requests{{31u, 32u, 33u, 63u, 64u, 65u, 100u}};
+    for (const reg requested : requests) {
+        const reg expected = expected_pool_buffer_size<Q>(requested);
+        QVERIFY((expected % static_cast<reg>(kPolicyAlign)) == 0u);
+        QVERIFY(expected >= requested);
+
+        Q q;
+        if constexpr (pool_capacity_v<Q> == 0u) {
+            QVERIFY(q.resize(kDepth, requested));
+        } else {
+            QVERIFY(q.resize(requested));
+        }
+        QVERIFY(q.is_valid());
+        QCOMPARE(q.buffer_size(), expected);
+
+        void* p = q.claim();
+        QVERIFY(p != nullptr);
+        QVERIFY((reinterpret_cast<std::uintptr_t>(p) % kPolicyAlign) == 0u);
     }
-    QVERIFY(q.is_valid());
-    QCOMPARE(q.buffer_size(), expected);
-
-    void* p = q.claim();
-    QVERIFY(p != nullptr);
-    QVERIFY((reinterpret_cast<std::uintptr_t>(p) & (kPolicyAlign - 1u)) == 0u);
 }
 
 // -------------------------

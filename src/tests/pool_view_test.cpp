@@ -2223,6 +2223,51 @@ static void test_alignment_sweep_dynamic() {
     }
 }
 
+static void test_cacheline_aligned_external_slots_cached() {
+    using Policy = spsc::policy::CA<>;
+    using Q = spsc::pool_view<4u, Policy>;
+
+    constexpr std::size_t kLine = ::spsc::hw::cacheline_bytes;
+    constexpr std::size_t kDepth = 4u;
+    constexpr std::size_t kDmaBytes = kLine * 2u;
+
+    static_assert(kLine >= 32u);
+    static_assert((kLine & (kLine - 1u)) == 0u);
+
+    struct alignas(kLine) Slot {
+        std::array<std::byte, kDmaBytes> bytes{};
+    };
+
+    std::array<Slot, kDepth> storage{};
+    std::array<void*, kDepth> slot_table{};
+    for (std::size_t i = 0u; i < kDepth; ++i) {
+        slot_table[i] = storage[i].bytes.data();
+        QVERIFY((reinterpret_cast<std::uintptr_t>(slot_table[i]) % kLine) == 0u);
+    }
+
+    Q q(slot_table, static_cast<reg>(kDmaBytes), Policy{});
+    QVERIFY(q.is_valid());
+    QCOMPARE(q.buffer_size(), static_cast<reg>(kDmaBytes));
+    QVERIFY((q.buffer_size() % static_cast<reg>(kLine)) == 0u);
+
+    for (std::size_t i = 0u; i < kDepth; ++i) {
+        void* slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        QVERIFY((reinterpret_cast<std::uintptr_t>(slot) % kLine) == 0u);
+        static_cast<std::byte*>(slot)[0] = static_cast<std::byte>(i + 1u);
+        q.publish();
+    }
+
+    for (std::size_t i = 0u; i < kDepth; ++i) {
+        void* slot = q.try_front();
+        QVERIFY(slot != nullptr);
+        QVERIFY((reinterpret_cast<std::uintptr_t>(slot) % kLine) == 0u);
+        QCOMPARE(static_cast<unsigned>(static_cast<std::uint8_t>(static_cast<std::byte*>(slot)[0])),
+                 static_cast<unsigned>(i + 1u));
+        q.pop();
+    }
+}
+
 // ------------------------------ full suites ------------------------------
 
 template <class Policy>
@@ -2370,6 +2415,7 @@ private slots:
     void dynamic_atomic_A()   { run_dynamic_suite<spsc::policy::A<>>(); }
     void dynamic_cached_CA()  { run_dynamic_suite<spsc::policy::CA<>>(); }
     void extended_policy_regression() { extended_policy_regression_suite(); }
+    void external_dma_slots_cached_CA() { test_cacheline_aligned_external_slots_cached(); }
 
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>(); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>(); }

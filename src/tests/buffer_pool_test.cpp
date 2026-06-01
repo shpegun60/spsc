@@ -1496,25 +1496,34 @@ static void alignment_suite_default()
     using QRuntimeCA = ::spsc::buffer_pool<std::byte, 0u, 3u, ::spsc::policy::CA<>>;
     using QDynamicCA = ::spsc::buffer_pool<std::byte, 0u, 0u, ::spsc::policy::CA<>>;
 
+    constexpr auto kCAAlign = static_cast<reg>(
+        ::spsc::alloc::policy_allocator_alignment_v<::spsc::policy::CA<>>);
+    constexpr auto kCAStorageSpan13 = static_cast<reg>(sizeof(typename QStaticCA::stored_buffer_type));
+    constexpr auto kCAAllocatedSpan13 = static_cast<reg>(
+        ::spsc::alloc::round_up_size_for_policy<
+            ::spsc::policy::CA<>,
+            typename QStaticCA::base_allocator_type>(13u));
+
     static_assert(QStaticP::size_bytes() == 13u);
     static_assert(QStaticP::span_bytes() == 13u);
-    static_assert(QStaticCA::span_bytes() == 64u);
-    static_assert(QStaticCA::alignment() == 64u);
+    static_assert(kCAAlign == ::spsc::hw::cacheline_bytes);
+    static_assert(QStaticCA::span_bytes() == kCAStorageSpan13);
+    static_assert(QStaticCA::alignment() == kCAAlign);
 
     QRuntimeCA q1{13u};
     verify_invariants(q1);
     QCOMPARE(q1.size_bytes(), reg{13u});
-    QCOMPARE(q1.span_bytes(), reg{64u});
+    QCOMPARE(q1.span_bytes(), kCAAllocatedSpan13);
     for (reg i = 0u; i < q1.count(); ++i) {
-        QVERIFY((reinterpret_cast<std::uintptr_t>(q1.data(i)) % 64u) == 0u);
+        QVERIFY((reinterpret_cast<std::uintptr_t>(q1.data(i)) % kCAAlign) == 0u);
     }
 
     QDynamicCA q2{4u, 13u};
     verify_invariants(q2);
     QCOMPARE(q2.size_bytes(), reg{13u});
-    QCOMPARE(q2.span_bytes(), reg{64u});
+    QCOMPARE(q2.span_bytes(), kCAAllocatedSpan13);
     for (reg i = 0u; i < q2.count(); ++i) {
-        QVERIFY((reinterpret_cast<std::uintptr_t>(q2.data(i)) % 64u) == 0u);
+        QVERIFY((reinterpret_cast<std::uintptr_t>(q2.data(i)) % kCAAlign) == 0u);
     }
 }
 

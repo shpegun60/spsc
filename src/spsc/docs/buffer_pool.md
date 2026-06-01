@@ -50,7 +50,9 @@ dynamicShape.resize(8, 1500);
 Cache-aligned policies can align storage and round the physical span reported by
 `span_bytes()`. Runtime-sized variants allocate each payload separately, so treat
 this as a per-buffer alignment/span contract rather than a contiguous adjacency
-guarantee. Hardware cache maintenance still belongs outside the container.
+guarantee. On STM32F7/STM32H7-style DMA paths, use `span_bytes()` as the
+physical per-buffer span when that is the region handed to DMA. Hardware cache
+maintenance still belongs outside the container.
 
 ## Good Fits
 

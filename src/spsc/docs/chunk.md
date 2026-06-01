@@ -44,12 +44,16 @@ That makes `chunk` very practical for block workflows.
 
 ## DMA-Like Pattern
 
-When a peripheral writes into the chunk memory directly, you can publish the logical size afterwards.
+When a peripheral writes into the chunk memory directly, publish the logical
+size only after the DMA transfer has completed and any platform cache
+maintenance is done.
 
 ```cpp
 spsc::chunk<std::uint16_t, 256> block;
 
 start_dma(block.data(), block.capacity());
+
+// Later, from the DMA completion path:
 block.commit_size(actualSamplesWritten);
 ```
 

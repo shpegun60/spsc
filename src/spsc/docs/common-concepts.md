@@ -154,12 +154,17 @@ Important boundary:
 - `CacheAligned` helps with **software-visible layout**
 - it does **not** perform hardware cache maintenance like `SCB_CleanDCache*` / `SCB_InvalidateDCache*`
 
-For `STM32H7` style DMA usage:
+For `STM32F7` / `STM32H7` style DMA usage:
 
 - align metadata with `CA<>` / related aliases
 - align the payload itself
 - make raw slot sizes a multiple of the cache-line size when possible
 - keep DMA cache maintenance or MPU policy outside the container
+- make sure `SPSC_CACHELINE_BYTES` is 32; pass `-DSPSC_FORCE_CACHELINE=32`
+  when your build does not expose a suitable Cortex-M or STM32 family macro
+- clean before memory-to-peripheral DMA, invalidate after peripheral-to-memory
+  DMA completes and before the CPU reads, using platform code that covers whole
+  cache lines
 
 ## 8. Typed vs Raw Payload Models
 

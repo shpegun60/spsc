@@ -283,14 +283,17 @@ For bulk guards, read/write regions, RAII helpers, and more zero-copy flows, see
 
 ## Cache-Aligned And MCU-Oriented Usage
 
-If you target MCUs such as STM32H7:
+If you target cacheful Cortex-M MCUs such as STM32F7/STM32H7:
 
 - `CacheAligned` policies pad queue metadata to cacheline boundaries
 - raw-slot containers such as `pool` and `latest<void>` can derive default payload alignment from the policy
 - typed payload alignment still comes from `T` or from an explicit allocator
 - D-cache clean/invalidate is a platform concern, not the queue's job
+- for STM32F7/STM32H7-style DMA, make sure `SPSC_CACHELINE_BYTES` is 32;
+  pass `-DSPSC_FORCE_CACHELINE=32` when your build does not expose a suitable
+  Cortex-M or STM32 family macro
 
-Typical STM32H7-oriented raw-slot configuration:
+Typical STM32F7/STM32H7-oriented raw-slot configuration:
 
 ```cpp
 using Policy = spsc::policy::CA<>;
