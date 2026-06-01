@@ -126,7 +126,7 @@ q.consume(snap);
 
 ### Management
 
-- `resize` / `reserve`
+- `resize`
 - `clear`
 - `swap`, move, deep copy
 
