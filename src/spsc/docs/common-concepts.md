@@ -93,7 +93,7 @@ Most queue-like types support one or more of:
 
 - `front()` / `try_front()`
 - `pop()` / `try_pop()`
-- `make_snapshot()` + `consume(snapshot)`
+- `make_snapshot()` + `consume(snapshot)` / `try_consume(snapshot)`
 - `claim_read(...)` for bulk region reads
 
 Pick the simplest model that matches your consumer:
@@ -101,6 +101,10 @@ Pick the simplest model that matches your consumer:
 - `front/pop` for single-step consumption
 - snapshots for read-many-then-consume
 - bulk regions for contiguous span processing
+
+`consume(snapshot)` is the fast precondition form: the consumer must not move
+between snapshot capture and consume. Use `try_consume(snapshot)` when the
+consumer path may branch, delay, or perform another consumer-side operation first.
 
 For copy-paste patterns covering these shared interface families, see [Method Recipes](method-recipes.md).
 For guard- and bulk-helper specific APIs, see [Guard and Bulk Helpers](guard-and-bulk-helpers.md).

@@ -777,6 +777,87 @@ static void chunk_fifo_alignment_contract_suite() {
     }
 }
 
+static void chunk_fifo_reuse_and_scoped_contract_suite() {
+    {
+        using Q = spsc::chunk_fifo<std::uint32_t, 4u, 2u, spsc::policy::P>;
+        Q q;
+        QVERIFY(q.is_valid());
+
+        auto* first = q.try_claim();
+        QVERIFY(first != nullptr);
+        first->clear();
+        QVERIFY(first->try_push(1u));
+        QVERIFY(first->try_push(2u));
+        QVERIFY(first->try_push(3u));
+        q.publish();
+        QCOMPARE(q.front().size(), reg{3u});
+        q.pop();
+
+        auto* second = q.try_claim();
+        QVERIFY(second != nullptr);
+        second->clear();
+        QVERIFY(second->try_push(4u));
+        q.publish();
+        QCOMPARE(q.front().size(), reg{1u});
+        QCOMPARE(q.front().front(), std::uint32_t{4u});
+        q.pop();
+
+        // Capacity 2 wraps back to the first physical slot. The user-clear
+        // contract must be enough to prevent stale logical length reuse.
+        auto* reused = q.try_claim();
+        QVERIFY(reused != nullptr);
+        reused->clear();
+        QVERIFY(reused->try_push(9u));
+        q.publish();
+        QCOMPARE(q.front().size(), reg{1u});
+        QCOMPARE(q.front().front(), std::uint32_t{9u});
+        q.pop();
+        QVERIFY(q.empty());
+
+        {
+            auto wg = q.scoped_write();
+            QVERIFY(static_cast<bool>(wg));
+            wg->clear();
+            QVERIFY(wg->try_push(77u));
+        }
+        QCOMPARE(q.size(), reg{1u});
+        {
+            auto rg = q.scoped_read();
+            QVERIFY(static_cast<bool>(rg));
+            QCOMPARE(rg->size(), reg{1u});
+            QCOMPARE(rg->front(), std::uint32_t{77u});
+            rg.commit();
+        }
+        QVERIFY(q.empty());
+    }
+
+    {
+        using Q = spsc::chunk_fifo<std::uint32_t, 0u, 2u, spsc::policy::P>;
+        Q q;
+        QVERIFY(q.is_valid());
+
+        for (reg i = 0u; i < q.capacity(); ++i) {
+            QVERIFY(q.data()[i].reserve(4u));
+            q.data()[i].clear();
+        }
+
+        auto* block = q.try_claim();
+        QVERIFY(block != nullptr);
+        block->clear();
+        QVERIFY(block->try_push(10u));
+        QVERIFY(block->try_push(20u));
+        q.publish();
+
+        auto* front = q.try_front();
+        QVERIFY(front != nullptr);
+        QCOMPARE(front->size(), reg{2u});
+        QCOMPARE(front->front(), std::uint32_t{10u});
+        QCOMPARE(front->back(), std::uint32_t{20u});
+        q.pop();
+        QVERIFY(q.empty());
+    }
+}
+
 #if SPSC_HAS_SPAN
 static void span_contract_suite() {
     {
@@ -842,6 +923,10 @@ private slots:
     void alignment_sweep() {
         alignment_sweep_suite();
         chunk_fifo_alignment_contract_suite();
+    }
+
+    void chunk_fifo_reuse_and_scoped_contract() {
+        chunk_fifo_reuse_and_scoped_contract_suite();
     }
 
 #if SPSC_HAS_SPAN

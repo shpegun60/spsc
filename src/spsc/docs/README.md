@@ -25,6 +25,7 @@ If you are new to the library, read in this order:
 | A contiguous block container used as payload | [`chunk`](chunk.md) |
 | FIFO of fixed-size arrays | [`array_fifo` family](array_fifo.md) |
 | FIFO of `chunk<T,...>` blocks | [`chunk_fifo` family](chunk_fifo.md) |
+| Owning collection of fixed-size buffers | [`buffer_pool`](buffer_pool.md) |
 
 ## Container Guides
 
@@ -42,6 +43,7 @@ If you are new to the library, read in this order:
 - [chunk](chunk.md)
 - [array_fifo family](array_fifo.md)
 - [chunk_fifo family](chunk_fifo.md)
+- [buffer_pool](buffer_pool.md)
 
 ## Practical Reading Strategy
 

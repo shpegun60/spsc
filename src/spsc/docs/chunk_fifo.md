@@ -43,9 +43,9 @@ Blocks q;
 
 if (auto* block = q.try_claim()) {
     block->clear();
-    block->push_back(10);
-    block->push_back(20);
-    block->push_back(30);
+    block->push(10);
+    block->push(20);
+    block->push(30);
     q.publish();
 }
 ```
@@ -196,8 +196,8 @@ This is by design, because block production is expected to be zero-copy and expl
 ```cpp
 if (auto* block = q.try_claim()) {
     block->clear();
-    block->push_back(1);
-    block->push_back(2);
+    block->push(1);
+    block->push(2);
     q.publish();
 }
 ```

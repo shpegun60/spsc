@@ -519,9 +519,9 @@ Use `chunk` as a local block builder:
 spsc::chunk<std::uint16_t, 256> block;
 
 block.clear();
-block.push_back(10);
-block.push_back(20);
-block.push_back(30);
+block.push(10);
+block.push(20);
+block.push(30);
 ```
 
 DMA-style logical-size commit:
@@ -567,8 +567,8 @@ if (auto* frame = rxFrames.try_claim()) {
 ```cpp
 if (auto* block = audioBlocks.try_claim()) {
     block->clear();
-    block->push_back(left);
-    block->push_back(right);
+    block->push(left);
+    block->push(right);
     audioBlocks.publish();
 }
 ```

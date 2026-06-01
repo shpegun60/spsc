@@ -3453,6 +3453,142 @@ static void api_compile_smoke_all() {
     static_assert((sizeof(typename AFVCached::value_type) % alignof(typename AFVCached::value_type)) == 0u);
 }
 
+template <class Q>
+static void array_fifo_wrapper_runtime_one(Q& q) {
+    using size_type = typename Q::size_type;
+
+    QVERIFY(q.is_valid());
+    QCOMPARE(q.capacity(), size_type{4u});
+    QVERIFY(q.empty());
+
+    {
+        auto* slot = q.try_claim();
+        QVERIFY(slot != nullptr);
+        (*slot)[0] = 11u;
+        (*slot)[1] = 22u;
+        (*slot)[2] = 33u;
+        (*slot)[3] = 44u;
+        QVERIFY(q.try_publish());
+    }
+
+    QCOMPARE(q.size(), size_type{1u});
+    {
+        auto snap = q.make_snapshot();
+        QCOMPARE(snap.size(), size_type{1u});
+        auto it = snap.begin();
+        QCOMPARE((*it)[0], std::uint32_t{11u});
+        QCOMPARE((*it)[3], std::uint32_t{44u});
+        QVERIFY(q.try_consume(snap));
+    }
+    QVERIFY(q.empty());
+
+    {
+        auto wg = q.scoped_write();
+        QVERIFY(static_cast<bool>(wg));
+        (*wg)[0] = 55u;
+        (*wg)[1] = 66u;
+    }
+    QCOMPARE(q.size(), size_type{1u});
+
+    {
+        auto rg = q.scoped_read();
+        QVERIFY(static_cast<bool>(rg));
+        QCOMPARE((*rg)[0], std::uint32_t{55u});
+        QCOMPARE((*rg)[1], std::uint32_t{66u});
+        rg.commit();
+    }
+    QVERIFY(q.empty());
+
+    {
+        auto wr = q.claim_write(::spsc::unsafe, size_type{2u});
+        QCOMPARE(wr.total, size_type{2u});
+        std::uint32_t value = 100u;
+        for (size_type i = 0u; i < wr.first.count; ++i) {
+            wr.first.ptr[i][0] = value++;
+        }
+        for (size_type i = 0u; i < wr.second.count; ++i) {
+            wr.second.ptr[i][0] = value++;
+        }
+        q.publish(::spsc::unsafe, wr.total);
+    }
+
+    QCOMPARE(q.size(), size_type{2u});
+    QCOMPARE(q.front()[0], std::uint32_t{100u});
+    q.pop();
+    QCOMPARE(q.front()[0], std::uint32_t{101u});
+    q.pop();
+    QVERIFY(q.empty());
+}
+
+static void array_fifo_wrapper_runtime_smoke_suite() {
+    {
+        spsc::array_fifo<std::uint32_t, 4u, 4u, spsc::policy::P> q;
+        array_fifo_wrapper_runtime_one(q);
+    }
+    {
+        spsc::array_fifo<std::uint32_t, 4u, 4u, spsc::policy::A<>> q;
+        array_fifo_wrapper_runtime_one(q);
+    }
+    {
+        spsc::array_fifo<std::uint32_t, 4u, 4u, spsc::policy::CA<>> q;
+        array_fifo_wrapper_runtime_one(q);
+    }
+    {
+        using V = spsc::array_fifo_view<std::uint32_t, 4u, 4u, spsc::policy::P>;
+        std::array<typename V::value_type, 4u> backing{};
+        V q(backing);
+        array_fifo_wrapper_runtime_one(q);
+        const auto st = q.state();
+        q.detach();
+        QVERIFY(!q.is_valid());
+        QVERIFY(q.attach(backing, st));
+        QVERIFY(q.is_valid());
+    }
+    {
+        using V = spsc::array_fifo_view<std::uint32_t, 4u, 4u, spsc::policy::A<>>;
+        std::array<typename V::value_type, 4u> backing{};
+        V q(backing);
+        array_fifo_wrapper_runtime_one(q);
+    }
+    {
+        using V = spsc::array_fifo_view<std::uint32_t, 4u, 4u, spsc::policy::CA<>>;
+        std::array<typename V::value_type, 4u> backing{};
+        V q(backing);
+        array_fifo_wrapper_runtime_one(q);
+    }
+    {
+        using V = spsc::array_fifo_view<std::uint32_t, 4u, 0u, spsc::policy::P>;
+        std::array<typename V::value_type, 4u> backing{};
+        V q(backing.data(), static_cast<reg>(backing.size()));
+        array_fifo_wrapper_runtime_one(q);
+        const auto st = q.state();
+        q.detach();
+        QVERIFY(!q.is_valid());
+        QVERIFY(q.attach(backing.data(), static_cast<reg>(backing.size()), st));
+        QVERIFY(q.is_valid());
+    }
+    {
+        std::uint32_t backing[4][4]{};
+        spsc::carray_fifo_view<std::uint32_t, 4u, 4u, spsc::policy::P> q(backing);
+        array_fifo_wrapper_runtime_one(q);
+        const auto st = q.state();
+        q.detach();
+        QVERIFY(!q.is_valid());
+        QVERIFY(q.attach(backing, st));
+        QVERIFY(q.is_valid());
+    }
+    {
+        std::uint32_t backing[4][4]{};
+        spsc::carray_fifo_view<std::uint32_t, 4u, 0u, spsc::policy::P> q(backing, reg{4u});
+        array_fifo_wrapper_runtime_one(q);
+        const auto st = q.state();
+        q.detach();
+        QVERIFY(!q.is_valid());
+        QVERIFY(q.attach(backing, reg{4u}, st));
+        QVERIFY(q.is_valid());
+    }
+}
+
 static void extended_policy_smoke_suite() {
     ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
         using Policy = typename decltype(policy_tag)::type;
@@ -3702,6 +3838,7 @@ private slots:
     }
 
     void alignment_sweep() { alignment_sweep_all(); }
+    void array_wrapper_runtime_smoke() { array_fifo_wrapper_runtime_smoke_suite(); }
     void stress_cached_ca_transitions() { stress_cached_policy_transitions_suite<spsc::policy::CA<>>(); }
     void extended_policy_regression() {
         extended_policy_regression_suite();

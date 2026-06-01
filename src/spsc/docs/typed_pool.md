@@ -29,6 +29,7 @@ struct Frame {
 spsc::typed_pool<Frame, 32> q;
 
 if (Frame* slot = q.try_claim()) {
+    new (slot) Frame{};
     fill_frame(*slot);
     q.publish();
 }
@@ -262,7 +263,7 @@ if (q.full()) {
 ### `data()`
 
 ```cpp
-Frame** slots = q.data();
+Frame* const* slots = q.data();
 inspect_slots(slots, q.capacity());
 ```
 

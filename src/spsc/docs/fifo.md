@@ -64,7 +64,7 @@ if (!q.try_push(value)) {
 }
 
 if (auto front = q.try_front()) {
-    consume(front->get());
+    consume(*front);
     q.pop();
 }
 ```
@@ -97,6 +97,10 @@ for (const auto& item : snap) {
 q.consume(snap);
 ```
 
+`consume(snapshot)` is a precondition API: the consumer must not move between
+`make_snapshot()` and `consume()`. Use `try_consume(snapshot)` when consumer
+logic may branch, delay, or observe another consumer-side operation first.
+
 Use snapshots when:
 
 - you want simple read-only iteration
@@ -112,14 +116,12 @@ if (!q.try_push(sample)) {
 }
 ```
 
-### Drop-Old To Keep The Newest Data
+### Keep Only Newest Data
 
-```cpp
-if (!q.try_push(sample)) {
-    q.pop();
-    q.push(sample);
-}
-```
+Do not call `pop()` from the producer to make room in a live SPSC FIFO. The
+producer owns head movement; the consumer owns tail movement. Use `latest`
+for newest-state semantics, or have the consumer explicitly discard stale
+entries on the consumer side.
 
 ### Batch Producer With A Bulk Guard
 
@@ -535,6 +537,9 @@ auto snap = q.make_snapshot();
 consume_snapshot_items(snap);
 q.consume(snap);
 ```
+
+Use `try_consume(snapshot)` instead when the snapshot is not consumed
+immediately after the captured range is processed.
 
 ### `try_consume(snapshot)`
 

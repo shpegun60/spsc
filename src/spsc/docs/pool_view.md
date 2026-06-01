@@ -289,7 +289,7 @@ if (q.full()) {
 ### `data()`, `operator[]`
 
 ```cpp
-void** slotArray = q.data();
+void* const* slotArray = q.data();
 (void)slotArray;
 
 if (!q.empty()) {

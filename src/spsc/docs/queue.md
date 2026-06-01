@@ -158,7 +158,7 @@ q.emplace(7, "ready");
 
 - `queue()` creates an empty queue.
 - `queue(requested_capacity)` exists for the dynamic variant.
-- copy and move are supported.
+- move is supported; copy is intentionally disabled because `queue` owns live object lifetime.
 - `swap(other)` exchanges storage and state.
 - `destroy()` releases storage and destroys live objects.
 

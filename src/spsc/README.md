@@ -28,6 +28,7 @@ The examples below are C++17-safe unless explicitly marked otherwise. Helpers th
 | Fixed-size arrays as queue elements | [`array_fifo` family](docs/array_fifo.md) | Zero-copy frame-style producer flow |
 | Variable-used blocks with per-block logical size | [`chunk_fifo` family](docs/chunk_fifo.md) | FIFO of `chunk<T,...>` objects |
 | Standalone contiguous block container | [`chunk`](docs/chunk.md) | Payload block, not itself an SPSC queue |
+| Owning collection of fixed-size buffers | [`buffer_pool`](docs/buffer_pool.md) | Buffer storage helper, not itself an SPSC queue |
 
 ## Concurrency Model
 
@@ -189,6 +190,7 @@ if (const Telemetry* view = latestState.try_front()) {
 #include "spsc/typed_pool.hpp"
 #include <array>
 #include <cstddef>
+#include <new>
 
 struct Frame {
     std::array<std::byte, 256> payload;
@@ -197,6 +199,7 @@ struct Frame {
 spsc::typed_pool<Frame, 16> q;
 
 if (Frame* slot = q.try_claim()) {
+    new (slot) Frame{};
     prepare_frame(*slot);
     q.publish();
 }
@@ -242,9 +245,9 @@ Blocks q;
 
 if (auto* block = q.try_claim()) {
     block->clear();
-    block->push_back(10);
-    block->push_back(20);
-    block->push_back(30);
+    block->push(10);
+    block->push(20);
+    block->push(30);
     q.publish();
 }
 

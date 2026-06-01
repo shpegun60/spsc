@@ -19,9 +19,9 @@ It is a contiguous block container designed to be used:
 #include "chunk.hpp"
 
 spsc::chunk<std::uint16_t, 256> block;
-block.push_back(1);
-block.push_back(2);
-block.push_back(3);
+block.push(1);
+block.push(2);
+block.push(3);
 ```
 
 ## Dynamic Example
@@ -29,7 +29,7 @@ block.push_back(3);
 ```cpp
 spsc::chunk<std::uint16_t, 0> block;
 block.reserve(512);
-block.push_back(10);
+block.push(10);
 ```
 
 ## Important Semantic Detail
@@ -37,7 +37,7 @@ block.push_back(10);
 For dynamic chunks:
 
 - elements in `[0..capacity)` are eagerly constructed
-- `push_back()` uses assignment into the next logical slot
+- `push()` / `emplace()` use assignment or construction into the next logical slot
 - `resize()` moves the logical length cursor, not the allocation itself
 
 That makes `chunk` very practical for block workflows.
@@ -62,7 +62,7 @@ spsc::chunk<std::uint16_t, 0> block;
 block.reserve(512);
 
 for (std::uint16_t i = 0; i < 128; ++i) {
-    block.push_back(i);
+    block.push(i);
 }
 ```
 
@@ -85,7 +85,8 @@ block.pop_back_n(4);
 
 - `data()`
 - `size()`, `capacity()`, `free()`
-- `push_back`, `emplace_back`
+- `push`, `try_push`
+- `emplace`, `try_emplace`
 - `resize`, `try_resize`, `commit_size`
 - `clear`
 - `used_span()` / `cap_span()` when spans are enabled
@@ -105,8 +106,8 @@ block.pop_back_n(4);
 
 ### Mutating Operations
 
-- `push_back`, `try_push_back`
-- `emplace_back`, `try_emplace_back`
+- `push`, `try_push`
+- `emplace`, `try_emplace`
 - `resize`, `try_resize`, `commit_size`
 - `clear`
 
@@ -152,9 +153,7 @@ block.pop_back_n(4);
 ### Mutating Methods
 
 - `push(...)` / `try_push(...)`
-- `push_back(...)` / `try_push_back(...)`
 - `emplace(...)` / `try_emplace(...)`
-- `emplace_back(...)` / `try_emplace_back(...)`
 - `pop_back()` / `try_pop_back()` / `pop_back_n(n)` if you use the chunk as a local block builder
 - `commit_size(n)` after external writes such as DMA
 
@@ -227,25 +226,11 @@ block.push(1);
 (void)block.try_push(2);
 ```
 
-### `push_back()`, `try_push_back()`
-
-```cpp
-block.push_back(3);
-(void)block.try_push_back(4);
-```
-
 ### `emplace()`, `try_emplace()`
 
 ```cpp
 block.emplace(args...);
 (void)block.try_emplace(args...);
-```
-
-### `emplace_back()`, `try_emplace_back()`
-
-```cpp
-block.emplace_back(args...);
-(void)block.try_emplace_back(args...);
 ```
 
 ### `resize()`, `try_resize()`, `resize_clamp()`

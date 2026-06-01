@@ -74,6 +74,10 @@ for (const auto& frame : snap) {
 q.consume(snap);
 ```
 
+`consume(snapshot)` assumes the consumer has not advanced since the snapshot
+was made. Use `try_consume(snapshot)` when consumer-side logic may branch or
+delay before consuming the captured range.
+
 ### Restore A View Over Existing Frame Storage
 
 ```cpp
@@ -215,6 +219,9 @@ for (const auto& frame : snap) {
 }
 q.consume(snap);
 ```
+
+Prefer `try_consume(snapshot)` when a snapshot is not consumed immediately
+after iteration.
 
 ### view `attach()` / `state()`
 
