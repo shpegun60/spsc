@@ -16,6 +16,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Counter-wrap regressions that cross the actual unsigned index boundary in
   short runs, cover static/dynamic `fifo_view::adopt()`, shadow-cache refresh,
   and fail-closed handling of invalid restored state.
+- A policy/configuration test matrix covering direct `VV` execution, explicit
+  acquire/release and `seq_cst` atomic order palettes, expected rejection of
+  relaxed publication, and genuine 32-bit shadow gating.
+- A separate C++20 `SPSC_HAS_SPAN=1` qmake runner with runtime contracts for
+  `fifo::span`, `pool::span`, `queue::raw_bytes`, and chunk span views.
 
 ### Changed
 
@@ -30,6 +35,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   and optional cross-revision header selection for controlled comparisons.
 - qmake dashboard/test runner builds now target C++17 and keep Debug/Release binaries in separate `bin/debug` and `bin/release` directories.
 - qmake C++17 test runners force `SPSC_HAS_SPAN=0`; `std::span` helpers remain available only for C++20-capable builds that enable span support.
+- qmake test runners can now select their language standard and span setting;
+  the dashboard remains on its existing C++17 matrix while C++20 span coverage
+  is an explicit target.
 - The default SPSC policy remains plain (`SPSC_DEFAULT_POLICY_ATOMIC=0`), while lock-free atomics remain required by default (`SPSC_REQUIRE_LOCK_FREE=1`).
 
 ### Fixed

@@ -2601,6 +2601,10 @@ private slots:
 
     void alignment_align_alloc_256();
     void alignment_align_alloc_32();
+
+#if SPSC_HAS_SPAN
+    void span_contract();
+#endif
 };
 
 // ------------------------------ Static pools ------------------------------
@@ -3002,6 +3006,76 @@ static void extended_policy_threaded_atomic_like_suite() {
     run_threaded_policy_suite<spsc::policy::CAA<>>();
 }
 
+#if SPSC_HAS_SPAN
+template <class Q>
+static void verify_pool_span_contract(Q& q) {
+    QVERIFY(q.is_valid());
+    QVERIFY(q.empty());
+    QVERIFY(q.span().empty());
+
+    const reg cap = q.capacity();
+    QVERIFY(cap >= reg{4u});
+    const reg buffer_size = q.buffer_size();
+    QVERIFY(buffer_size >= reg{sizeof(std::uint32_t)});
+
+    for (reg value = 0u; value < cap; ++value) {
+        QVERIFY(q.try_push(static_cast<std::uint32_t>(value)));
+    }
+    QVERIFY(q.full());
+
+    auto front_bytes = q.span();
+    QCOMPARE(static_cast<reg>(front_bytes.size()), buffer_size);
+    QCOMPARE(front_bytes.data(), static_cast<std::byte*>(q.front()));
+
+    const auto storage_alignment = static_cast<std::uintptr_t>(
+        ::spsc::alloc::policy_storage_alignment_v<typename Q::policy_type, std::byte>);
+    QVERIFY(storage_alignment != 0u);
+    QCOMPARE(reinterpret_cast<std::uintptr_t>(front_bytes.data()) % storage_alignment,
+             std::uintptr_t{0u});
+
+    const auto* first_front = front_bytes.data();
+    q.pop();
+    q.pop();
+
+    // span() follows the current logical front, even when producer writes wrap
+    // into the reclaimed physical slots.
+    front_bytes = q.span();
+    QCOMPARE(front_bytes.data(), static_cast<std::byte*>(q.front()));
+    QVERIFY(front_bytes.data() != first_front);
+    QCOMPARE(static_cast<reg>(front_bytes.size()), buffer_size);
+
+    QVERIFY(q.try_push(static_cast<std::uint32_t>(cap)));
+    QVERIFY(q.try_push(static_cast<std::uint32_t>(cap + 1u)));
+    QVERIFY(q.full());
+
+    while (!q.empty()) {
+        QVERIFY(q.try_pop());
+    }
+    QVERIFY(q.span().empty());
+}
+
+static void pool_span_contract_suite() {
+    {
+        spsc::pool<4u, spsc::policy::P> q(reg{32u});
+        verify_pool_span_contract(q);
+    }
+    {
+        spsc::pool<0u, spsc::policy::P> q;
+        QVERIFY(q.resize(4u, 32u));
+        verify_pool_span_contract(q);
+    }
+    {
+        spsc::pool<4u, spsc::policy::CA<>> q(reg{32u});
+        verify_pool_span_contract(q);
+    }
+    {
+        spsc::pool<0u, spsc::policy::CA<>> q;
+        QVERIFY(q.resize(4u, 32u));
+        verify_pool_span_contract(q);
+    }
+}
+#endif // SPSC_HAS_SPAN
+
 } // namespace
 
 // ------------------------------ Alignment suites ------------------------------
@@ -3062,6 +3136,13 @@ void tst_pool_api_paranoid::alignment_align_alloc_32() {
     using Q = ::spsc::pool<kDepth, ::spsc::policy::P, ::spsc::alloc::align_alloc<32u>>;
     test_alignment_behavior<Q, 32u>(true);
 }
+
+#if SPSC_HAS_SPAN
+void tst_pool_api_paranoid::span_contract() {
+    pool_span_contract_suite();
+}
+#endif
+
 // ------------------------------ Test runner ------------------------------
 
 int run_tst_pool_api_paranoid(int argc, char** argv) {

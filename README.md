@@ -164,6 +164,26 @@ The dashboard and runner executables are built per configuration:
 .\bin\release\spsc_test_shadow_on.exe --run-suite fifo
 ```
 
+The C++20 runner enables `SPSC_HAS_SPAN=1`; it is separate from the C++17
+dashboard matrix so a missing `std::span` library cannot silently disable its
+contracts:
+
+```powershell
+.\bin\debug\spsc_test_cxx20_span.exe --run-suite fifo span_contract
+.\bin\debug\spsc_test_cxx20_span.exe --run-suite pool span_contract
+.\bin\debug\spsc_test_cxx20_span.exe --run-suite queue raw_bytes_contract
+.\bin\debug\spsc_test_cxx20_span.exe --run-suite chunk span_contract
+```
+
+H6 also has two standalone policy targets. The first succeeds only when the
+compiler rejects relaxed atomic publication. Run the second from an x86 Visual
+Studio Developer PowerShell (or another genuine 32-bit compiler environment):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test_relaxed_publication_compile_fail.ps1 -Compiler C:\msys64\ucrt64\bin\g++.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_h6_32bit_shadow_matrix.ps1 -Compiler cl
+```
+
 The dashboard:
 
 - runs each suite in a separate child process

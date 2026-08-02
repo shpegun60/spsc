@@ -893,24 +893,69 @@ static void chunk_fifo_reuse_and_scoped_contract_suite() {
 static void span_contract_suite() {
     {
         spsc::chunk<Blob, 8u> q;
-        q.push(Blob{1u, 1u});
-        q.push(Blob{2u, 2u});
+        QVERIFY(q.used_span().empty());
+        QCOMPARE(q.cap_span().size(), std::size_t{8u});
+
+        for (std::uint32_t value = 1u; value <= 8u; ++value) {
+            QVERIFY(q.try_push(Blob{value, value}));
+        }
+        QVERIFY(q.full());
+
         auto used = q.used_span();
-        auto cap  = q.cap_span();
-        QCOMPARE(used.size(), std::size_t{2u});
+        auto cap = q.cap_span();
+        QCOMPARE(used.size(), std::size_t{8u});
         QCOMPARE(cap.size(), std::size_t{8u});
         QCOMPARE(used[0].seq, 1u);
         QCOMPARE(used[1].seq, 2u);
+        QCOMPARE(reinterpret_cast<std::uintptr_t>(cap.data()) % alignof(Blob),
+                 std::uintptr_t{0u});
+
+        const auto& cq = q;
+        const auto const_used = cq.used_span();
+        const auto const_cap = cq.cap_span();
+        QCOMPARE(const_used.size(), used.size());
+        QCOMPARE(const_cap.size(), cap.size());
+        QCOMPARE(const_used.data(), used.data());
+        QCOMPARE(const_cap.data(), cap.data());
+
+        q.clear();
+        QVERIFY(q.empty());
+        QVERIFY(q.used_span().empty());
+        QCOMPARE(q.cap_span().size(), std::size_t{8u});
     }
     {
         spsc::chunk<Blob, 0u> q;
         QVERIFY(q.reserve(12u));
-        q.push(Blob{3u, 3u});
+        QVERIFY(q.used_span().empty());
+
+        const reg cap_size = q.capacity();
+        for (reg value = 0u; value < cap_size; ++value) {
+            QVERIFY(q.try_push(Blob{static_cast<std::uint32_t>(value + 3u),
+                                    static_cast<std::uint32_t>(value + 3u)}));
+        }
+        QVERIFY(q.full());
+
         auto used = q.used_span();
-        auto cap  = q.cap_span();
-        QCOMPARE(used.size(), std::size_t{1u});
+        auto cap = q.cap_span();
+        QCOMPARE(used.size(), static_cast<std::size_t>(cap_size));
         QVERIFY(cap.size() >= std::size_t{12u});
         QCOMPARE(used[0].seq, 3u);
+
+        const auto& cq = q;
+        QCOMPARE(cq.used_span().size(), used.size());
+        QCOMPARE(cq.cap_span().size(), cap.size());
+
+        q.clear();
+        QVERIFY(q.used_span().empty());
+        QCOMPARE(q.cap_span().size(), cap.size());
+    }
+    {
+        spsc::chunk<Blob, 0u, spsc::alloc::align_alloc<64u>> q;
+        QVERIFY(q.reserve(12u));
+        auto cap = q.cap_span();
+        QVERIFY(!cap.empty());
+        QCOMPARE(reinterpret_cast<std::uintptr_t>(cap.data()) % std::uintptr_t{64u},
+                 std::uintptr_t{0u});
     }
 }
 #endif

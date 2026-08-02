@@ -1,8 +1,19 @@
 QT += core testlib
-CONFIG += console c++17
+CONFIG += console
+
+isEmpty(SPSC_TEST_CXX_STANDARD) {
+    CONFIG += c++17
+} else {
+    CONFIG += $$SPSC_TEST_CXX_STANDARD
+}
+
 TEMPLATE = app
 DEFINES += SPSC_TESTS_WITH_QT=1
-DEFINES += SPSC_HAS_SPAN=0
+isEmpty(SPSC_TEST_SPAN_ENABLED) {
+    DEFINES += SPSC_HAS_SPAN=0
+} else {
+    DEFINES += SPSC_HAS_SPAN=$$SPSC_TEST_SPAN_ENABLED
+}
 DEFINES += SPSC_TEST_ACTUAL_TARGET_NAME=\\\"$${TARGET}\\\"
 
 CONFIG(debug, debug|release) {

@@ -4141,6 +4141,102 @@ static void extended_policy_threaded_atomic_like_suite() {
     run_threaded_bulk_regions_suite<spsc::policy::CAA<>>("threaded_fifo_bulk_cached_atomic_atomic");
 }
 
+static void custom_atomic_order_policy_suite() {
+    ::spsc::test::for_each_custom_atomic_order_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
+        run_static_suite<Policy>();
+        run_dynamic_suite<Policy>();
+    });
+
+    using AcquireRelease = ::spsc::test::explicit_acquire_release_orders;
+    using SeqCst = ::spsc::test::explicit_seq_cst_orders;
+
+    // Exercise both the single-writer atomic path and its cache-aligned form
+    // concurrently with each valid custom publication palette.
+    run_threaded_suite<spsc::policy::FA<AcquireRelease>>();
+    run_threaded_suite<spsc::policy::CFA<AcquireRelease>>();
+    run_threaded_suite<spsc::policy::FA<SeqCst>>();
+    run_threaded_suite<spsc::policy::CFA<SeqCst>>();
+}
+
+#if SPSC_HAS_SPAN
+template <class Q>
+static void verify_fifo_span_contract(Q& q) {
+    using value_type = typename Q::value_type;
+
+    QVERIFY(q.is_valid());
+    QVERIFY(q.empty());
+
+    auto storage = q.span();
+    QCOMPARE(static_cast<reg>(storage.size()), q.capacity());
+    QCOMPARE(storage.data(), q.data());
+
+    const Q& cq = q;
+    auto const_storage = cq.span();
+    QCOMPARE(static_cast<reg>(const_storage.size()), q.capacity());
+    QCOMPARE(const_storage.data(), cq.data());
+
+    const auto storage_alignment = static_cast<std::uintptr_t>(
+        ::spsc::alloc::policy_storage_alignment_v<typename Q::policy_type, value_type>);
+    QVERIFY(storage_alignment != 0u);
+    QCOMPARE(reinterpret_cast<std::uintptr_t>(storage.data()) % storage_alignment,
+             std::uintptr_t{0u});
+
+    const reg cap = q.capacity();
+    QCOMPARE(cap, reg{8u});
+    for (reg value = 0u; value < cap; ++value) {
+        QVERIFY(q.try_push(static_cast<value_type>(value)));
+    }
+    QVERIFY(q.full());
+    QCOMPARE(static_cast<reg>(q.span().size()), cap);
+
+    for (reg value = 0u; value < 4u; ++value) {
+        QCOMPARE(q.front(), static_cast<value_type>(value));
+        q.pop();
+    }
+    for (reg value = cap; value < cap + 4u; ++value) {
+        QVERIFY(q.try_push(static_cast<value_type>(value)));
+    }
+
+    // span() is the physical capacity storage, not a logical FIFO view. After
+    // a wrap its first half has the newly written elements and the second half
+    // still contains the older logical front.
+    storage = q.span();
+    for (reg i = 0u; i < 4u; ++i) {
+        QCOMPARE(storage[static_cast<std::size_t>(i)], static_cast<value_type>(cap + i));
+        QCOMPARE(storage[static_cast<std::size_t>(i + 4u)], static_cast<value_type>(i + 4u));
+    }
+
+    for (reg value = 4u; value < cap + 4u; ++value) {
+        QCOMPARE(q.front(), static_cast<value_type>(value));
+        q.pop();
+    }
+    QVERIFY(q.empty());
+    QCOMPARE(static_cast<reg>(q.span().size()), cap);
+}
+
+static void fifo_span_contract_suite() {
+    {
+        spsc::fifo<std::uint32_t, 8u, spsc::policy::P> q;
+        verify_fifo_span_contract(q);
+    }
+    {
+        spsc::fifo<std::uint32_t, 0u, spsc::policy::P> q;
+        QVERIFY(q.resize(8u));
+        verify_fifo_span_contract(q);
+    }
+    {
+        spsc::fifo<std::uint32_t, 8u, spsc::policy::CA<>> q;
+        verify_fifo_span_contract(q);
+    }
+    {
+        spsc::fifo<std::uint32_t, 0u, spsc::policy::CA<>> q;
+        QVERIFY(q.resize(8u));
+        verify_fifo_span_contract(q);
+    }
+}
+#endif // SPSC_HAS_SPAN
+
 static void death_tests_debug_only_suite() {
 #if !defined(NDEBUG)
     QString blockedReason;
@@ -4226,6 +4322,11 @@ private slots:
         observer_queries_do_not_touch_shadow_cache_suite();
     }
     void counter_wrap_and_invariants() { counter_wrap_and_invariant_suite(); }
+    void custom_atomic_order_policies() { custom_atomic_order_policy_suite(); }
+
+#if SPSC_HAS_SPAN
+    void span_contract() { fifo_span_contract_suite(); }
+#endif
 
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }

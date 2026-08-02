@@ -80,7 +80,7 @@ reproducible benchmark/CI matrix.
 | H3 | Role-safe public introspection | H0, H2 | complete (2026-08-02) |
 | H4 | Container, policy, and concurrency documentation | H1-H3 | pending |
 | H5 | Counter-wrap and invariant tests | H2, H3 | pending |
-| H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | pending |
+| H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | complete (2026-08-02) |
 | H7 | Clean builds, CI, and sanitizers | H5, H6 | pending |
 | H8 | Fused single-item hot path | H0, H3, H5-H7 | pending |
 | H9 | Shadow-aware bulk snapshot path | H8 | pending |
@@ -528,6 +528,8 @@ object layout.
 
 ## H6 - Policy, 32-bit, And C++20 Matrix
 
+Status: complete
+
 ### Goal
 
 Cover the configurations currently inferred rather than executed.
@@ -555,6 +557,34 @@ Cover the configurations currently inferred rather than executed.
 ### Risk And Rollback
 
 Medium. Keep expected-failure targets isolated from the normal successful build.
+
+### Verification Record
+
+- Added direct `VV` execution to the extended non-threaded policy pack. Its
+  smoke test passed for `buffer_pool`, `fifo`, `fifo_view`, `pool`,
+  `pool_view`, `latest`, `queue`, and `typed_pool` in the Debug
+  `shadow_on` runner.
+- Added named acquire/release and `seq_cst` custom-order palettes. Static and
+  dynamic `fifo` coverage passed for all eight resulting atomic policies, with
+  threaded coverage for the `FA` and `CFA` variants, in each Debug
+  `shadow_off`, `shadow_on`, and `shadow_heur` runner. The three C++17
+  runners were rebuilt from the changed sources first.
+- `scripts/test_relaxed_publication_compile_fail.ps1` passed with the local
+  UCRT64 GCC: it succeeds only when the intended
+  `AtomicCounter: SPSC payload publication requires acquire/seq_cst loads`
+  static assertion rejects the relaxed-order policy.
+- `scripts/run_h6_32bit_shadow_matrix.ps1` passed from the Visual Studio x86
+  developer environment with `cl` for both
+  `SPSC_SHADOW_ALLOW_32BIT=0` and `=1`. Its source asserts `sizeof(reg) == 4`
+  and verifies that the shadow gate follows the selected value before running
+  FIFO wrap/order checks.
+- Added a separate C++20 qmake runner that sets `SPSC_HAS_SPAN=1`. Its Debug
+  and Release builds passed the `fifo::span`, `pool::span`,
+  `queue::raw_bytes`, and `chunk::{used_span,cap_span}` contract cases,
+  including the applicable const/non-const, empty/full, wrapped-storage, and
+  alignment checks. The ordinary C++17 runners continue to set
+  `SPSC_HAS_SPAN=0` by default.
+- `git diff --check` passed for the completed H6 change set.
 
 ## H7 - Clean Builds, CI, And Sanitizers
 
