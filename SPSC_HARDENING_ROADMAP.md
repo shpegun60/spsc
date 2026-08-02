@@ -475,6 +475,8 @@ Low code risk. Documentation must land with the behavior it describes.
 
 ## H5 - Counter-Wrap And Invariant Tests
 
+Status: complete
+
 ### Goal
 
 Exercise monotonic counter overflow rather than only physical ring wrapping.
@@ -502,6 +504,27 @@ Exercise monotonic counter overflow rather than only physical ring wrapping.
 
 Medium. Test access must not expand the production API or alter production
 object layout.
+
+### Verification Record
+
+- Added a test-only derived `SPSCbase` subject; it exposes protected state only
+  to tests, without a production test macro, raw-index API, or layout change.
+- Started static and dynamic-capacity `P` and `CFA<>` subjects at
+  `SIZE_MAX - 3`, then crossed both `head` and `tail` through `max -> 0`.
+  The checks cover logical occupancy, full/empty, `can_read/can_write`,
+  physical indices and contiguous regions, plus producer/consumer shadow-cache
+  refresh whenever shadows are enabled.
+- Added real static and dynamic `fifo_view::adopt()` coverage across the same
+  boundary. It verifies exact FIFO delivery through physical ring reuse and
+  rejects a restored state whose logical distance is `capacity + 1`.
+- Atomic direct observation queries fail closed on a stable impossible raw
+  state; normal `init`/`adopt` rejects that state and returns to a valid empty
+  state. Cached endpoint observations are deliberately not asserted after an
+  artificially injected state because their lazy snapshots may legitimately be
+  stale.
+- Built Debug and Release test runners for `shadow_off`, `shadow_on`, and
+  `shadow_heur`; the complete `fifo` and `fifo_view` suites passed in all six
+  configurations. `git diff --check` also passed.
 
 ## H6 - Policy, 32-bit, And C++20 Matrix
 

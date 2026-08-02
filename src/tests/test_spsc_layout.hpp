@@ -2,7 +2,7 @@
 #define SPSC_TEST_SPSC_LAYOUT_HPP
 
 /*
- * Friend-only layout probe for SPSCbase H2 tests.
+ * Friend-only layout probe for SPSCbase H2/H5 tests.
  *
  * This header is test-only. Production SPSCbase exposes no state or layout API;
  * it names the probe as a friend without changing its class definition by macro.
@@ -113,6 +113,66 @@ public:
         Base::set_head(head);
         Base::set_tail(tail);
     }
+};
+
+/* Test-only public surface for H5 counter-wrap checks. It reaches protected
+ * SPSCbase operations through derivation, so production headers gain neither a
+ * test switch nor a public raw-index API.
+ */
+template<reg C, class PolicyT>
+class counter_wrap_subject final : public ::spsc::SPSCbase<C, PolicyT> {
+    using Base = ::spsc::SPSCbase<C, PolicyT>;
+
+public:
+    counter_wrap_subject() noexcept = default;
+
+    template<reg C_ = C, std::enable_if_t<C_ == 0u, int> = 0>
+    explicit counter_wrap_subject(const reg capacity) noexcept
+        : Base(capacity) {}
+
+    using Base::can_read;
+    using Base::can_write;
+    using Base::empty;
+    using Base::free;
+    using Base::full;
+    using Base::read_size;
+    using Base::size;
+    using Base::write_size;
+
+    [[nodiscard]] bool restore_indices_for_test(const reg head,
+                                                const reg tail) noexcept {
+        if constexpr (C == 0u) {
+            return Base::init(Base::capacity(), head, tail);
+        } else {
+            return Base::init(head, tail);
+        }
+    }
+
+    void set_indices_unchecked_for_test(const reg head, const reg tail) noexcept {
+        Base::set_head(head);
+        Base::set_tail(tail);
+    }
+
+    [[nodiscard]] reg head_for_test() const noexcept { return Base::head(); }
+    [[nodiscard]] reg tail_for_test() const noexcept { return Base::tail(); }
+    [[nodiscard]] reg write_index_for_test() const noexcept { return Base::write_index(); }
+    [[nodiscard]] reg read_index_for_test() const noexcept { return Base::read_index(); }
+
+    [[nodiscard]] bool producer_full_cached_for_test() const noexcept {
+        return Base::producer_full_cached();
+    }
+    [[nodiscard]] bool consumer_empty_cached_for_test() const noexcept {
+        return Base::consumer_empty_cached();
+    }
+    [[nodiscard]] reg producer_write_size_cached_for_test() const noexcept {
+        return Base::producer_write_size_cached();
+    }
+    [[nodiscard]] reg consumer_read_size_cached_for_test() const noexcept {
+        return Base::consumer_read_size_cached();
+    }
+
+    void increment_head_for_test() noexcept { Base::increment_head(); }
+    void increment_tail_for_test() noexcept { Base::increment_tail(); }
 };
 
 inline constexpr reg kSubcachelineAtomicAlignment =

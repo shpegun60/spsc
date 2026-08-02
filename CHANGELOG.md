@@ -13,6 +13,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   `rigtorp/SPSCQueue` v1.1 comparator.
 - Three-thread atomic observer regression coverage: producer, consumer, and a
   simultaneous public-query observer.
+- Counter-wrap regressions that cross the actual unsigned index boundary in
+  short runs, cover static/dynamic `fifo_view::adopt()`, shadow-cache refresh,
+  and fail-closed handling of invalid restored state.
 
 ### Changed
 

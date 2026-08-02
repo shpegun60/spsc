@@ -799,6 +799,149 @@ static void observer_queries_do_not_touch_shadow_cache_suite() {
         spsc::test_layout::over_aligned_atomic_policy>();
 }
 
+template<reg C, class Policy>
+static void verify_counter_wrap_base_subject(
+    spsc::test_layout::counter_wrap_subject<C, Policy>& q) {
+    using Probe = spsc::detail::spscbase_layout_probe<C, Policy>;
+
+    const reg cap = q.capacity();
+    QCOMPARE(cap, reg{8u});
+
+    const reg before_wrap = static_cast<reg>(std::numeric_limits<reg>::max() - 3u);
+    QVERIFY(q.restore_indices_for_test(before_wrap, before_wrap));
+    QCOMPARE(q.head_for_test(), before_wrap);
+    QCOMPARE(q.tail_for_test(), before_wrap);
+    QCOMPARE(q.size(), reg{0u});
+    QCOMPARE(q.free(), cap);
+    QVERIFY(q.empty());
+    QVERIFY(!q.full());
+    QCOMPARE(q.write_index_for_test(), reg{4u});
+    QCOMPARE(q.read_index_for_test(), reg{4u});
+    QCOMPARE(q.write_size(), reg{4u});
+    QCOMPARE(q.read_size(), reg{0u});
+    QCOMPARE(q.producer_write_size_cached_for_test(), reg{4u});
+    QVERIFY(q.consumer_empty_cached_for_test());
+
+    for (reg i = 0u; i < 4u; ++i) {
+        q.increment_head_for_test();
+    }
+
+    // The logical head crossed max -> 0 while its physical index remains valid.
+    QCOMPARE(q.head_for_test(), reg{0u});
+    QCOMPARE(q.size(), reg{4u});
+    QCOMPARE(q.free(), reg{4u});
+    QVERIFY(q.can_read(reg{4u}));
+    QVERIFY(!q.can_read(reg{5u}));
+    QVERIFY(q.can_write(reg{4u}));
+    QVERIFY(!q.can_write(reg{5u}));
+    QCOMPARE(q.write_index_for_test(), reg{0u});
+    QCOMPARE(q.read_index_for_test(), reg{4u});
+    QCOMPARE(q.write_size(), reg{4u});
+    QCOMPARE(q.read_size(), reg{4u});
+    QVERIFY(!q.consumer_empty_cached_for_test());
+
+    if constexpr (Probe::kUseShadow) {
+        QCOMPARE(Probe::consumer_shadow_value(q), reg{0u});
+    }
+
+    for (reg i = 0u; i < 4u; ++i) {
+        q.increment_head_for_test();
+    }
+
+    QCOMPARE(q.head_for_test(), reg{4u});
+    QCOMPARE(q.size(), cap);
+    QCOMPARE(q.free(), reg{0u});
+    QVERIFY(q.full());
+    QVERIFY(q.producer_full_cached_for_test());
+    QCOMPARE(q.write_size(), reg{0u});
+    QCOMPARE(q.read_size(), reg{4u});
+
+    q.increment_tail_for_test();
+    QCOMPARE(q.tail_for_test(), static_cast<reg>(before_wrap + 1u));
+    QVERIFY(!q.producer_full_cached_for_test());
+
+    if constexpr (Probe::kUseShadow) {
+        QCOMPARE(Probe::producer_shadow_value(q), q.tail_for_test());
+    }
+
+    for (reg i = 0u; i < 3u; ++i) {
+        q.increment_tail_for_test();
+    }
+
+    // The logical tail crossed max -> 0 too; both endpoint caches still
+    // describe the same bounded queue.
+    QCOMPARE(q.tail_for_test(), reg{0u});
+    QCOMPARE(q.size(), reg{4u});
+    QCOMPARE(q.write_index_for_test(), reg{4u});
+    QCOMPARE(q.read_index_for_test(), reg{0u});
+    QCOMPARE(q.write_size(), reg{4u});
+    QCOMPARE(q.read_size(), reg{4u});
+    QVERIFY(!q.consumer_empty_cached_for_test());
+
+    if constexpr (Probe::kUseShadow) {
+        QCOMPARE(Probe::consumer_shadow_value(q), q.head_for_test());
+    }
+
+    for (reg i = 0u; i < 4u; ++i) {
+        q.increment_tail_for_test();
+    }
+
+    QCOMPARE(q.head_for_test(), reg{4u});
+    QCOMPARE(q.tail_for_test(), reg{4u});
+    QVERIFY(q.empty());
+    QCOMPARE(q.size(), reg{0u});
+    QCOMPARE(q.free(), cap);
+    QVERIFY(q.consumer_empty_cached_for_test());
+
+    const reg corrupt_tail = before_wrap;
+    const reg corrupt_head = static_cast<reg>(corrupt_tail + cap + 1u);
+    q.set_indices_unchecked_for_test(corrupt_head, corrupt_tail);
+
+    if constexpr (::spsc::detail::is_atomic_counter_backend_v<Policy>) {
+        // Atomic public observations fail closed on a stable impossible state.
+        QCOMPARE(q.size(), reg{0u});
+        QCOMPARE(q.free(), reg{0u});
+        QVERIFY(q.empty());
+        QVERIFY(q.full());
+        QVERIFY(!q.can_read(reg{1u}));
+        QVERIFY(!q.can_write(reg{1u}));
+        QCOMPARE(q.read_size(), reg{0u});
+        QCOMPARE(q.write_size(), reg{0u});
+    }
+
+    // Restore/adopt validation rejects the same impossible state and resets
+    // both endpoint caches through the normal non-concurrent path.
+    QVERIFY(!q.restore_indices_for_test(corrupt_head, corrupt_tail));
+    QCOMPARE(q.head_for_test(), reg{0u});
+    QCOMPARE(q.tail_for_test(), reg{0u});
+    QVERIFY(q.empty());
+    QVERIFY(!q.full());
+    QCOMPARE(q.size(), reg{0u});
+    QCOMPARE(q.free(), cap);
+    QVERIFY(q.consumer_empty_cached_for_test());
+    QVERIFY(!q.producer_full_cached_for_test());
+}
+
+template<reg C, class Policy>
+static void verify_counter_wrap_base() {
+    using Subject = spsc::test_layout::counter_wrap_subject<C, Policy>;
+
+    if constexpr (C == 0u) {
+        Subject q{8u};
+        verify_counter_wrap_base_subject<C, Policy>(q);
+    } else {
+        Subject q{};
+        verify_counter_wrap_base_subject<C, Policy>(q);
+    }
+}
+
+static void counter_wrap_and_invariant_suite() {
+    verify_counter_wrap_base<8u, spsc::policy::P>();
+    verify_counter_wrap_base<0u, spsc::policy::P>();
+    verify_counter_wrap_base<8u, spsc::policy::CFA<>>();
+    verify_counter_wrap_base<0u, spsc::policy::CFA<>>();
+}
+
 
 template <class Q>
 static void test_constructors_and_assignment() {
@@ -4082,6 +4225,7 @@ private slots:
     void observer_queries_do_not_touch_shadow_cache() {
         observer_queries_do_not_touch_shadow_cache_suite();
     }
+    void counter_wrap_and_invariants() { counter_wrap_and_invariant_suite(); }
 
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
