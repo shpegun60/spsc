@@ -119,8 +119,9 @@ for config in "${configurations[@]}"; do
         "$qmake" -o Makefile "$project_file" \
             "CONFIG+=$config" "CONFIG-=$other_config" \
             "QMAKE_CXX=$compiler" "QMAKE_LINK=$compiler"
-        # Qt 6.4 does not always order source-MOC generation before parallel
-        # compilation on a pristine out-of-source tree.
+        # The early MOC anchor in fifo_view_test.cpp makes Qt 6.4 qmake
+        # discover that large source; materialize source-MOC output before
+        # its consumers start compiling in a pristine tree.
         "$make_tool" -f Makefile mocables
         "$make_tool" -f Makefile -j"$jobs"
         popd >/dev/null

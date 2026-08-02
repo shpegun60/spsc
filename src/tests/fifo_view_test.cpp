@@ -36,6 +36,17 @@
 
 #include "fifo_view.hpp"
 
+namespace spsc_fifo_view_moc_detail {
+
+// Qt 6.4 qmake's MOC scanner can miss the actual Q_OBJECT later in this
+// intentionally large translation unit. This early anchor makes qmake invoke
+// moc for the file; moc then emits metadata for the real test class below.
+class fifo_view_test_moc_anchor final : public QObject {
+    Q_OBJECT
+};
+
+} // namespace spsc_fifo_view_moc_detail
+
 // This test intentionally instantiates/uses the entire public API surface of
 // fifo_view.hpp (static + dynamic variants) and stresses edge cases.
 // If it fails, it's your code. Not Qt.
