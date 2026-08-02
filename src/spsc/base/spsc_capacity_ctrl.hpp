@@ -45,7 +45,8 @@
  * Detect availability of <bit> and int_pow2 facility (C++20).
  * Falls back to custom helpers when not available.
  */
-#if defined(__has_include)
+#if ((defined(_MSVC_LANG) && (_MSVC_LANG >= 202002L)) || \
+     (!defined(_MSVC_LANG) && (__cplusplus >= 202002L))) && defined(__has_include)
 #  if __has_include(<bit>)
 #    include <bit>
 #    define SPSC_HAS_BIT_HEADER 1
@@ -81,15 +82,27 @@ static RB_FORCEINLINE constexpr bool rb_is_pow2(const reg x) noexcept {
     return x && ((x & (x - 1u)) == 0u);
 }
 
+/* Propagate a bit into all lower positions only when the value type is wide
+ * enough. Keep the shifted operand template-dependent: MSVC and GCC otherwise
+ * diagnose v >> 64 for a 64-bit reg even in a discarded if constexpr branch.
+ */
+template <unsigned Shift, class T>
+static RB_FORCEINLINE constexpr T rb_or_shift_if_wide(T v) noexcept {
+    if constexpr (std::numeric_limits<T>::digits > Shift) {
+        return static_cast<T>(v | (v >> Shift));
+    }
+    return v;
+}
+
 /* Propagate highest set bit to all lower bits (unrolled, width-aware). */
 static RB_FORCEINLINE constexpr reg rb_fold_ones(reg v) noexcept {
-    if constexpr (RB_REG_BITS > 1)  v |= (v >> 1);
-    if constexpr (RB_REG_BITS > 2)  v |= (v >> 2);
-    if constexpr (RB_REG_BITS > 4)  v |= (v >> 4);
-    if constexpr (RB_REG_BITS > 8)  v |= (v >> 8);
-    if constexpr (RB_REG_BITS > 16) v |= (v >> 16);
-    if constexpr (RB_REG_BITS > 32) v |= (v >> 32);   // 64+ bit regs
-    if constexpr (RB_REG_BITS > 64) v |= (v >> 64);   // 128-bit exotics
+    v = rb_or_shift_if_wide<1>(v);
+    v = rb_or_shift_if_wide<2>(v);
+    v = rb_or_shift_if_wide<4>(v);
+    v = rb_or_shift_if_wide<8>(v);
+    v = rb_or_shift_if_wide<16>(v);
+    v = rb_or_shift_if_wide<32>(v); // 64+ bit regs
+    v = rb_or_shift_if_wide<64>(v); // 128-bit exotics
     return v;
 }
 

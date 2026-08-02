@@ -184,6 +184,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test_relaxed_publi
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_h6_32bit_shadow_matrix.ps1 -Compiler cl
 ```
 
+## Clean Verification And CI
+
+H7 runs each qmake target from a fresh, uniquely named temporary build
+directory. It never reads or removes the repository's `build/`, `bin/`, MOC,
+or object artifacts; use `-KeepBuild` only when a failed generated tree needs
+to be inspected.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_h7_matrix.ps1 `
+  -Configuration Both -Variant all -BuildLauncher
+```
+
+On Linux, the same functional matrix and the standalone sanitizer target are:
+
+```bash
+bash scripts/run_h7_matrix.sh --qmake qmake6 --configuration both --variant all
+bash scripts/run_h7_sanitizers.sh --sanitizer address,undefined
+bash scripts/run_h7_sanitizers.sh --sanitizer thread
+bash scripts/run_h6_32bit_shadow_matrix.sh --compiler g++
+```
+
+`run_h7_matrix.ps1` accepts `-Qmake`, `-Make`, and `-Compiler` paths when the
+Qt kit is not already configured on `PATH`. The GitHub Actions workflow runs
+the explicit C++17 shadow Debug/Release matrix, C++20 span Debug/Release
+targets, Linux sanitizers, genuine 32-bit execution, AArch64 header smoke, and
+Windows MinGW/MSVC header smoke.
+
 The dashboard:
 
 - runs each suite in a separate child process

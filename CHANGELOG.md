@@ -21,6 +21,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   relaxed publication, and genuine 32-bit shadow gating.
 - A separate C++20 `SPSC_HAS_SPAN=1` qmake runner with runtime contracts for
   `fifo::span`, `pool::span`, `queue::raw_bytes`, and chunk span views.
+- A clean-build verification path: isolated qmake matrix runners, standalone
+  public-header and atomic-observer sanitizer targets, and GitHub Actions jobs
+  for Linux GCC/Clang, sanitizers, genuine 32-bit execution, ARM smoke, and
+  Windows MinGW/MSVC header smoke.
 
 ### Changed
 
@@ -38,6 +42,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - qmake test runners can now select their language standard and span setting;
   the dashboard remains on its existing C++17 matrix while C++20 span coverage
   is an explicit target.
+- qmake-generated MOC, object, RCC, and UI paths are relative to each build
+  directory, so a fresh out-of-source build cannot mistake an absolute MOC
+  dependency for an already generated file.
 - The default SPSC policy remains plain (`SPSC_DEFAULT_POLICY_ATOMIC=0`), while lock-free atomics remain required by default (`SPSC_REQUIRE_LOCK_FREE=1`).
 
 ### Fixed

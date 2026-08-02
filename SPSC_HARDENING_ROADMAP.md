@@ -78,10 +78,10 @@ reproducible benchmark/CI matrix.
 | H0 | Reproducible baseline and benchmark harness | none | complete (2026-08-02) |
 | H2 | Atomic shadow storage and owner-line layout | H0 | complete (2026-08-02) |
 | H3 | Role-safe public introspection | H0, H2 | complete (2026-08-02) |
-| H4 | Container, policy, and concurrency documentation | H1-H3 | pending |
-| H5 | Counter-wrap and invariant tests | H2, H3 | pending |
+| H4 | Container, policy, and concurrency documentation | H1-H3 | complete (2026-08-02) |
+| H5 | Counter-wrap and invariant tests | H2, H3 | complete (2026-08-02) |
 | H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | complete (2026-08-02) |
-| H7 | Clean builds, CI, and sanitizers | H5, H6 | pending |
+| H7 | Clean builds, CI, and sanitizers | H5, H6 | in progress (2026-08-02) |
 | H8 | Fused single-item hot path | H0, H3, H5-H7 | pending |
 | H9 | Shadow-aware bulk snapshot path | H8 | pending |
 | H10 | Alias and release decision | H8, H9 | pending |
@@ -588,6 +588,8 @@ Medium. Keep expected-failure targets isolated from the normal successful build.
 
 ## H7 - Clean Builds, CI, And Sanitizers
 
+Status: in progress
+
 ### Goal
 
 Make clean, cross-toolchain verification routine and prevent stale generated
@@ -615,6 +617,26 @@ artifacts from affecting results.
 
 Medium infrastructure risk. Keep toolchain-specific exclusions documented and
 do not silently treat a skipped sanitizer or runtime job as a pass.
+
+### Local Verification (CI Pending)
+
+- A fresh temporary qmake build passed for C++17 Debug `shadow_on` and Release
+  `shadow_heur`, each running the `fifo` suite. A separate fresh C++20 span
+  Debug runner passed `fifo`, and the clean dashboard launcher built from the
+  same isolated tree. This exposed and fixed a real qmake MOC dependency bug:
+  absolute generated paths could cause a fresh source-MOC dependency to be
+  skipped.
+- Strict standalone public-header smoke passed locally with GCC in C++17 and
+  C++20 (`SPSC_HAS_SPAN=1`) and with MSVC in C++17/C++20 under `/W4 /WX`.
+  The MSVC check also exposed and fixed a width-discarded shift warning in the
+  capacity helper; the shift is now template-dependent and only instantiated
+  when valid for `reg`.
+- The standalone producer/consumer/observer stress passed locally, and the
+  existing genuine MSVC x86 shadow-gate execution passed again for
+  `SPSC_SHADOW_ALLOW_32BIT=0` and `=1`.
+- The workflow has not run yet because this H7 change set is not pushed;
+  status remains in progress until its Linux functional/sanitizer, ARM, and
+  Windows jobs report their results.
 
 ## H8 - Fused Single-Item Hot Path
 

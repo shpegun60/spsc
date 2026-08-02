@@ -1,0 +1,181 @@
+name: SPSC verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spsc-verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-functional:
+    name: Linux ${{ matrix.compiler }} ${{ matrix.configuration }} ${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: g++
+            configuration: debug
+            variant: shadow_off
+          - compiler: g++
+            configuration: debug
+            variant: shadow_on
+          - compiler: g++
+            configuration: debug
+            variant: shadow_heur
+          - compiler: g++
+            configuration: release
+            variant: shadow_off
+          - compiler: g++
+            configuration: release
+            variant: shadow_on
+          - compiler: g++
+            configuration: release
+            variant: shadow_heur
+          - compiler: g++
+            configuration: debug
+            variant: cxx20_span
+          - compiler: g++
+            configuration: release
+            variant: cxx20_span
+          - compiler: clang++
+            configuration: debug
+            variant: shadow_on
+          - compiler: clang++
+            configuration: release
+            variant: cxx20_span
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt and compiler dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential clang qt6-base-dev qt6-base-dev-tools
+      - name: Build and run clean matrix target
+        run: |
+          bash scripts/run_h7_matrix.sh \
+            --qmake qmake6 \
+            --compiler '${{ matrix.compiler }}' \
+            --configuration '${{ matrix.configuration }}' \
+            --variant '${{ matrix.variant }}' \
+            --suite all \
+            --jobs 2
+
+  linux-sanitizers:
+    name: Linux clang++ ${{ matrix.sanitizer }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ['address,undefined', thread]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang
+      - name: Run atomic observer sanitizer smoke
+        run: |
+          bash scripts/run_h7_sanitizers.sh \
+            --compiler clang++ \
+            --sanitizer '${{ matrix.sanitizer }}'
+
+  linux-clean-dashboard:
+    name: Linux clean qmake dashboard build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt and compiler dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential qt6-base-dev qt6-base-dev-tools
+      - name: Build dashboard and one runner from a clean directory
+        run: |
+          bash scripts/run_h7_matrix.sh \
+            --qmake qmake6 \
+            --compiler g++ \
+            --configuration debug \
+            --variant shadow_on \
+            --suite fifo \
+            --build-launcher \
+            --jobs 2
+
+  linux-32bit:
+    name: Linux genuine 32-bit shadow gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install 32-bit C++ runtime and headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y g++-multilib
+      - name: Build and run both 32-bit shadow-gate states
+        run: bash scripts/run_h6_32bit_shadow_matrix.sh --compiler g++
+
+  linux-arm-smoke:
+    name: Linux AArch64 header smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install AArch64 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y g++-aarch64-linux-gnu
+      - name: Compile C++17 and C++20 public-header smoke
+        run: |
+          aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
+          aarch64-linux-gnu-g++ -std=c++20 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_HAS_SPAN=1 -I. -Isrc/spsc -fsyntax-only \
+            tests/standalone/h7_header_smoke.cpp
+
+  windows-mingw-header-smoke:
+    name: Windows MinGW header smoke
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+      - name: Compile C++17 and C++20 public-header smoke
+        shell: msys2 {0}
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
+          g++ -std=c++20 -Wall -Wextra -Werror -pedantic -DSPSC_HAS_SPAN=1 \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
+
+  windows-msvc-header-smoke:
+    name: Windows MSVC header smoke
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile C++17 and C++20 public-header smoke
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
+          $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
+          $command = "call `"$vcvars`" && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++20 /W4 /WX /EHsc /DSPSC_HAS_SPAN=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp"
+          cmd.exe /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
