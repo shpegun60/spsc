@@ -2206,7 +2206,12 @@ static inline Blob make_seq_blob(reg seq) noexcept {
 
 static inline bool blob_matches_seq(const Blob& got, reg seq) noexcept {
     const Blob exp = make_seq_blob(seq);
-    return (std::memcmp(&got, &exp, sizeof(Blob)) == 0);
+    // Blob has tail padding on common 64-bit ABIs. Compare its semantic
+    // payload, not object-representation padding whose value is unspecified.
+    return got.seq == exp.seq &&
+           got.inv == exp.inv &&
+           got.salt == exp.salt &&
+           got.payload == exp.payload;
 }
 
 static inline void backoff_step(std::uint32_t& spins) noexcept {
