@@ -1555,7 +1555,10 @@ private:
     }
 
 private:
-    alignas(::spsc::alloc::policy_storage_alignment_v<policy_type, value_type>)
+    // storage_type is a pointer for a dynamic fifo. Its natural alignment can
+    // exceed value_type's (for example, uint32_t on 64-bit targets), so the
+    // policy alignment must describe the member being aligned, not its value.
+    alignas(::spsc::alloc::policy_storage_alignment_v<policy_type, storage_type>)
         storage_type storage_{};
 };
 

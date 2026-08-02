@@ -2539,9 +2539,11 @@ static void threaded_observer_stress_fifo(Q& q,
 
     std::thread observer([&] {
         await_start();
-        while (!abort.load(std::memory_order_relaxed) &&
-               !(prod_done.load(std::memory_order_relaxed) &&
-                 cons_done.load(std::memory_order_relaxed))) {
+        // On a lightly loaded CI runner both endpoint threads may finish
+        // before the observer receives its first timeslice. Take one
+        // non-mutating sample unconditionally, then continue while either
+        // endpoint is active.
+        do {
             const reg cap = q.capacity();
             const reg size = q.size();
             const reg free = q.free();
@@ -2558,7 +2560,9 @@ static void threaded_observer_stress_fifo(Q& q,
                 break;
             }
             observations.fetch_add(1u, std::memory_order_relaxed);
-        }
+        } while (!abort.load(std::memory_order_relaxed) &&
+                 !(prod_done.load(std::memory_order_relaxed) &&
+                   cons_done.load(std::memory_order_relaxed)));
 
         observer_done.store(true, std::memory_order_relaxed);
     });

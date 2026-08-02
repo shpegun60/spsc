@@ -14,6 +14,7 @@
 
 int main() {
     using queue_type = ::spsc::fifo<std::uint32_t, 8u, ::spsc::policy::CFA<>>;
+    using dynamic_queue_type = ::spsc::fifo<std::uint32_t>;
 
     queue_type queue;
     if (!queue.try_push(42u)) {
@@ -23,5 +24,15 @@ int main() {
     if (value == nullptr || *value != 42u) {
         return 2;
     }
-    return queue.try_pop() ? 0 : 3;
+    if (!queue.try_pop()) {
+        return 3;
+    }
+
+    // Also instantiate dynamic storage: its storage member is a pointer, so
+    // this catches a policy alignment that would weaken pointer alignment.
+    dynamic_queue_type dynamic_queue{8u};
+    if (!dynamic_queue.try_push(7u)) {
+        return 4;
+    }
+    return dynamic_queue.try_pop() ? 0 : 5;
 }
