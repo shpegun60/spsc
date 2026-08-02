@@ -22,18 +22,27 @@ reproducible benchmark/CI matrix.
    correctness failure. Exact offsets are compiler/ABI dependent; tests must
    verify cache-line separation properties on real objects instead of freezing
    one compiler's numeric offsets.
-2. Shadows are allowed only when the policy explicitly opts in and its counter
-   storage is structurally at least one configured cache line wide and aligned.
-   A missing opt-in on a custom policy means `false`.
-3. `CacheAligned<Base, CAlign, ...>` is not automatically shadow-safe:
-   user-supplied `CAlign` may be smaller than `SPSC_CACHELINE_BYTES`. The gate
-   must check `CAlign`, `alignof(counter_type)`, and `sizeof(counter_type)`.
+2. Shadow eligibility remains a property of the synchronization backend, not of
+   `CacheAligned`. When the global and counter-width gates allow it, every
+   atomic-backed policy uses lazy opposite-index shadows. Non-atomic `P`, `V`,
+   and `VV` families do not allocate or use shadows; their direct counter reads
+   are already the intended fast path. No per-policy shadow opt-in is added.
+3. Layout safety is the responsibility of `SPSCbase`. Replace the split
+   `rb_shadow_indices` base plus separately declared `_head`/`_tail` members
+   with one specialized index-storage object. Its shadow-enabled form places
+   producer-written metadata (`_head`, `prod_shadow_tail`) and consumer-written
+   metadata (`_tail`, `cons_shadow_head`) in separate cache-line-aligned owner
+   blocks whose sizes are multiples of `SPSC_CACHELINE_BYTES`. Same-owner fields
+   may share cache lines; writable metadata owned by opposite endpoints may not.
+   `CacheAligned<Base, CAlign, ...>` and its `CAlign` do not decide shadow
+   eligibility.
 4. The intended built-in result is:
 
    ```text
-   A<> / FA<> / AA<> shadows off
-   CA<> / CFA<>     shadows on
-   CAA<>            shadows on
+   P / V / VV / CP / CV / CVV      shadows off
+   A<> / FA<> / AA<>                shadows on
+   CA<> / CFA<> / CAA<>             shadows on
+   custom atomic-backed policy      shadows on
    ```
 
    The global shadow switch, counter-width gate, and 32-bit opt-in remain in
@@ -66,8 +75,8 @@ reproducible benchmark/CI matrix.
 | Slice | Deliverable | Depends on | Status |
 | --- | --- | --- | --- |
 | H1 | Unsafe bulk API consistency | none | complete (2026-08-02) |
-| H0 | Reproducible baseline and benchmark harness | none | pending |
-| H2 | Shadow eligibility and layout contract | H0 | pending |
+| H0 | Reproducible baseline and benchmark harness | none | complete (2026-08-02) |
+| H2 | Atomic shadow storage and owner-line layout | H0 | pending |
 | H3 | Role-safe public introspection | H0, H2 | pending |
 | H4 | Container, policy, and concurrency documentation | H1-H3 | pending |
 | H5 | Counter-wrap and invariant tests | H2, H3 | pending |
@@ -151,12 +160,18 @@ measured before/after result.
 - Measure `queue<T, ..., CFA<>>` against Rigtorp under equivalent object-lifetime
   work.
 - Measure `fifo<T, ..., CFA<>>` separately.
+- Record `sizeof`/`alignof` baselines for `A<>`, `FA<>`, `AA<>`, `CA<>`,
+  `CFA<>`, and `CAA<>`, plus like-for-like throughput samples for at least
+  `A<>`, `FA<>`, `CA<>`, and `CFA<>`. H2 changes their physical storage while
+  intentionally preserving shadow eligibility.
 - Record steady-state throughput plus boundary-heavy empty/full behavior.
 - Capture generated assembly for producer push/emplace and complete consumer
   `front + pop` paths. Bare `fifo::try_pop()` is not an end-to-end consumer
   comparison.
-- Record policy object sizes and observed metadata offsets for the supported
-  compilers without declaring those offsets portable ABI.
+- Record policy object sizes and alignments for the supported compilers without
+  declaring them portable ABI. H2's friend-only layout probe, rather than a
+  public API, will capture the private owner-line geometry and offsets after the
+  storage change.
 
 ### Acceptance Criteria
 
@@ -170,37 +185,86 @@ measured before/after result.
 
 Low. This slice adds measurement infrastructure and does not change the library.
 
-## H2 - Shadow Eligibility And Layout Contract
+### Verification Record
+
+- Added `benchmarks/spsc_bench.cpp`, the canonical Windows runner at
+  `scripts/run_spsc_baseline.ps1`, JSONL/manifest/assembly capture, and the
+  pinned `rigtorp/SPSCQueue` v1.1 gitlink
+  `565a5149d54930463d58cb0f69b978d439555e66`.
+- A full default capture on 2026-08-02 produced one metadata record, 60 raw
+  samples, and 12 summaries; all checksums and sequence checks passed and both
+  requested CPU affinities were applied for all samples. The captured manifest
+  intentionally marks the then-dirty worktree; `-RequireClean` is available
+  for a release-quality recapture after committing the exact source state.
+- On that capture (`i9-14900HX`, GCC 15.2, 2,000,000 transfers/sample,
+  five measured samples plus one warm-up, capacity 1024, CPUs `0,1`), the
+  like-for-like lifetime-managed queue comparison was:
+
+  | Workload | `spsc::queue<CFA>` | Rigtorp v1.1 | Rigtorp delta |
+  | --- | ---: | ---: | ---: |
+  | steady | 94.8 M transfers/s | 115.2 M transfers/s | +21.5% |
+  | forced empty/full boundary | 189.6 M transfers/s | 228.8 M transfers/s | +20.7% |
+
+  This is a machine-specific pre-H2 baseline, not a general library ranking.
+  Rigtorp's steady samples also varied more widely (79.8-128.9 M) than this
+  queue's samples (91.3-97.4 M); both comparison summaries verified all items.
+- GCC 15.2 C++17 strict smoke for the benchmark and hot-path probe passed with
+  `-Wall -Wextra -Werror -pedantic-errors`.
+- Existing SPSC regression executables passed: 27/27 Debug and 27/27 Release
+  suite-runs across `shadow_off`, `shadow_on`, and `shadow_heur`.
+
+## H2 - Atomic Shadow Storage And Owner-Line Layout
 
 ### Goal
 
-Enable lazy opposite-index shadows only when their metadata can be physically
-isolated from the owner counters.
+Keep lazy opposite-index shadows for every eligible atomic backend while making
+their physical layout safe by construction. Keep the non-atomic path compact
+and shadow-free.
 
 ### Scope
 
-- Add a detected policy property whose absence means `false`.
-- A `CacheAligned` policy may opt in only when its requested counter alignment
-  and resulting counter type are at least `SPSC_CACHELINE_BYTES` aligned and
-  sized.
-- Extend `rb_use_shadow_v` with the policy/layout safety property while keeping
-  the atomic-backend, global-enable, and counter-width gates.
-- Ensure the built-in results listed in the locked decisions.
-- Update `src/tests/test_build_config.hpp` so each qmake variant checks the new
-  eligibility truth table instead of expecting every atomic policy to cache.
+- Preserve the current `rb_use_shadow_v` eligibility rule: global enable,
+  atomic counter backend, and counter-width/32-bit opt-in gates only.
+- Replace the split shadow base and naked `_head`/`_tail` members with one
+  direct, specialized index-storage member.
+- Keep the shadow-disabled specialization compact: it contains only `_head`
+  and `_tail`, without shadow fields or shadow-induced cache-line padding.
+- In the shadow-enabled specialization, group producer-owned `_head` plus
+  `prod_shadow_tail` in one owner block and consumer-owned `_tail` plus
+  `cons_shadow_head` in another owner block.
+- Give each owner block an effective alignment of at least
+  `max(SPSC_CACHELINE_BYTES, alignof(counter_type), alignof(reg))` and make its
+  size a multiple of `SPSC_CACHELINE_BYTES`. Counter types smaller than, equal
+  to, or larger than the configured cache line must all remain valid.
+- Add compile-time checks for owner-block alignment, size, and standard-layout
+  properties. Do not rely on derived-class base/member placement or on one
+  compiler's incidental tail-padding behavior.
+- Ensure the built-in and custom-policy results listed in the locked decisions.
+- Update `src/tests/test_build_config.hpp` so every qmake variant explicitly
+  checks that `A<>` and `CA<>` have identical shadow eligibility.
 - Add a friend-based test layout probe. Do not add a public state/layout API and
   do not use an ODR-changing `SPSC_TESTING` class definition.
-- Test actual addresses/cache-line indices, not hard-coded GCC offsets.
-- Include a custom `CacheAligned` policy whose `CAlign` is deliberately smaller
-  than the configured cache line; shadows must remain off.
+- Test actual address ranges/cache-line ownership, not hard-coded GCC offsets.
+- Treat `SPSC_CACHELINE_BYTES` as the compile-time layout contract. The guarantee
+  assumes normally aligned C++ objects; packed or otherwise misaligned placement
+  is outside the supported object-lifetime contract.
+- Include an atomic `CacheAligned` policy whose `CAlign` is deliberately smaller
+  than the configured cache line. It must still use shadows safely because the
+  outer owner blocks, not `CAlign`, provide endpoint isolation.
+- Include an over-aligned custom atomic counter to prove that owner-block
+  alignment never weakens the counter type's natural alignment.
 
 ### Acceptance Criteria
 
-- `A<>` and `FA<>` have no shadow storage.
-- Default `CA<>`, `CFA<>`, and `CAA<>` use shadows when the global and width
-  gates allow them.
-- For every shadow-enabled policy, producer shadow, consumer shadow, `_head`,
-  and `_tail` satisfy the declared cache-line isolation properties.
+- `A<>`, `FA<>`, `AA<>`, `CA<>`, `CFA<>`, `CAA<>`, and a custom atomic-backed
+  policy use shadows whenever the global and width gates allow them.
+- `P`, `V`, `VV`, `CP`, `CV`, and `CVV` contain no shadow storage. Disabling
+  shadows also selects the compact storage for atomic policies.
+- No configured cache line contains writable metadata owned by both producer
+  and consumer. Same-owner `_head`/shadow-tail or `_tail`/shadow-head sharing is
+  allowed and should be preferred when the counter type fits.
+- Owner blocks remain isolated for counter types whose natural alignment is
+  below, equal to, or above `SPSC_CACHELINE_BYTES`.
 - `SPSC_ENABLE_SHADOW_INDICES=0` disables shadows everywhere.
 - Both static and dynamic geometry are covered in all three current qmake
   variants.
@@ -208,9 +272,10 @@ isolated from the owner counters.
 
 ### Risk And Rollback
 
-Medium. This intentionally changes `A<>`/`FA<>` layout and performance. Revert
-the eligibility predicate and trait together if a supported compiler violates
-the tested layout properties.
+Medium. This intentionally changes atomic object layout, size, and performance,
+but does not change which policies are shadow-eligible. Roll back the unified
+index-storage representation as one unit if a supported compiler violates the
+tested owner-line properties.
 
 ## H3 - Role-Safe Public Introspection
 

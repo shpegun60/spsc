@@ -74,3 +74,7 @@ Thumbs.db
 # IDE (optional)
 .vscode/
 .idea/
+
+# Reproducible benchmark build intermediates. Timestamped results under
+# benchmarks/results/ are intentionally retained.
+benchmarks/.build/

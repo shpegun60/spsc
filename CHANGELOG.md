@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Added
+
+- Reproducible SPSC baseline harness with raw JSONL samples, host/compiler
+  manifest, hot-path assembly capture, CPU-affinity controls, and a pinned
+  `rigtorp/SPSCQueue` v1.1 comparator.
+
 ### Changed
 
 - qmake dashboard/test runner builds now target C++17 and keep Debug/Release binaries in separate `bin/debug` and `bin/release` directories.
