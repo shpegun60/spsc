@@ -639,7 +639,7 @@ public:
         // Validate that the snapshot range is still available to read.
         // can_read() is allowed to be conservative on transient/invalid observations;
         // do one extra refresh attempt via a direct head reload to reduce spurious failures.
-        if (RB_UNLIKELY(!Base::can_read(snap_used))) {
+        if (RB_UNLIKELY(!consumer_can_read_cached_(snap_used))) {
             const size_type h2  = static_cast<size_type>(Base::head());
             const size_type av2 = static_cast<size_type>(h2 - cur_tail);
             if (RB_UNLIKELY(av2 < snap_used) || RB_UNLIKELY(av2 > cap)) { return false; }
@@ -779,7 +779,7 @@ public:
         typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>
         >
     RB_FORCEINLINE void push(U&& v) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         storage_[Base::write_index()] = std::forward<U>(v);
         Base::increment_head();
     }
@@ -789,7 +789,7 @@ public:
         typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>
         >
     [[nodiscard]] RB_FORCEINLINE bool try_push(U&& v) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
-        if (RB_UNLIKELY(full())) { return false; }
+        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
         storage_[Base::write_index()] = std::forward<U>(v);
         Base::increment_head();
         return true;
@@ -802,7 +802,7 @@ public:
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
         ) {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         const size_type wi = Base::write_index();
         reference slot = storage_[wi];
         slot = value_type(std::forward<Args>(args)...);
@@ -817,7 +817,7 @@ public:
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
         ) {
-        if (RB_UNLIKELY(full())) { return nullptr; }
+        if (RB_UNLIKELY(producer_full_cached_())) { return nullptr; }
         const size_type wi = Base::write_index();
         reference slot = storage_[wi];
         slot = value_type(std::forward<Args>(args)...);
@@ -826,33 +826,33 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         return storage_[Base::write_index()];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(full())) { return nullptr; }
+        if (RB_UNLIKELY(producer_full_cached_())) { return nullptr; }
         return &storage_[Base::write_index()];
     }
 
     RB_FORCEINLINE void publish() noexcept {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         Base::increment_head();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(full())) { return false; }
+        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
         Base::increment_head();
         return true;
     }
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        SPSC_ASSERT(can_write(n));
+        SPSC_ASSERT(producer_can_write_cached_(n));
         Base::advance_head(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        if (RB_UNLIKELY(!can_write(n))) { return false; }
+        if (RB_UNLIKELY(!producer_can_write_cached_(n))) { return false; }
         Base::advance_head(n);
         return true;
     }
@@ -863,43 +863,43 @@ public:
     // Consumer Operations
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
         return storage_[Base::read_index()];
     }
 
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
         return storage_[Base::read_index()];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        if (RB_UNLIKELY(empty())) { return nullptr; }
+        if (RB_UNLIKELY(consumer_empty_cached_())) { return nullptr; }
         return &storage_[Base::read_index()];
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        if (RB_UNLIKELY(empty())) { return nullptr; }
+        if (RB_UNLIKELY(consumer_empty_cached_())) { return nullptr; }
         return &storage_[Base::read_index()];
     }
 
     RB_FORCEINLINE void pop() noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
         Base::increment_tail();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        if (RB_UNLIKELY(empty())) { return false; }
+        if (RB_UNLIKELY(consumer_empty_cached_())) { return false; }
         Base::increment_tail();
         return true;
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
-        SPSC_ASSERT(can_read(n));
+        SPSC_ASSERT(consumer_can_read_cached_(n));
         Base::advance_tail(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
-        if (RB_UNLIKELY(!can_read(n))) { return false; }
+        if (RB_UNLIKELY(!consumer_can_read_cached_(n))) { return false; }
         Base::advance_tail(n);
         return true;
     }
@@ -1254,6 +1254,24 @@ public:
     }
 
 private:
+    [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
+        return !is_valid() || Base::producer_full_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool
+    producer_can_write_cached_(const size_type n = 1u) const noexcept {
+        return is_valid() && Base::producer_can_write_cached(n);
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool consumer_empty_cached_() const noexcept {
+        return !is_valid() || Base::consumer_empty_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool
+    consumer_can_read_cached_(const size_type n = 1u) const noexcept {
+        return is_valid() && Base::consumer_can_read_cached(n);
+    }
+
     void move_from(fifo_view&& other) noexcept(kNoThrowMoveOps)
     {
         if constexpr (kDynamic) {

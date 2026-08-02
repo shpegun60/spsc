@@ -33,6 +33,17 @@ extern "C" SPSC_BENCH_NOINLINE bool spsc_fifo_consumer(fifo_type &queue,
     return true;
 }
 
+// Public observation is intentionally separate from the endpoint paths. This
+// probe lets H3 review the generated direct-snapshot code beside the cached
+// producer/consumer functions above.
+extern "C" SPSC_BENCH_NOINLINE std::uint64_t
+spsc_fifo_observer_snapshot(const fifo_type &queue) {
+    return static_cast<std::uint64_t>(queue.size()) +
+           static_cast<std::uint64_t>(queue.free()) +
+           static_cast<std::uint64_t>(queue.write_size()) +
+           static_cast<std::uint64_t>(queue.read_size());
+}
+
 extern "C" SPSC_BENCH_NOINLINE bool spsc_queue_producer(queue_type &queue,
                                                          const std::uint64_t value) {
     return queue.try_emplace(value) != nullptr;
@@ -47,6 +58,14 @@ extern "C" SPSC_BENCH_NOINLINE bool spsc_queue_consumer(queue_type &queue,
     sink += *value;
     queue.pop();
     return true;
+}
+
+extern "C" SPSC_BENCH_NOINLINE std::uint64_t
+spsc_queue_observer_snapshot(const queue_type &queue) {
+    return static_cast<std::uint64_t>(queue.size()) +
+           static_cast<std::uint64_t>(queue.free()) +
+           static_cast<std::uint64_t>(queue.write_size()) +
+           static_cast<std::uint64_t>(queue.read_size());
 }
 
 extern "C" SPSC_BENCH_NOINLINE bool rigtorp_queue_producer(rigtorp_queue_type &queue,

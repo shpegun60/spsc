@@ -77,7 +77,7 @@ reproducible benchmark/CI matrix.
 | H1 | Unsafe bulk API consistency | none | complete (2026-08-02) |
 | H0 | Reproducible baseline and benchmark harness | none | complete (2026-08-02) |
 | H2 | Atomic shadow storage and owner-line layout | H0 | complete (2026-08-02) |
-| H3 | Role-safe public introspection | H0, H2 | pending |
+| H3 | Role-safe public introspection | H0, H2 | complete (2026-08-02) |
 | H4 | Container, policy, and concurrency documentation | H1-H3 | pending |
 | H5 | Counter-wrap and invariant tests | H2, H3 | pending |
 | H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | pending |
@@ -373,6 +373,39 @@ shadows through public `const` queries while retaining cached endpoint hot paths
 
 High because this changes a shared base and every hot path. Keep the direct and
 cached helpers separate so the migration can be reviewed mechanically.
+
+### Verification Record
+
+- Split the base-layer occupancy code into direct observation methods and
+  endpoint-local cached helpers. `size`, `free`, `empty`, `full`,
+  `can_write`, `can_read`, `write_size`, and `read_size` now read only the
+  published indices; they never read or write either shadow.
+- Migrated producer/consumer operation paths in `fifo`, `fifo_view`, `pool`,
+  `pool_view`, `queue`, `typed_pool`, and all `latest` variants to the
+  corresponding producer- or consumer-owned cache helper. Array/chunk FIFO
+  wrappers inherit that behavior. A source audit confirms the remaining direct
+  base-query calls in those containers are only their public observer wrappers.
+- Added a friend-only H3 test subject which establishes nonzero producer and
+  consumer shadows, calls every direct observer method, and proves both shadow
+  values are unchanged. Existing regression helpers now warm caches only via
+  endpoint operations. The new three-thread FIFO regression runs producer,
+  consumer, and observer concurrently and verifies bounded
+  `size`/`free`/contiguous-region observations.
+- Documented the observer contract in `concurrency-and-freertos.md`: atomic
+  policies allow bounded, data-race-free but approximate/non-linearizable
+  observations; plain and volatile policies still require external
+  synchronization for a third observer.
+- Final functional validation: 27/27 Debug and 27/27 Release suite-runs
+  passed across `shadow_off`, `shadow_on`, and `shadow_heur`. GCC 15.2 strict
+  hot-path compilation passed 4/4 for C++17/C++20 and shadows off/on with
+  `-Wall -Wextra -Werror -pedantic-errors`; the sole suppressed diagnostic is
+  GCC's external Rigtorp `hardware_destructive_interference_size` warning.
+- Generated GCC 15.2 C++17/O3 assembly with shadows enabled retains lazy
+  endpoint caches: FIFO producer/consumer use shadows at offsets 64/192 and
+  queue producer/consumer at 128/256 only on refresh paths. The H3 observer
+  probes access only their direct head/tail offsets (FIFO 0/128; queue 64/192)
+  and never either shadow. The Linux TSan execution of this regression remains
+  the explicitly deferred H7 infrastructure check.
 
 ## H4 - Container, Policy, And Concurrency Documentation
 

@@ -459,7 +459,7 @@ public:
         // Validate that the snapshot range is still available to read.
         // can_read() is allowed to be conservative on transient/invalid observations;
         // do one extra refresh attempt via a direct head reload to reduce spurious failures.
-        if (RB_UNLIKELY(!Base::can_read(snap_used))) {
+        if (RB_UNLIKELY(!consumer_can_read_cached_(snap_used))) {
             const size_type h2  = static_cast<size_type>(Base::head());
             const size_type av2 = static_cast<size_type>(h2 - cur_tail);
             if (RB_UNLIKELY(av2 < snap_used) || RB_UNLIKELY(av2 > cap)) {
@@ -478,7 +478,7 @@ public:
         }
 
         if constexpr (!std::is_trivially_destructible_v<value_type>) {
-            while (!empty()) {
+            while (!consumer_empty_cached_()) {
                 pop();
             }
         } else {
@@ -610,7 +610,7 @@ public:
     template <class U, typename = std::enable_if_t<
                           std::is_constructible_v<value_type, U &&>>>
     RB_FORCEINLINE void push(U &&v) {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         new (&storage_[Base::write_index()]) value_type(std::forward<U>(v));
         Base::increment_head();
     }
@@ -618,7 +618,7 @@ public:
     template <class U, typename = std::enable_if_t<
                           std::is_constructible_v<value_type, U &&>>>
     [[nodiscard]] RB_FORCEINLINE bool try_push(U &&v) {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(producer_full_cached_())) {
             return false;
         }
         new (&storage_[Base::write_index()]) value_type(std::forward<U>(v));
@@ -629,7 +629,7 @@ public:
     template <class... Args, typename = std::enable_if_t<
                                 std::is_constructible_v<value_type, Args &&...>>>
     RB_FORCEINLINE reference emplace(Args &&...args) {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         pointer slot = &storage_[Base::write_index()];
         slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
         slot = std::launder(slot);
@@ -640,7 +640,7 @@ public:
     template <class... Args, typename = std::enable_if_t<
                                 std::is_constructible_v<value_type, Args &&...>>>
     [[nodiscard]] pointer try_emplace(Args &&...args) {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(producer_full_cached_())) {
             return nullptr;
         }
         pointer slot = &storage_[Base::write_index()];
@@ -653,24 +653,24 @@ public:
     // Returns pointer to raw storage. You MUST construct T in-place before
     // publish().
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         return &storage_[Base::write_index()];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(producer_full_cached_())) {
             return nullptr;
         }
         return &storage_[Base::write_index()];
     }
 
     RB_FORCEINLINE void publish() noexcept {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         Base::increment_head();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(producer_full_cached_())) {
             return false;
         }
         Base::increment_head();
@@ -678,12 +678,12 @@ public:
     }
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        SPSC_ASSERT(can_write(n));
+        SPSC_ASSERT(producer_can_write_cached_(n));
         Base::advance_head(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        if (RB_UNLIKELY(!can_write(n))) {
+        if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
         Base::advance_head(n);
@@ -696,31 +696,31 @@ public:
     // Consumer Operations (Explicit Destructor)
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
         return *slot_ptr(Base::read_index());
     }
 
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
         return *slot_ptr(Base::read_index());
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(consumer_empty_cached_())) {
             return nullptr;
         }
         return slot_ptr(Base::read_index());
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(consumer_empty_cached_())) {
             return nullptr;
         }
         return slot_ptr(Base::read_index());
     }
 
     RB_FORCEINLINE void pop() noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
         if constexpr (!std::is_trivially_destructible_v<value_type>) {
             detail::destroy_at(slot_ptr(Base::read_index()));
         }
@@ -728,7 +728,7 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(consumer_empty_cached_())) {
             return false;
         }
         if constexpr (!std::is_trivially_destructible_v<value_type>) {
@@ -739,7 +739,7 @@ public:
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
-        SPSC_ASSERT(can_read(n));
+        SPSC_ASSERT(consumer_can_read_cached_(n));
 
         if constexpr (!std::is_trivially_destructible_v<value_type>) {
             size_type idx = Base::tail();
@@ -763,7 +763,7 @@ public:
 
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
-        if (RB_UNLIKELY(!can_read(n))) {
+        if (RB_UNLIKELY(!consumer_can_read_cached_(n))) {
             return false;
         }
         pop(n);
@@ -1412,6 +1412,24 @@ public:
     }
 
 private:
+    [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
+        return !is_valid() || Base::producer_full_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool
+    producer_can_write_cached_(const size_type n = 1u) const noexcept {
+        return is_valid() && Base::producer_can_write_cached(n);
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool consumer_empty_cached_() const noexcept {
+        return !is_valid() || Base::consumer_empty_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool
+    consumer_can_read_cached_(const size_type n = 1u) const noexcept {
+        return is_valid() && Base::consumer_can_read_cached(n);
+    }
+
     void allocate_static_() noexcept(kNoexceptAllocate) {
         if constexpr (!kDynamic) {
             allocator_type alloc{};

@@ -1938,11 +1938,12 @@ static void test_shadow_swap_regression() {
     QVERIFY(b.full());
     QVERIFY(a.empty());
 
-    // Warm up cached paths.
-    (void)a.write_size();
-    (void)a.read_size();
-    (void)b.write_size();
-    (void)b.read_size();
+    // Warm endpoint-local caches through their real role paths. Public
+    // observations deliberately never write shadows (H3 contract).
+    (void)a.try_claim();
+    (void)a.try_front();
+    (void)b.try_claim();
+    (void)b.try_front();
 
     // Swap (regression target: shadow cache must be re-initialized).
     a.swap(b);

@@ -41,6 +41,29 @@ Management operations are **not** concurrent:
 
 Stop both endpoints before doing management work.
 
+### Public Observation Queries
+
+`size()`, `empty()`, `full()`, `free()`, `can_write()`, `can_read()`,
+`write_size()`, and `read_size()` are observations: they do not reserve a slot,
+publish data, or consume data.
+
+With an atomic-backed policy (`A<>`, `FA<>`, `AA<>`, `CA<>`, `CFA<>`, or
+`CAA<>`), a third monitoring context may call those queries while the one
+producer and one consumer run. Each result is bounded and data-race-free, but
+it is only an approximate, non-linearizable snapshot. It can be stale as soon
+as it returns, and a transient snapshot can conservatively report no readable
+or writable space.
+
+Do not use a public observation as a reservation or as a substitute for
+`try_push()` / `try_claim()` or `try_front()` / `try_pop()`. The endpoint
+operations retain their own role-local cache for the hot path; public queries
+intentionally do not modify that cache.
+
+`P`, `V`, `VV`, `CP`, `CV`, and `CVV` do **not** gain portable concurrent
+observer support from these methods. For those policies, an independent
+monitoring context needs external synchronization (or must run only while the
+queue is stopped).
+
 ## 3. Policy Selection
 
 ### `P`

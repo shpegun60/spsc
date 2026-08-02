@@ -615,20 +615,17 @@ static void test_shadow_sync_regressions() {
     a.clear();
     b.clear();
 
-    // Fill 'a' and warm both producer+consumer paths so shadows are non-trivial.
+    // Fill 'a' and exercise both endpoint paths. Public observation queries
+    // are deliberately not used to warm a shadow cache (H3 contract).
     QVERIFY(a.try_push(Traced{1}));
     QVERIFY(a.try_push(Traced{2}));
-    (void)a.empty();      // consumer path
-    (void)a.read_size();  // consumer path
-    (void)a.full();       // producer path
-    (void)a.write_size(); // producer path
+    QVERIFY(a.try_claim() != nullptr); // producer endpoint path
+    QVERIFY(a.try_front() != nullptr); // consumer endpoint path
     verify_invariants(a);
 
-    // Warm 'b' too (keep it empty but touch both paths).
-    (void)b.empty();
-    (void)b.read_size();
-    (void)b.full();
-    (void)b.write_size();
+    // Exercise both endpoint paths on an empty queue too.
+    QVERIFY(b.try_claim() != nullptr);
+    QVERIFY(b.try_front() == nullptr);
     verify_invariants(b);
 
     // Swap regression: if swap doesn't sync shadow with new head/tail, invariants can break.
@@ -645,12 +642,11 @@ static void test_shadow_sync_regressions() {
     QVERIFY(b.empty());
     verify_invariants(b);
 
-    // Move regression: move a warmed, non-empty queue.
+    // Move regression: move an endpoint-exercised, non-empty queue.
     QVERIFY(b.try_push(Traced{7}));
     QVERIFY(b.try_push(Traced{8}));
-    (void)b.empty();
-    (void)b.read_size();
-    (void)b.write_size();
+    QVERIFY(b.try_claim() != nullptr);
+    QVERIFY(b.try_front() != nullptr);
     verify_invariants(b);
 
     Q moved(std::move(b));
@@ -758,6 +754,49 @@ static void owner_line_layout_suite() {
     verify_owner_line_layout_static_and_dynamic<spsc::policy::CAA<>>();
     verify_owner_line_layout_static_and_dynamic<spsc::test_layout::subcacheline_atomic_policy>();
     verify_owner_line_layout_static_and_dynamic<spsc::test_layout::over_aligned_atomic_policy>();
+}
+
+template<class Policy>
+static void verify_observer_queries_do_not_touch_shadow_cache() {
+    using Subject = spsc::test_layout::observer_subject<64u, Policy>;
+    using Probe = spsc::detail::spscbase_layout_probe<64u, Policy>;
+
+    Subject q;
+
+    // Establish distinct non-zero cache values using only the role-local
+    // cached helpers. The test then calls every direct observer query.
+    q.set_indices_for_test(1u, 0u);
+    QVERIFY(!q.consumer_empty_cached_for_test());
+
+    q.set_indices_for_test(64u, 1u);
+    QVERIFY(!q.producer_full_cached_for_test());
+
+    const reg producer_before = Probe::producer_shadow_value(q);
+    const reg consumer_before = Probe::consumer_shadow_value(q);
+
+    if constexpr (Probe::kUseShadow) {
+        QCOMPARE(producer_before, reg{1u});
+        QCOMPARE(consumer_before, reg{1u});
+    }
+
+    (void)q.size();
+    (void)q.empty();
+    (void)q.full();
+    (void)q.free();
+    (void)q.can_write(1u);
+    (void)q.can_read(1u);
+    (void)q.write_size();
+    (void)q.read_size();
+
+    QCOMPARE(Probe::producer_shadow_value(q), producer_before);
+    QCOMPARE(Probe::consumer_shadow_value(q), consumer_before);
+}
+
+static void observer_queries_do_not_touch_shadow_cache_suite() {
+    verify_observer_queries_do_not_touch_shadow_cache<spsc::policy::A<>>();
+    verify_observer_queries_do_not_touch_shadow_cache<spsc::policy::CFA<>>();
+    verify_observer_queries_do_not_touch_shadow_cache<
+        spsc::test_layout::over_aligned_atomic_policy>();
 }
 
 
@@ -2257,6 +2296,185 @@ static void threaded_spsc_stress_fifo(Q& q, const int iters = kThreadIters, cons
     verify_invariants(q);
 }
 
+// Three-thread H3 regression: producer + consumer own their endpoint caches,
+// while an independent observer repeatedly invokes every public occupancy
+// query. The observer must never mutate either endpoint shadow.
+template <class Q>
+static void threaded_observer_stress_fifo(Q& q,
+                                          const int iters = (kThreadIters / 4),
+                                          const int timeout_ms = kThreadTimeoutMs) {
+    static_assert(std::is_same_v<typename Q::value_type, ThreadMsg>,
+                  "threaded_observer_stress_fifo: Q::value_type must be ThreadMsg");
+
+    QVERIFY(q.is_valid());
+    QVERIFY(q.empty());
+
+    std::atomic<bool> abort{false};
+    std::atomic<int> fail_code{0};
+    std::atomic<std::uint32_t> fail_seq{0u};
+    std::atomic<std::uint32_t> produced{0u};
+    std::atomic<std::uint32_t> consumed{0u};
+    std::atomic<std::uint32_t> observations{0u};
+    std::atomic<bool> prod_done{false};
+    std::atomic<bool> cons_done{false};
+    std::atomic<bool> observer_done{false};
+    std::atomic<int> workers_ready{0};
+    std::atomic<bool> start{false};
+
+    auto record_fail = [&](const int code, const std::uint32_t seq) noexcept {
+        int expected = 0;
+        if (fail_code.compare_exchange_strong(expected, code)) {
+            fail_seq.store(seq, std::memory_order_relaxed);
+        }
+        abort.store(true, std::memory_order_relaxed);
+    };
+
+    auto await_start = [&]() noexcept {
+        workers_ready.fetch_add(1, std::memory_order_relaxed);
+        while (!abort.load(std::memory_order_relaxed) &&
+               !start.load(std::memory_order_relaxed)) {
+            std::this_thread::yield();
+        }
+    };
+
+    std::thread producer([&] {
+        await_start();
+        std::uint32_t spins = 0u;
+        std::uint32_t seq = 1u;
+
+        while (!abort.load(std::memory_order_relaxed) &&
+               seq <= static_cast<std::uint32_t>(iters)) {
+            auto* slot = q.try_claim();
+            if (slot == nullptr) {
+                backoff_step(spins);
+                continue;
+            }
+
+            *slot = make_msg(seq);
+            if (!q.try_publish()) {
+                record_fail(1, seq);
+                break;
+            }
+
+            produced.fetch_add(1u, std::memory_order_relaxed);
+            ++seq;
+            spins = 0u;
+        }
+
+        prod_done.store(true, std::memory_order_relaxed);
+    });
+
+    std::thread consumer([&] {
+        await_start();
+        std::uint32_t spins = 0u;
+        std::uint32_t expected = 1u;
+
+        while (!abort.load(std::memory_order_relaxed) &&
+               expected <= static_cast<std::uint32_t>(iters)) {
+            const auto* value = q.try_front();
+            if (value == nullptr) {
+                backoff_step(spins);
+                continue;
+            }
+
+            if (!msg_matches(*value, expected)) {
+                record_fail(2, expected);
+                break;
+            }
+            if (!q.try_pop()) {
+                record_fail(3, expected);
+                break;
+            }
+
+            consumed.fetch_add(1u, std::memory_order_relaxed);
+            ++expected;
+            spins = 0u;
+        }
+
+        cons_done.store(true, std::memory_order_relaxed);
+    });
+
+    std::thread observer([&] {
+        await_start();
+        while (!abort.load(std::memory_order_relaxed) &&
+               !(prod_done.load(std::memory_order_relaxed) &&
+                 cons_done.load(std::memory_order_relaxed))) {
+            const reg cap = q.capacity();
+            const reg size = q.size();
+            const reg free = q.free();
+            const reg writable = q.write_size();
+            const reg readable = q.read_size();
+
+            (void)q.empty();
+            (void)q.full();
+            (void)q.can_write(1u);
+            (void)q.can_read(1u);
+
+            if (size > cap || free > cap || writable > cap || readable > cap) {
+                record_fail(4, observations.load(std::memory_order_relaxed));
+                break;
+            }
+            observations.fetch_add(1u, std::memory_order_relaxed);
+        }
+
+        observer_done.store(true, std::memory_order_relaxed);
+    });
+
+    const auto started = std::chrono::steady_clock::now();
+    while (workers_ready.load(std::memory_order_relaxed) != 3) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
+        if (elapsed.count() > timeout_ms) {
+            abort.store(true, std::memory_order_relaxed);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    start.store(true, std::memory_order_relaxed);
+
+    while (!abort.load(std::memory_order_relaxed) &&
+           !(prod_done.load(std::memory_order_relaxed) &&
+             cons_done.load(std::memory_order_relaxed) &&
+             observer_done.load(std::memory_order_relaxed))) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
+        if (elapsed.count() > timeout_ms) {
+            abort.store(true, std::memory_order_relaxed);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    if (producer.joinable()) {
+        producer.join();
+    }
+    if (consumer.joinable()) {
+        consumer.join();
+    }
+    if (observer.joinable()) {
+        observer.join();
+    }
+
+    const int code = fail_code.load(std::memory_order_relaxed);
+    if (code != 0) {
+        const QString message =
+            QString("3-thread observer stress failed: code=%1 seq=%2 produced=%3 consumed=%4 observations=%5 size=%6")
+                .arg(code)
+                .arg(fail_seq.load(std::memory_order_relaxed))
+                .arg(produced.load(std::memory_order_relaxed))
+                .arg(consumed.load(std::memory_order_relaxed))
+                .arg(observations.load(std::memory_order_relaxed))
+                .arg(q.size());
+        QVERIFY2(false, qPrintable(message));
+    }
+
+    QCOMPARE(static_cast<int>(produced.load(std::memory_order_relaxed)), iters);
+    QCOMPARE(static_cast<int>(consumed.load(std::memory_order_relaxed)), iters);
+    QVERIFY(observations.load(std::memory_order_relaxed) != 0u);
+    QVERIFY(q.empty());
+    verify_invariants(q);
+}
+
 template <typename Policy>
 static void run_threaded_suite() {
     using Qs = spsc::fifo<ThreadMsg, 4096u, Policy>;
@@ -3741,6 +3959,13 @@ static void array_fifo_wrapper_runtime_smoke_suite() {
     }
 }
 
+template <typename Policy>
+static void run_threaded_observer_suite() {
+    using Q = spsc::fifo<ThreadMsg, 4096u, Policy>;
+    Q q;
+    threaded_observer_stress_fifo(q);
+}
+
 static void extended_policy_smoke_suite() {
     ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
         using Policy = typename decltype(policy_tag)::type;
@@ -3854,6 +4079,9 @@ private slots:
     }
 
     void owner_line_layout() { owner_line_layout_suite(); }
+    void observer_queries_do_not_touch_shadow_cache() {
+        observer_queries_do_not_touch_shadow_cache_suite();
+    }
 
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
@@ -3873,6 +4101,12 @@ private slots:
 
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>(); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>(); }
+    void threaded_observer_atomic_A() {
+        run_threaded_observer_suite<spsc::policy::A<>>();
+    }
+    void threaded_observer_cached_CA() {
+        run_threaded_observer_suite<spsc::policy::CA<>>();
+    }
 
     void threaded_snapshot_atomic_A() {
         run_threaded_snapshot_suite<spsc::policy::A<>>("threaded_snapshot_atomic");

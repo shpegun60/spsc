@@ -245,24 +245,13 @@ static void verify_invariants(const Q& q) {
     QCOMPARE(static_cast<reg>(st.head - st.tail), sz);
 }
 
-// Warm up producer/consumer shadow caches by calling query APIs a few times.
-// This is intentionally side-effect-free in terms of visible queue state.
+// Exercise producer/consumer endpoint cache paths without changing queue state.
+// Public query APIs intentionally do not warm a shadow cache (H3 contract).
 template<class Q>
-static void shadow_warm_queries(Q& q) {
-    // These calls exercise the shadow-refresh paths in SPSCbase when enabled.
+static void shadow_warm_endpoints(Q& q) {
     for (int i = 0; i < 8; ++i) {
-        (void)q.capacity();
-        (void)q.size();
-        (void)q.free();
-        (void)q.empty();
-        (void)q.full();
-        (void)q.can_write();
-        (void)q.can_read();
-        (void)q.write_size();
-        (void)q.read_size();
-        (void)q.claim_read(::spsc::unsafe, 1u);
-        (void)q.claim_write(::spsc::unsafe, 1u);
-        (void)q.make_snapshot();
+        (void)q.try_claim(); // producer-owned cache path
+        (void)q.try_front(); // consumer-owned cache path
     }
 }
 
@@ -1211,14 +1200,9 @@ struct fifo_view_type_traits<::spsc::fifo_view<T, Cap, Policy>> {
 
 template <class Q>
 static void shadow_warm(Q& q) {
-    // Touch both consumer-side and producer-side paths so shadows become non-trivial.
-    (void)q.empty();
-    (void)q.read_size();
-    (void)q.can_read(reg{1u});
-
-    (void)q.full();
-    (void)q.write_size();
-    (void)q.can_write(reg{1u});
+    // Public observers never warm shadows. Use the actual endpoint paths.
+    (void)q.try_claim(); // producer-owned cache path
+    (void)q.try_front(); // consumer-owned cache path
 }
 
 template <class Q>
@@ -1945,8 +1929,8 @@ static void test_shadow_full_swap_move_claim_regression_static() {
     QVERIFY(a.is_valid());
     QVERIFY(b.is_valid());
 
-    // Warm A on empty so producer shadow caches tail=0.
-    shadow_warm_queries(a);
+    // Exercise both endpoint caches while A is empty.
+    shadow_warm_endpoints(a);
 
     // Fill B to full.
     for (reg i = 0; i < b.capacity(); ++i) {
@@ -1958,8 +1942,8 @@ static void test_shadow_full_swap_move_claim_regression_static() {
     QVERIFY(b.full());
     QVERIFY(b.try_claim() == nullptr);
 
-    // Warm B on full.
-    shadow_warm_queries(b);
+    // Exercise both endpoint caches while B is full.
+    shadow_warm_endpoints(b);
 
     // Swap: A must become full and still refuse claim.
     using std::swap;
@@ -1999,8 +1983,8 @@ static void test_shadow_full_swap_move_claim_regression_dynamic() {
     QVERIFY(a.is_valid());
     QVERIFY(b.is_valid());
 
-    // Warm A on empty.
-    shadow_warm_queries(a);
+    // Exercise both endpoint caches while A is empty.
+    shadow_warm_endpoints(a);
 
     // Fill B to full.
     const reg cap = b.capacity();
@@ -2013,8 +1997,8 @@ static void test_shadow_full_swap_move_claim_regression_dynamic() {
     QVERIFY(b.full());
     QVERIFY(b.try_claim() == nullptr);
 
-    // Warm B on full.
-    shadow_warm_queries(b);
+    // Exercise both endpoint caches while B is full.
+    shadow_warm_endpoints(b);
 
     // Swap and validate.
     using std::swap;
@@ -2063,8 +2047,8 @@ static void test_shadow_adopt_overwrite_regression_static() {
     }
     QVERIFY(q.empty());
 
-    // 3) Warm producer queries with tail high (16).
-    shadow_warm_queries(q);
+    // 3) Exercise endpoint caches with tail high (16).
+    shadow_warm_endpoints(q);
 
     // 4) Adopt FULL state head=16, tail=0 (re-expose old items).
     QVERIFY(q.adopt(buf.data(), 16u, 0u));
@@ -2108,8 +2092,8 @@ static void test_shadow_adopt_overwrite_regression_dynamic() {
     QVERIFY(q.try_pop(cap));
     QVERIFY(q.empty());
 
-    // 3) Warm producer queries with tail high.
-    shadow_warm_queries(q);
+    // 3) Exercise endpoint caches with tail high.
+    shadow_warm_endpoints(q);
 
     // 4) Adopt FULL state head=cap, tail=0.
     QVERIFY(q.adopt(buf.data(), static_cast<reg>(buf.size()), cap, 0u));

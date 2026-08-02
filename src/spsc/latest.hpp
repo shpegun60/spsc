@@ -408,12 +408,12 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         return slots_[Base::write_index()];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(!is_valid() || full())) {
+        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
             return nullptr;
         }
         return slots_[Base::write_index()];
@@ -421,12 +421,12 @@ public:
 
     RB_FORCEINLINE void publish() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         Base::increment_head();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(!is_valid() || full())) {
+        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
             return false;
         }
         Base::increment_head();
@@ -438,7 +438,7 @@ public:
      */
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
         const size_type cap = depth();
-        if (RB_UNLIKELY(!is_valid() || cap == 0u || full())) {
+        if (RB_UNLIKELY(!is_valid() || cap == 0u || producer_full_cached_())) {
             return false;
         }
         if (cap < 4u) {
@@ -458,7 +458,7 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -483,7 +483,7 @@ public:
 
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -558,7 +558,7 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -650,9 +650,9 @@ public:
 
         SPSC_ASSERT(buffer_size() >= static_cast<size_type>(sizeof(V)));
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
 
-        if (RB_UNLIKELY(!is_valid() || full())) {
+        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
             return;
         }
         if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(V)))) {
@@ -690,6 +690,14 @@ public:
     }
 
 private:
+    [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
+        return !is_valid() || Base::producer_full_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool consumer_empty_cached_() const noexcept {
+        return !is_valid() || Base::consumer_empty_cached();
+    }
+
     // ============================================================================
     // Implementation details
     // ============================================================================
@@ -1065,12 +1073,12 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         return storage_[Base::write_index()];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(!is_valid() || full())) {
+        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
             return nullptr;
         }
         return &storage_[Base::write_index()];
@@ -1078,12 +1086,12 @@ public:
 
     RB_FORCEINLINE void publish() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         Base::increment_head();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(!is_valid() || full())) {
+        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
             return false;
         }
         Base::increment_head();
@@ -1092,7 +1100,7 @@ public:
 
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
         const size_type cap = depth();
-        if (RB_UNLIKELY(!is_valid() || cap == 0u || full())) {
+        if (RB_UNLIKELY(!is_valid() || cap == 0u || producer_full_cached_())) {
             return false;
         }
         if (cap < 4u) {
@@ -1113,7 +1121,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1139,7 +1147,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1214,7 +1222,7 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1301,8 +1309,8 @@ public:
     template<class U>
     RB_FORCEINLINE void push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!full());
-        if (RB_UNLIKELY(!is_valid() || full())) {
+        SPSC_ASSERT(!producer_full_cached_());
+        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
             return;
         }
         reference slot = storage_[Base::write_index()];
@@ -1347,6 +1355,14 @@ public:
     }
 
 private:
+    [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
+        return !is_valid() || Base::producer_full_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool consumer_empty_cached_() const noexcept {
+        return !is_valid() || Base::consumer_empty_cached();
+    }
+
     // ============================================================================
     // Implementation details
     // ============================================================================
@@ -1582,24 +1598,24 @@ public:
     [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept { return static_cast<size_type>(Base::size()); }
 
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         return storage_[Base::write_index()];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(producer_full_cached_())) {
             return nullptr;
         }
         return &storage_[Base::write_index()];
     }
 
     RB_FORCEINLINE void publish() noexcept {
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(!producer_full_cached_());
         Base::increment_head();
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(producer_full_cached_())) {
             return false;
         }
         Base::increment_head();
@@ -1607,7 +1623,7 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(producer_full_cached_())) {
             return false;
         }
         if (Depth < 4u) {
@@ -1625,7 +1641,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1651,7 +1667,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1718,7 +1734,7 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(!consumer_empty_cached_());
 
         const size_type t = static_cast<size_type>(Base::tail());
 
@@ -1839,6 +1855,14 @@ public:
     }
 
 private:
+
+    [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
+        return Base::producer_full_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool consumer_empty_cached_() const noexcept {
+        return Base::consumer_empty_cached();
+    }
 
     void move_from(latest&& other) noexcept(std::is_nothrow_swappable_v<value_type>) {
         storage_.swap(other.storage_);

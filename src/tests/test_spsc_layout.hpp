@@ -76,6 +76,45 @@ public:
         : Base(capacity) {}
 };
 
+/* Test-only public surface for H3. It makes the otherwise protected direct
+ * observations callable without exposing anything in the production API, and
+ * separately exposes the endpoint-local cached helpers so tests can establish
+ * a non-trivial shadow state before exercising an observer query.
+ */
+template<reg C, class PolicyT>
+class observer_subject final : public ::spsc::SPSCbase<C, PolicyT> {
+    using Base = ::spsc::SPSCbase<C, PolicyT>;
+
+public:
+    observer_subject() noexcept = default;
+
+    template<reg C_ = C, std::enable_if_t<C_ == 0u, int> = 0>
+    explicit observer_subject(const reg capacity) noexcept
+        : Base(capacity) {}
+
+    using Base::can_read;
+    using Base::can_write;
+    using Base::empty;
+    using Base::free;
+    using Base::full;
+    using Base::read_size;
+    using Base::size;
+    using Base::write_size;
+
+    [[nodiscard]] bool producer_full_cached_for_test() const noexcept {
+        return Base::producer_full_cached();
+    }
+
+    [[nodiscard]] bool consumer_empty_cached_for_test() const noexcept {
+        return Base::consumer_empty_cached();
+    }
+
+    void set_indices_for_test(const reg head, const reg tail) noexcept {
+        Base::set_head(head);
+        Base::set_tail(tail);
+    }
+};
+
 inline constexpr reg kSubcachelineAtomicAlignment =
     static_cast<reg>(alignof(typename ::spsc::policy::A<>::counter_type));
 
@@ -199,6 +238,24 @@ struct spscbase_layout_probe {
                 0u,
                 0u
             };
+        }
+    }
+
+    [[nodiscard]] static reg producer_shadow_value(const base_type& base) noexcept {
+        if constexpr (kUseShadow) {
+            return base._indices.prod_shadow_tail();
+        } else {
+            (void)base;
+            return 0u;
+        }
+    }
+
+    [[nodiscard]] static reg consumer_shadow_value(const base_type& base) noexcept {
+        if constexpr (kUseShadow) {
+            return base._indices.cons_shadow_head();
+        } else {
+            (void)base;
+            return 0u;
         }
     }
 };

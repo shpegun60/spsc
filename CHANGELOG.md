@@ -11,6 +11,8 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Reproducible SPSC baseline harness with raw JSONL samples, host/compiler
   manifest, hot-path assembly capture, CPU-affinity controls, and a pinned
   `rigtorp/SPSCQueue` v1.1 comparator.
+- Three-thread atomic observer regression coverage: producer, consumer, and a
+  simultaneous public-query observer.
 
 ### Changed
 
@@ -28,6 +30,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   cache-line-aligned producer/consumer owner blocks. Non-atomic and
   shadow-disabled storage stays compact, while atomic shadow eligibility is
   unchanged.
+- Public occupancy queries now use direct index snapshots and never mutate
+  producer/consumer shadow caches. Endpoint operations retain their role-local
+  lazy cache, so a third atomic observer does not race a shadow.
 - Restored Qt shadow-build MOC/test runner layout so the dashboard resolves per-config runner executables reliably.
 
 ### Removed
