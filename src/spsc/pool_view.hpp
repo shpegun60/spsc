@@ -740,16 +740,6 @@ public:
         return r;
     }
 
-    [[nodiscard]] regions
-    claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        return claim_write(::spsc::unsafe, max_count);
-    }
-
-    [[nodiscard]] regions
-    claim_read(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        return claim_read(::spsc::unsafe, max_count);
-    }
-
     // ------------------------------------------------------------------------------------------
     // Producer Operations
     // ------------------------------------------------------------------------------------------

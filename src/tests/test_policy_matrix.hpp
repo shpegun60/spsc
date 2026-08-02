@@ -37,6 +37,42 @@ template <class Q>
 struct has_try_publish_count<Q, std::void_t<decltype(std::declval<Q&>().try_publish(typename Q::size_type{1u}))>>
     : std::true_type {};
 
+template <class Q, class = void>
+struct has_untagged_claim_write : std::false_type {};
+
+template <class Q>
+struct has_untagged_claim_write<
+    Q,
+    std::void_t<decltype(std::declval<Q&>().claim_write(typename Q::size_type{1u}))>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_default_untagged_claim_write : std::false_type {};
+
+template <class Q>
+struct has_default_untagged_claim_write<
+    Q,
+    std::void_t<decltype(std::declval<Q&>().claim_write())>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_untagged_claim_read : std::false_type {};
+
+template <class Q>
+struct has_untagged_claim_read<
+    Q,
+    std::void_t<decltype(std::declval<Q&>().claim_read(typename Q::size_type{1u}))>>
+    : std::true_type {};
+
+template <class Q, class = void>
+struct has_default_untagged_claim_read : std::false_type {};
+
+template <class Q>
+struct has_default_untagged_claim_read<
+    Q,
+    std::void_t<decltype(std::declval<Q&>().claim_read())>>
+    : std::true_type {};
+
 template <class Q, class N, class = void>
 struct has_pop_with : std::false_type {};
 

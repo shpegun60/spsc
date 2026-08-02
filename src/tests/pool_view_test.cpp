@@ -283,6 +283,15 @@ static void api_compile_smoke() {
     using bulk_write_guard_t = typename Q::bulk_write_guard;
     using bulk_read_guard_t  = typename Q::bulk_read_guard;
 
+    static_assert(!::spsc::test::has_untagged_claim_write<Q>::value,
+                  "pool_view bulk write claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_default_untagged_claim_write<Q>::value,
+                  "pool_view default bulk write claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_untagged_claim_read<Q>::value,
+                  "pool_view bulk read claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_default_untagged_claim_read<Q>::value,
+                  "pool_view default bulk read claims must require spsc::unsafe");
+
     using smoke_pack = type_pack<
         decltype(std::declval<Q&>().is_valid()),
         decltype(std::declval<Q&>().state()),
@@ -318,8 +327,6 @@ static void api_compile_smoke() {
         decltype(std::declval<Q&>().claim_write(::spsc::unsafe, reg{1u})),
         decltype(std::declval<Q&>().claim_read(::spsc::unsafe)),
         decltype(std::declval<Q&>().claim_read(::spsc::unsafe, reg{1u})),
-        decltype(std::declval<Q&>().claim_write(reg{1u})),
-        decltype(std::declval<Q&>().claim_read(reg{1u})),
         decltype(std::declval<Q&>().template claim_as<std::uint32_t>()),
         decltype(std::declval<const Q&>().template try_peek<std::uint32_t>(std::declval<std::uint32_t&>())),
         decltype(std::declval<Q&>().template try_write<std::uint32_t>(std::declval<const std::uint32_t&>())),
@@ -930,7 +937,7 @@ static void test_bulk_regions(spsc::pool_view<Cap, Policy>& q, void** slots_base
 
     // claim_write on empty: should provide full free space
     {
-        const auto wr = q.claim_write();
+        const auto wr = q.claim_write(::spsc::unsafe);
         QCOMPARE(wr.total, q.free());
         QCOMPARE(wr.total, q.capacity());
         QCOMPARE(static_cast<reg>(wr.first.count + wr.second.count), wr.total);
@@ -940,7 +947,7 @@ static void test_bulk_regions(spsc::pool_view<Cap, Policy>& q, void** slots_base
     // Fill half via bulk publish
     {
         const reg want = std::min<reg>(q.capacity() / 2u, reg{5u});
-        const auto wr = q.claim_write(want);
+        const auto wr = q.claim_write(::spsc::unsafe, want);
         QCOMPARE(wr.total, want);
 
         reg seq = 100u;
@@ -961,7 +968,7 @@ static void test_bulk_regions(spsc::pool_view<Cap, Policy>& q, void** slots_base
 
     // Read back via bulk read and pop
     {
-        const auto rd = q.claim_read();
+        const auto rd = q.claim_read(::spsc::unsafe);
         QCOMPARE(rd.total, q.size());
         QCOMPARE(static_cast<reg>(rd.first.count + rd.second.count), rd.total);
         QVERIFY(rd.total != 0u);
@@ -987,7 +994,7 @@ static void test_bulk_regions(spsc::pool_view<Cap, Policy>& q, void** slots_base
 
         force_state(q, slots_base, kBufSz, head, tail);
 
-        const auto wr = q.claim_write();
+        const auto wr = q.claim_write(::spsc::unsafe);
         QCOMPARE(wr.total, q.free());
         QVERIFY(wr.total >= 1u);
 
@@ -1014,7 +1021,7 @@ static void test_bulk_regions(spsc::pool_view<Cap, Policy>& q, void** slots_base
 
         force_state(q, slots_base, kBufSz, head, tail);
 
-        const auto rd = q.claim_read();
+        const auto rd = q.claim_read(::spsc::unsafe);
         QCOMPARE(rd.total, q.size());
         QVERIFY(rd.total >= 1u);
 
@@ -1038,7 +1045,7 @@ static void test_bulk_regions(spsc::pool_view<0, Policy>& q, void** slots_base, 
     std::mt19937 rng(0xBADC0DEu);
 
     {
-        const auto wr = q.claim_write();
+        const auto wr = q.claim_write(::spsc::unsafe);
         QCOMPARE(wr.total, q.free());
         QCOMPARE(wr.total, q.capacity());
         QCOMPARE(static_cast<reg>(wr.first.count + wr.second.count), wr.total);
@@ -1047,7 +1054,7 @@ static void test_bulk_regions(spsc::pool_view<0, Policy>& q, void** slots_base, 
 
     {
         const reg want = std::min<reg>(q.capacity() / 2u, reg{5u});
-        const auto wr = q.claim_write(want);
+        const auto wr = q.claim_write(::spsc::unsafe, want);
         QCOMPARE(wr.total, want);
 
         reg seq = 200u;
@@ -1067,7 +1074,7 @@ static void test_bulk_regions(spsc::pool_view<0, Policy>& q, void** slots_base, 
     }
 
     {
-        const auto rd = q.claim_read();
+        const auto rd = q.claim_read(::spsc::unsafe);
         QCOMPARE(rd.total, q.size());
         QCOMPARE(static_cast<reg>(rd.first.count + rd.second.count), rd.total);
         QVERIFY(rd.total != 0u);
@@ -1086,7 +1093,7 @@ static void test_bulk_regions(spsc::pool_view<0, Policy>& q, void** slots_base, 
 
         force_state(q, slots_base, depth, kBufSz, head, tail);
 
-        const auto wr = q.claim_write();
+        const auto wr = q.claim_write(::spsc::unsafe);
         QCOMPARE(wr.total, q.free());
         QVERIFY(wr.total >= 1u);
 
@@ -1112,7 +1119,7 @@ static void test_bulk_regions(spsc::pool_view<0, Policy>& q, void** slots_base, 
 
         force_state(q, slots_base, depth, kBufSz, head, tail);
 
-        const auto rd = q.claim_read();
+        const auto rd = q.claim_read(::spsc::unsafe);
         QCOMPARE(rd.total, q.size());
         QVERIFY(rd.total >= 1u);
 
@@ -1385,7 +1392,7 @@ static void paranoid_random_fuzz(Q& q, std::uint32_t seed, int iters) {
             store_to_slot(p, b);
             QVERIFY(q.try_publish());
         } else {
-            auto wr = q.claim_write(1u);
+            auto wr = q.claim_write(::spsc::unsafe, 1u);
             QCOMPARE(wr.total, reg{1u});
             void* dst = wr.first.ptr[0];
             store_to_slot(dst, b);
@@ -1408,7 +1415,7 @@ static void paranoid_random_fuzz(Q& q, std::uint32_t seed, int iters) {
             QVERIFY(q.try_pop());
             ref.pop_front();
         } else if (mode == 1) {
-            auto rd = q.claim_read(1u);
+            auto rd = q.claim_read(::spsc::unsafe, 1u);
             QCOMPARE(rd.total, reg{1u});
             const void* p = rd.first.ptr[0];
             QVERIFY(p != nullptr);
@@ -1536,7 +1543,7 @@ static void test_two_thread_spsc_pool_view(Q& q,
             const reg max_batch = std::min<reg>(std::min<reg>(q.free(), 64u), remaining);
 
             if (max_batch != 0u) {
-                const auto wr = q.claim_write(max_batch);
+                const auto wr = q.claim_write(::spsc::unsafe, max_batch);
                 if (wr.total != 0u) {
                     reg s = seq;
 
@@ -1594,7 +1601,7 @@ static void test_two_thread_spsc_pool_view(Q& q,
             const reg max_batch = std::min<reg>(std::min<reg>(q.size(), 64u), remaining);
 
             if (max_batch != 0u) {
-                const auto rd = q.claim_read(max_batch);
+                const auto rd = q.claim_read(::spsc::unsafe, max_batch);
                 if (rd.total != 0u) {
                     reg s = expected;
 
@@ -1882,7 +1889,7 @@ static void test_null_slot_pointer_defense_static() {
     QVERIFY(q.empty());
 
     // Bulk claim exposes the nullptr to the caller.
-    const auto wr = q.claim_write(1u);
+    const auto wr = q.claim_write(::spsc::unsafe, 1u);
     QCOMPARE(wr.total, reg{1u});
     QCOMPARE(wr.first.count, reg{1u});
     QVERIFY(wr.first.ptr[0] == nullptr);
@@ -1913,7 +1920,7 @@ static void test_null_slot_pointer_defense_dynamic() {
     QVERIFY(!q.try_publish());
     QVERIFY(!q.try_publish(::spsc::unsafe, reg{1u}));
 
-    const auto wr = q.claim_write(1u);
+    const auto wr = q.claim_write(::spsc::unsafe, 1u);
     QCOMPARE(wr.total, reg{1u});
     QCOMPARE(wr.first.count, reg{1u});
     QVERIFY(wr.first.ptr[0] == nullptr);
@@ -2031,14 +2038,14 @@ static void test_regions_match_sizes(Q& q) {
 
     verify_invariants(q);
 
-    const auto wr = q.claim_write();
+    const auto wr = q.claim_write(::spsc::unsafe);
     QCOMPARE(wr.total, q.free());
     if (wr.total != 0u) {
         QCOMPARE(static_cast<reg>(wr.first.count), q.write_size());
         QCOMPARE(static_cast<reg>(wr.first.count + wr.second.count), wr.total);
     }
 
-    const auto rd = q.claim_read();
+    const auto rd = q.claim_read(::spsc::unsafe);
     QCOMPARE(rd.total, q.size());
     if (rd.total != 0u) {
         QCOMPARE(static_cast<reg>(rd.first.count), q.read_size());

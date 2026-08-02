@@ -113,6 +113,8 @@ Notes:
 
 ## What Is Here
 
+- [`SPSC_HARDENING_ROADMAP.md`](SPSC_HARDENING_ROADMAP.md): the active,
+  slice-by-slice contract, correctness, test, CI, and performance hardening plan.
 - `src/spsc/`: core SPSC library headers (`fifo`, `queue`, `typed_pool`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, etc.).
 - `src/tests/*_test.cpp`: paranoid test suites for each buffer type.
 - `spsc_test.pro`: Qt/qmake project file.

@@ -3454,6 +3454,24 @@ static void api_compile_smoke_all() {
 
     using CAFVPlain = spsc::carray_fifo_view<std::uint32_t, 8u, 4u, spsc::policy::P>;
 
+    static_assert(!::spsc::test::has_untagged_claim_write<AFVPlain>::value,
+                  "array_fifo_view bulk write claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_default_untagged_claim_write<AFVPlain>::value,
+                  "array_fifo_view default bulk write claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_untagged_claim_read<AFVPlain>::value,
+                  "array_fifo_view bulk read claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_default_untagged_claim_read<AFVPlain>::value,
+                  "array_fifo_view default bulk read claims must require spsc::unsafe");
+
+    static_assert(!::spsc::test::has_untagged_claim_write<CAFVPlain>::value,
+                  "carray_fifo_view bulk write claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_default_untagged_claim_write<CAFVPlain>::value,
+                  "carray_fifo_view default bulk write claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_untagged_claim_read<CAFVPlain>::value,
+                  "carray_fifo_view bulk read claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_default_untagged_claim_read<CAFVPlain>::value,
+                  "carray_fifo_view default bulk read claims must require spsc::unsafe");
+
     static_assert(std::is_same_v<typename AFPlain::snapshot_iterator, typename AFPlain::snapshot_traits::iterator>);
     static_assert(std::is_same_v<typename AFPlain::const_snapshot_iterator, typename AFPlain::snapshot_traits::const_iterator>);
     static_assert(std::is_same_v<typename AFPlain::counter_type, typename spsc::policy::P::counter_type>);

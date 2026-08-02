@@ -715,11 +715,6 @@ public:
     }
 
     [[nodiscard]] regions
-    claim_write(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        return claim_write(::spsc::unsafe, max_count);
-    }
-
-    [[nodiscard]] regions
     claim_read(const ::spsc::unsafe_t, const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
@@ -774,11 +769,6 @@ public:
 
         r.total = total;
         return r;
-    }
-
-    [[nodiscard]] regions
-    claim_read(const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
-        return claim_read(::spsc::unsafe, max_count);
     }
 
     // ------------------------------------------------------------------------------------------

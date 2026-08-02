@@ -413,7 +413,9 @@ auto snap = q.make_snapshot();
 q.consume_all();
 ```
 
-### `claim_write()`, `claim_read()`
+### `claim_write(unsafe, ...)`, `claim_read(unsafe, ...)`
+
+Raw bulk regions always require the explicit `spsc::unsafe` tag.
 
 ```cpp
 auto w = q.claim_write(spsc::unsafe, 4);

@@ -197,7 +197,7 @@ Use the same producer patterns as `fifo`, but remember that the storage lifetime
 ### Bulk And RAII Helpers
 
 - `claim_write(unsafe, max_count)`
-- `claim_read(unsafe, max_count)` and the convenience `claim_read(max_count)`
+- `claim_read(unsafe, max_count)`
 - `bulk_write_guard`, `bulk_read_guard`
 - `write_guard`, `read_guard`
 - `scoped_write()`, `scoped_write(max_count)`, `scoped_read()`, `scoped_read(max_count)`
@@ -330,7 +330,9 @@ for (const auto& item : snap) {
 q.consume(snap);
 ```
 
-### `claim_write()`, `claim_read()`
+### `claim_write(unsafe, ...)`, `claim_read(unsafe, ...)`
+
+Raw bulk regions always require the explicit `spsc::unsafe` tag.
 
 ```cpp
 auto w = q.claim_write(spsc::unsafe, 4);

@@ -16,6 +16,13 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 - Restored Qt shadow-build MOC/test runner layout so the dashboard resolves per-config runner executables reliably.
 
+### Removed
+
+- Removed the untagged `fifo_view` and `pool_view` bulk-region overloads. Raw
+  regions now consistently require `claim_write(spsc::unsafe, ...)` or
+  `claim_read(spsc::unsafe, ...)` across all containers. This is an intentional
+  source-breaking cleanup made before those convenience overloads had consumers.
+
 ## [1.0.0] - 2026-03-21
 
 First stable public release of the `spsc` container library.

@@ -33,6 +33,7 @@
 #  define SPSC_ASSERT(expr) do { if(!(expr)) { std::abort(); } } while(0)
 #endif
 
+#include "test_policy_matrix.hpp"
 #include "chunk.hpp"
 #include "chunk_fifo.hpp"
 
@@ -252,7 +253,15 @@ static void api_smoke_compile() {
     static_assert(std::is_move_constructible_v<CFVSR>);
     static_assert(std::is_move_constructible_v<CFVBSR>);
     static_assert(std::is_same_v<decltype(std::declval<CFPlain&>().claim_write(::spsc::unsafe)), typename CFPlain::regions>);
-    static_assert(std::is_same_v<decltype(std::declval<CFVPlain&>().claim_write()), typename CFVPlain::regions>);
+    static_assert(std::is_same_v<decltype(std::declval<CFVPlain&>().claim_write(::spsc::unsafe)), typename CFVPlain::regions>);
+    static_assert(!::spsc::test::has_untagged_claim_write<CFVPlain>::value,
+                  "chunk_fifo_view bulk write claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_default_untagged_claim_write<CFVPlain>::value,
+                  "chunk_fifo_view default bulk write claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_untagged_claim_read<CFVPlain>::value,
+                  "chunk_fifo_view bulk read claims must require spsc::unsafe");
+    static_assert(!::spsc::test::has_default_untagged_claim_read<CFVPlain>::value,
+                  "chunk_fifo_view default bulk read claims must require spsc::unsafe");
     static_assert(std::is_move_constructible_v<decltype(std::declval<CFPlain&>().scoped_write())>);
     static_assert(std::is_move_constructible_v<decltype(std::declval<CFVPlain&>().scoped_write())>);
     static_assert(std::is_same_v<typename CFPlain::snapshot_iterator, typename CFPlain::snapshot_traits::iterator>);
