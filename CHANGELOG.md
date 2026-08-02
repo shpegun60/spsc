@@ -57,6 +57,12 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   producer/consumer shadow caches. Endpoint operations retain their role-local
   lazy cache, so a third atomic observer does not race a shadow.
 - Restored Qt shadow-build MOC/test runner layout so the dashboard resolves per-config runner executables reliably.
+- Clean qmake verification now forces source-MOC generation for the large
+  `fifo_view` test translation unit, preserving Qt 6.4 clean-build coverage.
+- Dynamic `fifo` storage now preserves its actual member alignment, including
+  pointer alignment on 64-bit Clang targets.
+- The threaded `pool` stress test now compares semantic `Blob` contents rather
+  than unspecified tail padding.
 
 ### Removed
 

@@ -81,7 +81,7 @@ reproducible benchmark/CI matrix.
 | H4 | Container, policy, and concurrency documentation | H1-H3 | complete (2026-08-02) |
 | H5 | Counter-wrap and invariant tests | H2, H3 | complete (2026-08-02) |
 | H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | complete (2026-08-02) |
-| H7 | Clean builds, CI, and sanitizers | H5, H6 | in progress (2026-08-02) |
+| H7 | Clean builds, CI, and sanitizers | H5, H6 | complete (2026-08-02) |
 | H8 | Fused single-item hot path | H0, H3, H5-H7 | pending |
 | H9 | Shadow-aware bulk snapshot path | H8 | pending |
 | H10 | Alias and release decision | H8, H9 | pending |
@@ -588,7 +588,7 @@ Medium. Keep expected-failure targets isolated from the normal successful build.
 
 ## H7 - Clean Builds, CI, And Sanitizers
 
-Status: in progress
+Status: complete
 
 ### Goal
 
@@ -618,7 +618,7 @@ artifacts from affecting results.
 Medium infrastructure risk. Keep toolchain-specific exclusions documented and
 do not silently treat a skipped sanitizer or runtime job as a pass.
 
-### Local Verification (CI Pending)
+### Verification
 
 - A fresh temporary qmake build passed for C++17 Debug `shadow_on` and Release
   `shadow_heur`, each running the `fifo` suite. A separate fresh C++20 span
@@ -634,9 +634,12 @@ do not silently treat a skipped sanitizer or runtime job as a pass.
 - The standalone producer/consumer/observer stress passed locally, and the
   existing genuine MSVC x86 shadow-gate execution passed again for
   `SPSC_SHADOW_ALLOW_32BIT=0` and `=1`.
-- The workflow has not run yet because this H7 change set is not pushed;
-  status remains in progress until its Linux functional/sanitizer, ARM, and
-  Windows jobs report their results.
+- GitHub Actions run `30766194472` passed the clean GCC/Clang qmake matrix,
+  C++20 span targets, ASan/UBSan, TSan, genuine 32-bit shadow gates, AArch64
+  public-header smoke, Windows MinGW/MSVC header smoke, and the clean
+  out-of-source dashboard build. The run also caught and validated fixes for
+  Qt 6.4 source-MOC discovery in the large `fifo_view` test unit, dynamic FIFO
+  storage alignment on Clang, and padding-sensitive `pool` stress comparison.
 
 ## H8 - Fused Single-Item Hot Path
 
