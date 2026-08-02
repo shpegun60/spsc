@@ -52,7 +52,8 @@
 
 
 /* Optional: globally choose atomic default policy.
- * 0 = fastest single-core by default (Plain), 1 = Atomic by default.
+ * 0 = Plain for a single context or external synchronization,
+ * 1 = Atomic by default.
  */
 #ifndef SPSC_DEFAULT_POLICY_ATOMIC
 #  define SPSC_DEFAULT_POLICY_ATOMIC 0

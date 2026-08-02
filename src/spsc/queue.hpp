@@ -1525,7 +1525,9 @@ private:
 
 /**
  * fast_queue<T, Capacity>:
- * A pre-configured queue using Atomic counters and Cache-line padding.
+ * Legacy convenience alias selecting CA<>: cache-aligned metadata with the
+ * atomic RMW counter backend. The name is not a throughput claim; any alias
+ * retargeting is intentionally deferred to the documented compatibility work.
  */
 template <class T, reg Capacity = 0,
          typename Alloc = ::spsc::alloc::policy_default_alloc_t<

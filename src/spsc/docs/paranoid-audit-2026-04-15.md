@@ -1,5 +1,12 @@
 # Paranoid Audit: SPSC Base Layer And Containers
 
+> Historical snapshot. This audit predates the H1 raw-API cleanup, H2 metadata
+> layout revision, and H3 observer/cache split. Where it conflicts with the
+> current contract, use [Common Concepts](common-concepts.md),
+> [Concurrency and FreeRTOS](concurrency-and-freertos.md), and
+> [`SPSC_HARDENING_ROADMAP.md`](../../../SPSC_HARDENING_ROADMAP.md) as the
+> source of truth.
+
 Date: 2026-04-15
 
 Scope:

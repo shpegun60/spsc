@@ -24,7 +24,9 @@ spsc::queue<std::string, 256> static_q;
 spsc::queue<std::string, 0> dynamic_q{256};
 ```
 
-Even static `queue` allocates its storage so the lifetime model is consistent between static and dynamic variants.
+Even static `queue` allocates its storage so the lifetime model is consistent
+between static and dynamic variants. Static capacity fixes the ring geometry;
+it is not an allocation-free guarantee for this container.
 
 ## Basic Example
 
@@ -50,6 +52,9 @@ if (auto* slot = q.try_claim()) {
     q.publish();
 }
 ```
+
+`claim()` returns raw storage: construct `T` before publishing. Complete
+`claim -> construct -> publish` before starting another producer-side operation.
 
 This matters because a claimed write slot is **uninitialized raw storage** until you construct `T` there.
 

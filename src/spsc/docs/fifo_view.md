@@ -66,6 +66,10 @@ alignas(32) static Frame storage[16];
 spsc::fifo_view<Frame, 16, spsc::policy::CA<>> q{storage};
 ```
 
+`CA<>` aligns the queue's metadata, not `storage`. A view never reallocates or
+realigns caller-owned memory, so `Frame` and the backing array must already
+meet the alignment and DMA/cache requirements of the target.
+
 ### Reset While Keeping The Same Buffer
 
 ```cpp

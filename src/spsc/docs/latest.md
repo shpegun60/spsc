@@ -5,6 +5,9 @@
 This is **not** a FIFO.
 
 The producer publishes states over time, and the consumer sees only the newest committed slot.
+The backing ring is still bounded: producer progress can reach `full()`, and
+`latest` never lets the producer overwrite unread storage by moving the
+consumer tail.
 
 ## Mental Model
 
@@ -112,6 +115,11 @@ Use it when:
 - the producer updates very frequently
 - the consumer only cares about "fresh enough"
 - you want to keep slack near full instead of publishing every intermediate state
+
+`coalescing_publish()` can collapse intermediate newest-state updates, but it
+does not make the bounded ring unbounded. To preserve slack it may decline to
+advance head even before the ring is full; the producer can keep updating that
+unpublished slot until a later publish succeeds.
 
 ## API Groups
 

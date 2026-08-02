@@ -16,6 +16,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Changed
 
+- Documented exact SPSC endpoint ownership, same-side claim/front transaction
+  rules, atomic-observer cache traffic, `CA<>` versus `CFA<>`, allocation and
+  lifetime boundaries, bounded `latest` semantics, and the fact that external
+  views cannot realign caller-owned storage. `fast_*` names are now explicitly
+  documented as legacy aliases rather than throughput claims.
 - The SPSC benchmark now uses topology-aware physical-core affinity,
   longer paired alternating samples, median/standard-deviation summaries,
   CPU-relax retries rather than scheduler yields, endpoint CPU-time telemetry,

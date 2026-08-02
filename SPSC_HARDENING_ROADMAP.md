@@ -409,6 +409,8 @@ cached helpers separate so the migration can be reviewed mechanically.
 
 ## H4 - Container, Policy, And Concurrency Documentation
 
+Status: complete
+
 ### Goal
 
 Make the documented contract match the implementation exactly.
@@ -447,6 +449,29 @@ Make the documented contract match the implementation exactly.
 ### Risk And Rollback
 
 Low code risk. Documentation must land with the behavior it describes.
+
+### Verification Record
+
+- Added the role-ownership and same-side transaction contract to the common
+  documentation: producer `claim -> fill/construct -> publish`, consumer
+  `front -> process -> pop`, the atomic-only observer surface, and the stopped
+  management boundary.
+- Documented `CA<>` as the cache-aligned RMW backend and `CFA<>` as the
+  cache-aligned single-writer backend, without ranking either as more correct.
+  Public observer reads are now explicitly described as approximate and as
+  possible cross-core cache traffic.
+- Reconciled container guides with their actual allocation/lifetime behavior:
+  static capacity is not universally allocation-free; `fifo` uses live
+  assignment slots; `queue` manages lifetime and allocates even at static
+  capacity; `pool` and `typed_pool` allocate their slots; and `latest` remains
+  bounded even when coalescing.
+- Documented the external-storage boundary: `CacheAligned` affects queue
+  metadata and owning allocator hints, but views cannot realign caller memory;
+  DMA cache maintenance remains platform code. Marked the older paranoid audit
+  as historical where it conflicts with H1-H3 findings.
+- `git diff --check` passed, and a local-link scan over every changed Markdown
+  document resolved all relative links. Header changes are comments only; no
+  runtime code or generated hot path changed in this slice.
 
 ## H5 - Counter-Wrap And Invariant Tests
 

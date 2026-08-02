@@ -1565,9 +1565,9 @@ private:
 
 /**
  * fast_fifo<T, Capacity>:
- * A pre-configured fifo using Atomic counters and Cache-line padding
- * to avoid false sharing. This is the recommended default for
- * high-performance concurrent queues.
+ * Legacy convenience alias selecting CA<>: cache-aligned metadata with the
+ * atomic RMW counter backend. The name is not a throughput claim; any alias
+ * retargeting is intentionally deferred to the documented compatibility work.
  */
 template <class T, reg Capacity = 0,
          typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<

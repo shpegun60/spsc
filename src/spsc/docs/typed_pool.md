@@ -1,6 +1,7 @@
 # `spsc::typed_pool`
 
-`typed_pool<T, Capacity, Policy, Alloc>` is a typed pool of one-object slots.
+`typed_pool<T, Capacity, Policy, Alloc>` is an independent owning typed-slot
+container, not a `queue` alias.
 
 The ring stores `T*` pointers. Each pointer refers to storage for exactly one `T`.
 
@@ -9,6 +10,10 @@ It combines:
 - pool-like slot semantics
 - typed objects
 - optional zero-copy construction
+
+Its static capacity fixes the pointer-ring geometry, but each owned typed slot
+is allocated separately. It therefore has pool-style stable slot identity and
+queue-style destruction on consume, without implying allocation-free storage.
 
 ## When To Use It
 

@@ -57,7 +57,9 @@ or writable space.
 Do not use a public observation as a reservation or as a substitute for
 `try_push()` / `try_claim()` or `try_front()` / `try_pop()`. The endpoint
 operations retain their own role-local cache for the hot path; public queries
-intentionally do not modify that cache.
+intentionally do not modify that cache. They can still read both endpoint
+index cache lines, so a monitoring thread can create cache traffic even though
+it never touches an endpoint cache.
 
 `P`, `V`, `VV`, `CP`, `CV`, and `CVV` do **not** gain portable concurrent
 observer support from these methods. For those policies, an independent
@@ -91,16 +93,20 @@ This is a specialized embedded path.
 
 Use when:
 
-- you want the conservative general-purpose concurrent policy
+- you want the atomic backend whose increments use RMW operations
 - producer and consumer are different FreeRTOS tasks
-- you want to stay on the atomic family without extra tuning
+- you want a straightforward atomic family starting point
 
 ### `FA<>`
 
 Use when:
 
-- you want a lighter atomic path
-- you understand the single-writer assumptions of the fast-atomic backend
+- exactly one role writes each counter, as required by SPSC
+- you want the single-writer atomic backend
+
+`FA<>` increments with a relaxed load followed by a release store rather than
+an atomic RMW. That is correct under the normal SPSC ownership contract, but
+not when multiple writers touch one counter.
 
 ### `AA<>`
 
@@ -118,20 +124,27 @@ Use them when:
 
 - false sharing matters
 - metadata layout on cacheful hardware matters
-- you want the cache-aware default path
+- you want cache-aware metadata placement
+
+`CA<>` is cache-aligned `A<>`, so it retains the strict-RMW backend.
+`CFA<>` is cache-aligned `FA<>`, so it retains the single-writer backend.
+Neither is more correct for a valid SPSC queue: both require exactly one
+producer and one consumer; choose based on the target and measurements.
 
 ## 4. FreeRTOS Recommendations
 
 ### Task -> Task
 
-Recommended default:
+One strict-RMW configuration:
 
 ```cpp
 using Policy = spsc::policy::CA<>;
 spsc::fifo<Message, 128, Policy> q;
 ```
 
-This is the safest general-purpose starting point.
+This is a conventional strict-RMW starting point. `CFA<>` is also correct when
+the normal one-producer/one-consumer ownership rule holds; it is not a weaker
+correctness mode.
 
 Typical fits:
 
@@ -149,7 +162,7 @@ using Conservative = spsc::policy::CA<>;
 using EmbeddedTuned = spsc::policy::CV;
 ```
 
-Use `CA<>` when you want the more conservative default.  
+Use `CA<>` when you want the strict-RMW atomic backend.
 Use `CV` when you deliberately want the volatile ISR/task model on a known single-core target.
 
 Typical fits:
@@ -165,7 +178,9 @@ The same SPSC contract still applies:
 - one producer task
 - one consumer ISR
 
-Again, `A<>` / `CA<>` is the safe default unless you intentionally choose the volatile family.
+Again, `A<>` / `CA<>` is a straightforward strict-RMW starting point unless
+you intentionally choose the volatile family. `FA<>` / `CFA<>` remain valid
+when the exact SPSC single-writer rule holds.
 
 Typical fits:
 
@@ -546,7 +561,8 @@ Practical advice:
 
 - `pool` / `latest<void>` are strong fits for aligned raw DMA buffers
 - `fifo<T>` / `queue<T>` need explicit payload alignment when the payload itself must be line-aware
-- `*_view` containers require already-correct external storage
+- `*_view` containers require already-correct external storage; a
+  `CacheAligned` policy cannot realign or resize caller-owned backing memory
 - avoid sharing a maintained cache line with unrelated dirty data
 
 CMSIS by-address cache maintenance must cover whole cache lines. Keep that in
