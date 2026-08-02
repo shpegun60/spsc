@@ -46,7 +46,10 @@ trap cleanup EXIT
 function_body() {
     local symbol="$1"
     awk -v symbol="$symbol" '
-        $0 == symbol ":" { in_body = 1 }
+        # GCC emits a bare label, while Clang appends a source-symbol comment
+        # (`symbol: # @symbol`).  Match the label prefix rather than requiring
+        # the complete line to be exactly the label.
+        $0 ~ ("^[[:space:]]*" symbol ":") { in_body = 1 }
         in_body { print }
         in_body && $0 ~ /^[[:space:]]*\.size[[:space:]]/ { exit }
         in_body && $0 ~ /^[[:space:]]*\.seh_endproc/ { exit }
