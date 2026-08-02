@@ -689,9 +689,10 @@ fusion, even if they land in the same release phase.
   element rather than FIFO's oldest. No persistent index metadata was added;
   H2 owner-line and shadow layout therefore remains unchanged.
 - The public consumer probe is intentionally `try_front()` followed by
-  `pop()`. It now has two consumer-tail loads—one for each public operation.
-  Collapsing that further would require a new reservation/token contract and
-  is intentionally out of scope.
+  `pop()`. It now has two consumer-tail read/commit accesses—one for each
+  public operation. Clang may fold the final access into an in-place increment;
+  collapsing the two public-operation accesses further would require a new
+  reservation/token contract and is intentionally out of scope.
 - Added compiler-specific H8 assembly gates. Local GCC 15.2 (UCRT64) and MSVC
   19.50 both report `producer-head=1` and `consumer-tail=2`; GitHub Actions
   runs the same check for GCC, Clang, and MSVC.

@@ -84,13 +84,15 @@ fi
 producer_head_loads="$(printf '%s\n' "$producer_body" | grep -Eic \
     '^[[:space:]]*mov[a-z]*[[:space:]]+[[:alnum:]]+,[[:space:]]+(qword ptr)[[:space:]]*\[[[:alnum:]]+\]' || true)"
 
-# CFA's consumer-owned tail is at offset 128.  GCC emits `128[reg]`, while
-# Clang emits `[reg + 128]`; count memory *sources* only, excluding the final
-# release store.  The public front()+pop() probe therefore has two loads.
-consumer_tail_loads="$(printf '%s\n' "$consumer_body" | grep -Eic \
-    '^[[:space:]]*mov[a-z]*[[:space:]]+[[:alnum:]]+,[[:space:]]+(qword ptr)[[:space:]]*(128\[[[:alnum:]]+\]|\[[[:alnum:]]+[[:space:]]*\+[[:space:]]*128\])' || true)"
+# CFA's consumer-owned tail is at offset 128. GCC emits `128[reg]`, while
+# Clang emits `[reg + 128]`. Count a source MOV and a memory increment as
+# owner reads: Clang may fold pop's final owner read/commit into an in-place
+# `inc qword ptr [...]`, whereas GCC materializes it as a separate MOV.
+# The public front()+pop() probe therefore has two tail read/commit accesses.
+consumer_tail_reads="$(printf '%s\n' "$consumer_body" | grep -Eic \
+    '^[[:space:]]*((mov[a-z]*[[:space:]]+[[:alnum:]]+,[[:space:]]+(qword ptr)[[:space:]]*(128\[[[:alnum:]]+\]|\[[[:alnum:]]+[[:space:]]*\+[[:space:]]*128\]))|((inc|add)[a-z]*[[:space:]]+(qword ptr)[[:space:]]*(128\[[[:alnum:]]+\]|\[[[:alnum:]]+[[:space:]]*\+[[:space:]]*128\])))' || true)"
 
 require_count 1 "$producer_head_loads" "producer head load" "$producer_body"
-require_count 2 "$consumer_tail_loads" "consumer tail loads" "$consumer_body"
+require_count 2 "$consumer_tail_reads" "consumer tail read/commit accesses" "$consumer_body"
 
 echo "PASS: H8 hot-path assembly ($compiler): producer-head=1 consumer-tail=2"
