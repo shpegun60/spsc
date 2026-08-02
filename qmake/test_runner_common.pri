@@ -29,15 +29,15 @@ INCLUDEPATH += \
     $$PWD/../src/tests
 
 DESTDIR = $$OUT_PWD/../bin/$${BUILD_CONFIG_NAME}
-# Keep generated paths relative to the qmake output directory. Qt qmake emits
-# source-MOC rules with relative targets; absolute MOC_DIR values make a fresh
-# out-of-source build depend on a different absolute spelling and can skip MOC.
+# Keep generated files in the isolated qmake output directory.
 OBJECTS_DIR = .obj/$${BUILD_CONFIG_NAME}/$${TARGET}
 MOC_DIR = .moc/$${BUILD_CONFIG_NAME}/$${TARGET}
 RCC_DIR = .rcc/$${BUILD_CONFIG_NAME}/$${TARGET}
 UI_DIR = .ui/$${BUILD_CONFIG_NAME}/$${TARGET}
 
-INCLUDEPATH += $$MOC_DIR
+# Qt's moc.prf adds MOC_DIR as an output-directory include path.  Do not add
+# it here: rebasing its normalized relative spelling against $$PWD lets stale
+# source-tree MOC files leak into an out-of-source build.
 
 DEPENDPATH += \
     $$PWD/../src \

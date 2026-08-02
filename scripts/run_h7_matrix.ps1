@@ -116,6 +116,10 @@ try {
                     "QMAKE_CXX=$compilerPath", "QMAKE_LINK=$compilerPath"
                 ) -FailureMessage "qmake failed for $configurationToken/$variantName"
 
+                # Qt 6.4 can otherwise compile a source-MOC user before the
+                # generated file exists in a pristine parallel build.
+                Invoke-Checked -File $makePath -Arguments @('-f', 'Makefile', 'mocables') -FailureMessage "MOC generation failed for $configurationToken/$variantName"
+
                 $makeArguments = @('-f', 'Makefile')
                 if ([IO.Path]::GetFileName($makePath) -match '(^|-)make(\.exe)?$') {
                     $makeArguments += "-j$Jobs"
