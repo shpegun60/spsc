@@ -314,6 +314,19 @@ private:
         return static_cast<reg>(cap - 1u);
     }
 
+    template<class Counter>
+    [[nodiscard]] static RB_FORCEINLINE reg
+    rb_owner_load_(const Counter &counter) noexcept {
+        if constexpr (::spsc::cnt::counter_has_relaxed_load_v<Counter>) {
+            return static_cast<reg>(counter.load_relaxed());
+        } else {
+            // Third-party counter backends still need only the original
+            // store/load/add/inc surface. Their owner load remains correct,
+            // just not specially relaxed.
+            return static_cast<reg>(counter.load());
+        }
+    }
+
 
 public:
     using Base::capacity;
@@ -409,6 +422,72 @@ protected:
     RB_FORCEINLINE void swap_base(SPSCbase &other) noexcept;
 
 protected:
+    /* Immediate-use single-slot snapshots for endpoint hot paths.
+     *
+     * These are deliberately protected implementation details, not public
+     * reservation tokens. A derived container must use a snapshot only for
+     * the immediately following payload access and matching commit on the
+     * owning endpoint. The snapshot carries one owner counter value through
+     * availability, physical index calculation, and publication/retirement.
+     */
+    struct single_write_snapshot final {
+        reg owner{0u};
+        reg opposite{0u};
+        reg index{0u};
+        bool available{false};
+    };
+
+    struct single_read_snapshot final {
+        reg owner{0u};
+        reg opposite{0u};
+        reg index{0u};
+        bool available{false};
+    };
+
+    // Precondition-only endpoint operations (`push`, `front`, `pop`, ...)
+    // need the owner index and sometimes its physical slot, but they do not
+    // need to revalidate the opposite endpoint in release builds.  Keep that
+    // short path separate from the checked `try_*` snapshots above.
+    struct single_write_owner_snapshot final {
+        reg owner{0u};
+        reg index{0u};
+    };
+
+    struct single_read_owner_snapshot final {
+        reg owner{0u};
+        reg index{0u};
+    };
+
+    [[nodiscard]] RB_FORCEINLINE single_write_owner_snapshot
+    producer_single_owner_snapshot() const noexcept;
+
+    [[nodiscard]] RB_FORCEINLINE single_read_owner_snapshot
+    consumer_single_owner_snapshot() const noexcept;
+
+    [[nodiscard]] RB_FORCEINLINE single_write_snapshot
+    producer_single_snapshot() const noexcept;
+
+    [[nodiscard]] RB_FORCEINLINE single_read_snapshot
+    consumer_single_snapshot() const noexcept;
+
+    // `latest` selects the newest published element rather than the oldest
+    // FIFO element, so it intentionally asks for a fresh producer head.
+    [[nodiscard]] RB_FORCEINLINE single_read_snapshot
+    consumer_single_snapshot_fresh() const noexcept;
+
+    RB_FORCEINLINE void
+    producer_commit_single(const single_write_snapshot &) noexcept;
+
+    RB_FORCEINLINE void
+    consumer_commit_single(const single_read_snapshot &) noexcept;
+
+    RB_FORCEINLINE void
+    consumer_commit_from_snapshot(const single_read_snapshot &, reg) noexcept;
+
+    RB_FORCEINLINE void producer_commit_owner(reg) noexcept;
+    RB_FORCEINLINE void consumer_commit_owner(reg) noexcept;
+    RB_FORCEINLINE void consumer_commit_from_owner(reg, reg) noexcept;
+
     // Direct occupancy observations. These never read or write either shadow,
     // so containers may expose them safely as atomic observer queries.
     [[nodiscard]] RB_FORCEINLINE reg  size()  const noexcept;
@@ -477,6 +556,212 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::clear() noexcept {
         // clear() is non-concurrent by contract: safe to reset both.
         _indices.prod_shadow_tail() = 0u;
         _indices.cons_shadow_head() = 0u;
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_write_owner_snapshot
+SPSCbase<C, PolicyT>::producer_single_owner_snapshot() const noexcept {
+    single_write_owner_snapshot snapshot{};
+    const reg cap = capacity();
+
+    // The producer is the sole writer of head. Reading that owner value does
+    // not need to synchronize payload from the consumer, so use the relaxed
+    // form when the counter backend exposes one.
+    const reg h = rb_owner_load_(_indices.head_counter());
+    snapshot.owner = h;
+
+    if constexpr (C != 0) {
+        snapshot.index = static_cast<reg>(h & rb_mask_(cap));
+    } else if (RB_LIKELY(cap != 0u)) {
+        snapshot.index = static_cast<reg>(h & rb_mask_(cap));
+    }
+
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_read_owner_snapshot
+SPSCbase<C, PolicyT>::consumer_single_owner_snapshot() const noexcept {
+    single_read_owner_snapshot snapshot{};
+    const reg cap = capacity();
+
+    // The consumer is the sole writer of tail. As above, this owner read is
+    // relaxed whenever the backend provides that specialized operation.
+    const reg t = rb_owner_load_(_indices.tail_counter());
+    snapshot.owner = t;
+
+    if constexpr (C != 0) {
+        snapshot.index = static_cast<reg>(t & rb_mask_(cap));
+    } else if (RB_LIKELY(cap != 0u)) {
+        snapshot.index = static_cast<reg>(t & rb_mask_(cap));
+    }
+
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_write_snapshot
+SPSCbase<C, PolicyT>::producer_single_snapshot() const noexcept {
+    single_write_snapshot snapshot{};
+    const reg cap = capacity();
+    const auto owner_snapshot = producer_single_owner_snapshot();
+    const reg h = owner_snapshot.owner;
+    snapshot.owner = h;
+    snapshot.index = owner_snapshot.index;
+
+    if constexpr (C == 0) {
+        if (RB_UNLIKELY(cap == 0u)) {
+            return snapshot;
+        }
+    }
+
+    if constexpr (kUseShadow) {
+        reg t = _indices.prod_shadow_tail();
+        reg used = static_cast<reg>(h - t);
+
+        // The producer may trust its cached opposite index until the queue
+        // looks full. Refreshing tail is the acquire operation that observes
+        // consumer retirement and makes the slot reusable.
+        if (used >= cap) {
+            t = _indices.tail_counter().load();
+            _indices.prod_shadow_tail() = t;
+            used = static_cast<reg>(h - t);
+        }
+
+        snapshot.opposite = t;
+        snapshot.available = used < cap;
+    } else {
+        // Without a shadow, tail is the opposite endpoint's published index
+        // and must retain its counter-configured acquire/seq_cst load.
+        const reg t = _indices.tail_counter().load();
+        snapshot.opposite = t;
+        snapshot.available = static_cast<reg>(h - t) < cap;
+    }
+
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_read_snapshot
+SPSCbase<C, PolicyT>::consumer_single_snapshot() const noexcept {
+    single_read_snapshot snapshot{};
+    const reg cap = capacity();
+    const auto owner_snapshot = consumer_single_owner_snapshot();
+    const reg t = owner_snapshot.owner;
+    snapshot.owner = t;
+    snapshot.index = owner_snapshot.index;
+
+    if constexpr (C == 0) {
+        if (RB_UNLIKELY(cap == 0u)) {
+            return snapshot;
+        }
+    }
+
+    if constexpr (kUseShadow) {
+        reg h = _indices.cons_shadow_head();
+        reg available = static_cast<reg>(h - t);
+
+        // The consumer refreshes only when its cached producer index cannot
+        // prove a readable slot. This acquire observes producer publication
+        // before the payload is accessed.
+        if ((available == 0u) || (available > cap)) {
+            h = _indices.head_counter().load();
+            _indices.cons_shadow_head() = h;
+            available = static_cast<reg>(h - t);
+        }
+
+        snapshot.opposite = h;
+        snapshot.available = (available != 0u) && (available <= cap);
+    } else {
+        // Head belongs to the producer, so this remains the configured
+        // acquire/seq_cst load on every no-shadow path.
+        const reg h = _indices.head_counter().load();
+        const reg available = static_cast<reg>(h - t);
+        snapshot.opposite = h;
+        snapshot.available = (available != 0u) && (available <= cap);
+    }
+
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_read_snapshot
+SPSCbase<C, PolicyT>::consumer_single_snapshot_fresh() const noexcept {
+    single_read_snapshot snapshot{};
+    const reg cap = capacity();
+    const auto owner_snapshot = consumer_single_owner_snapshot();
+    const reg t = owner_snapshot.owner;
+    snapshot.owner = t;
+    snapshot.index = owner_snapshot.index;
+
+    if constexpr (C == 0) {
+        if (RB_UNLIKELY(cap == 0u)) {
+            return snapshot;
+        }
+    }
+
+    // This deliberately bypasses a valid-but-stale consumer shadow: callers
+    // use it only when choosing the newest producer-published element.
+    const reg h = _indices.head_counter().load();
+    if constexpr (kUseShadow) {
+        _indices.cons_shadow_head() = h;
+    }
+
+    snapshot.opposite = h;
+    const reg available = static_cast<reg>(h - t);
+    snapshot.available = (available != 0u) && (available <= cap);
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_single(
+    const single_write_snapshot &snapshot) noexcept {
+    producer_commit_owner(snapshot.owner);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_owner(
+    const reg owner) noexcept {
+    if constexpr (::spsc::cnt::counter_is_single_writer_v<Cnt>) {
+        // The endpoint's owner value came from a producer owner snapshot. A
+        // release/seq_cst store publishes the payload without a second owner
+        // load. Strict AtomicCounter intentionally keeps its RMW path below.
+        _indices.head_counter().store(static_cast<reg>(owner + 1u));
+    } else {
+        (void)owner;
+        _indices.head_counter().inc();
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_single(
+    const single_read_snapshot &snapshot) noexcept {
+    consumer_commit_from_snapshot(snapshot, 1u);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_from_snapshot(
+    const single_read_snapshot &snapshot, const reg count) noexcept {
+    consumer_commit_from_owner(snapshot.owner, count);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_owner(
+    const reg owner) noexcept {
+    consumer_commit_from_owner(owner, 1u);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_from_owner(
+    const reg owner, const reg count) noexcept {
+    if constexpr (::spsc::cnt::counter_is_single_writer_v<Cnt>) {
+        // A release/seq_cst store makes the retired slot visible to the
+        // producer while reusing the owner snapshot's counter value.
+        _indices.tail_counter().store(static_cast<reg>(owner + count));
+    } else {
+        (void)owner;
+        _indices.tail_counter().add(count);
     }
 }
 

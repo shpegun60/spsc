@@ -779,9 +779,11 @@ public:
         typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>
         >
     RB_FORCEINLINE void push(U&& v) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        storage_[Base::write_index()] = std::forward<U>(v);
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        storage_[snapshot.index] = std::forward<U>(v);
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     template<
@@ -789,9 +791,11 @@ public:
         typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>
         >
     [[nodiscard]] RB_FORCEINLINE bool try_push(U&& v) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
-        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
-        storage_[Base::write_index()] = std::forward<U>(v);
-        Base::increment_head();
+        if (RB_UNLIKELY(!is_valid())) { return false; }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        storage_[snapshot.index] = std::forward<U>(v);
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -802,11 +806,12 @@ public:
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
         ) {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        const size_type wi = Base::write_index();
-        reference slot = storage_[wi];
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        reference slot = storage_[snapshot.index];
         slot = value_type(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_owner(snapshot.owner);
         return slot;
     }
 
@@ -817,32 +822,40 @@ public:
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
         ) {
-        if (RB_UNLIKELY(producer_full_cached_())) { return nullptr; }
-        const size_type wi = Base::write_index();
-        reference slot = storage_[wi];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return nullptr; }
+        reference slot = storage_[snapshot.index];
         slot = value_type(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return &slot;
     }
 
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        return storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        return storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { return nullptr; }
-        return &storage_[Base::write_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::producer_single_snapshot();
+        return snapshot.available ? &storage_[snapshot.index] : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
-        Base::increment_head();
+        if (RB_UNLIKELY(!is_valid())) { return false; }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -863,33 +876,43 @@ public:
     // Consumer Operations
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
-        return storage_[Base::read_index()];
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
-        return storage_[Base::read_index()];
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return nullptr; }
-        return &storage_[Base::read_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? &storage_[snapshot.index] : nullptr;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return nullptr; }
-        return &storage_[Base::read_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? &storage_[snapshot.index] : nullptr;
     }
 
     RB_FORCEINLINE void pop() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
-        Base::increment_tail();
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        Base::consumer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return false; }
-        Base::increment_tail();
+        if (RB_UNLIKELY(!is_valid())) { return false; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        Base::consumer_commit_single(snapshot);
         return true;
     }
 

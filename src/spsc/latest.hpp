@@ -408,28 +408,35 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!producer_full_cached_());
-        return slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        return slots_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        return snapshot.available ? slots_[snapshot.index] : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!producer_full_cached_());
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        Base::producer_commit_single(snapshot);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -438,16 +445,20 @@ public:
      */
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
         const size_type cap = depth();
-        if (RB_UNLIKELY(!is_valid() || cap == 0u || producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid() || cap == 0u)) {
+            return false;
+        }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
         if (cap < 4u) {
-            Base::increment_head();
+            Base::producer_commit_single(snapshot);
             return true;
         }
         const size_type used = size();
         if (used <= (cap - 3u)) {
-            Base::increment_head();
+            Base::producer_commit_single(snapshot);
             return true;
         }
         return false;
@@ -458,22 +469,9 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            SPSC_ASSERT(used2 != 0u);
-            SPSC_ASSERT(used2 <= depth());
-            used = used2;
-        }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -483,22 +481,9 @@ public:
 
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            SPSC_ASSERT(used2 != 0u);
-            SPSC_ASSERT(used2 <= depth());
-            used = used2;
-        }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -511,19 +496,11 @@ public:
             return nullptr;
         }
 
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return nullptr;
-            }
-            used = used2;
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
         }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -536,19 +513,11 @@ public:
             return nullptr;
         }
 
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return nullptr;
-            }
-            used = used2;
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
         }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -558,29 +527,17 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type h = 0u;
-        if (cons_has_snapshot_) {
-            h = cons_head_snapshot_;
-        } else {
-            size_type used = static_cast<size_type>(Base::size());
-            if (RB_UNLIKELY(used == 0u)) {
-                const size_type h2    = static_cast<size_type>(Base::head());
-                const size_type used2 = static_cast<size_type>(h2 - t);
-                SPSC_ASSERT(used2 != 0u);
-                SPSC_ASSERT(used2 <= depth());
-                used = used2;
-            }
-            h = static_cast<size_type>(t + used);
-        }
-
-        const size_type delta = static_cast<size_type>(h - t);
+        const auto snapshot = cons_has_snapshot_
+            ? Base::consumer_single_snapshot()
+            : Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = cons_has_snapshot_
+            ? cons_head_snapshot_
+            : static_cast<size_type>(snapshot.opposite);
+        const size_type delta = static_cast<size_type>(h - snapshot.owner);
         SPSC_ASSERT(delta != 0u);
         SPSC_ASSERT(delta <= depth());
-        Base::advance_tail(delta);
+        Base::consumer_commit_from_snapshot(snapshot, delta);
 
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
@@ -591,33 +548,24 @@ public:
             return false;
         }
 
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        if (cons_has_snapshot_) {
-            const size_type h = cons_head_snapshot_;
-            const size_type delta = static_cast<size_type>(h - t);
-            if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
-                cons_head_snapshot_ = 0u;
-                cons_has_snapshot_  = false;
-                return false;
-            }
-            Base::advance_tail(delta);
+        const auto snapshot = cons_has_snapshot_
+            ? Base::consumer_single_snapshot()
+            : Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
             cons_head_snapshot_ = 0u;
             cons_has_snapshot_  = false;
-            return true;
+            return false;
         }
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return false;
-            }
-            used = used2;
+        const size_type h = cons_has_snapshot_
+            ? cons_head_snapshot_
+            : static_cast<size_type>(snapshot.opposite);
+        const size_type delta = static_cast<size_type>(h - snapshot.owner);
+        if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
+            cons_head_snapshot_ = 0u;
+            cons_has_snapshot_  = false;
+            return false;
         }
-
-        Base::advance_tail(used);
+        Base::consumer_commit_from_snapshot(snapshot, delta);
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
         return true;
@@ -650,19 +598,22 @@ public:
 
         SPSC_ASSERT(buffer_size() >= static_cast<size_type>(sizeof(V)));
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!producer_full_cached_());
-
-        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return;
         }
         if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(V)))) {
             return;
         }
 
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return;
+        }
         V tmp(std::forward<U>(src));
-        pointer dst = slots_[Base::write_index()];
+        pointer dst = slots_[snapshot.index];
         std::memcpy(dst, &tmp, sizeof(V));
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
     }
 
     template<class U>
@@ -678,14 +629,15 @@ public:
             return false;
         }
 
-        pointer dst = try_claim();
-        if (RB_UNLIKELY(!dst)) {
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
 
         V tmp(std::forward<U>(src));
+        pointer dst = slots_[snapshot.index];
         std::memcpy(dst, &tmp, sizeof(V));
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -1073,43 +1025,54 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!producer_full_cached_());
-        return storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        return storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return &storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        return snapshot.available ? &storage_[snapshot.index] : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!producer_full_cached_());
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        Base::producer_commit_single(snapshot);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
         const size_type cap = depth();
-        if (RB_UNLIKELY(!is_valid() || cap == 0u || producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid() || cap == 0u)) {
+            return false;
+        }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
         if (cap < 4u) {
-            Base::increment_head();
+            Base::producer_commit_single(snapshot);
             return true;
         }
         const size_type used = size();
         if (used <= (cap - 3u)) {
-            Base::increment_head();
+            Base::producer_commit_single(snapshot);
             return true;
         }
         return false;
@@ -1121,22 +1084,9 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            SPSC_ASSERT(used2 != 0u);
-            SPSC_ASSERT(used2 <= depth());
-            used = used2;
-        }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -1147,22 +1097,9 @@ public:
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            SPSC_ASSERT(used2 != 0u);
-            SPSC_ASSERT(used2 <= depth());
-            used = used2;
-        }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -1175,19 +1112,11 @@ public:
             return nullptr;
         }
 
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return nullptr;
-            }
-            used = used2;
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
         }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -1200,19 +1129,11 @@ public:
             return nullptr;
         }
 
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return nullptr;
-            }
-            used = used2;
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
         }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -1222,29 +1143,17 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type h = 0u;
-        if (cons_has_snapshot_) {
-            h = cons_head_snapshot_;
-        } else {
-            size_type used = static_cast<size_type>(Base::size());
-            if (RB_UNLIKELY(used == 0u)) {
-                const size_type h2    = static_cast<size_type>(Base::head());
-                const size_type used2 = static_cast<size_type>(h2 - t);
-                SPSC_ASSERT(used2 != 0u);
-                SPSC_ASSERT(used2 <= depth());
-                used = used2;
-            }
-            h = static_cast<size_type>(t + used);
-        }
-
-        const size_type delta = static_cast<size_type>(h - t);
+        const auto snapshot = cons_has_snapshot_
+            ? Base::consumer_single_snapshot()
+            : Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = cons_has_snapshot_
+            ? cons_head_snapshot_
+            : static_cast<size_type>(snapshot.opposite);
+        const size_type delta = static_cast<size_type>(h - snapshot.owner);
         SPSC_ASSERT(delta != 0u);
         SPSC_ASSERT(delta <= depth());
-        Base::advance_tail(delta);
+        Base::consumer_commit_from_snapshot(snapshot, delta);
 
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
@@ -1255,33 +1164,24 @@ public:
             return false;
         }
 
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        if (cons_has_snapshot_) {
-            const size_type h = cons_head_snapshot_;
-            const size_type delta = static_cast<size_type>(h - t);
-            if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
-                cons_head_snapshot_ = 0u;
-                cons_has_snapshot_  = false;
-                return false;
-            }
-            Base::advance_tail(delta);
+        const auto snapshot = cons_has_snapshot_
+            ? Base::consumer_single_snapshot()
+            : Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
             cons_head_snapshot_ = 0u;
             cons_has_snapshot_  = false;
-            return true;
+            return false;
         }
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return false;
-            }
-            used = used2;
+        const size_type h = cons_has_snapshot_
+            ? cons_head_snapshot_
+            : static_cast<size_type>(snapshot.opposite);
+        const size_type delta = static_cast<size_type>(h - snapshot.owner);
+        if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
+            cons_head_snapshot_ = 0u;
+            cons_has_snapshot_  = false;
+            return false;
         }
-
-        Base::advance_tail(used);
+        Base::consumer_commit_from_snapshot(snapshot, delta);
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
         return true;
@@ -1309,23 +1209,30 @@ public:
     template<class U>
     RB_FORCEINLINE void push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!producer_full_cached_());
-        if (RB_UNLIKELY(!is_valid() || producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return;
         }
-        reference slot = storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return;
+        }
+        reference slot = storage_[snapshot.index];
         slot = std::forward<U>(value);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
     }
 
     template<class U>
     [[nodiscard]] RB_FORCEINLINE bool try_push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
-        pointer slot = try_claim();
-        if (RB_UNLIKELY(!slot)) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        *slot = std::forward<U>(value);
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        storage_[snapshot.index] = std::forward<U>(value);
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -1334,9 +1241,12 @@ public:
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
         ) {
-        reference slot = claim();
+        SPSC_ASSERT(is_valid());
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        reference slot = storage_[snapshot.index];
         slot = value_type(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return slot;
     }
 
@@ -1345,12 +1255,16 @@ public:
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
         ) {
-        pointer slot = try_claim();
-        if (RB_UNLIKELY(!slot)) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
+        }
+        pointer slot = &storage_[snapshot.index];
         *slot = value_type(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return slot;
     }
 
@@ -1598,41 +1512,46 @@ public:
     [[nodiscard]] RB_FORCEINLINE size_type size() const noexcept { return static_cast<size_type>(Base::size()); }
 
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
-        SPSC_ASSERT(!producer_full_cached_());
-        return storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        return storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) {
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return nullptr;
         }
-        return &storage_[Base::write_index()];
+        return &storage_[snapshot.index];
     }
 
     RB_FORCEINLINE void publish() noexcept {
-        SPSC_ASSERT(!producer_full_cached_());
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        Base::producer_commit_single(snapshot);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) {
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) {
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
         if (Depth < 4u) {
-            Base::increment_head();
+            Base::producer_commit_single(snapshot);
             return true;
         }
         const size_type used = size();
         if (used <= (depth() - 3u)) {
-            Base::increment_head();
+            Base::producer_commit_single(snapshot);
             return true;
         }
         return false;
@@ -1641,22 +1560,9 @@ public:
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            SPSC_ASSERT(used2 != 0u);
-            SPSC_ASSERT(used2 <= depth());
-            used = used2;
-        }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -1667,22 +1573,9 @@ public:
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
         // "latest" is not FIFO: front() returns the newest published element.
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        // Use a validated "used" snapshot to avoid impossible head<tail ranges under atomic backends.
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            // size() can conservatively return 0 on an "impossible" snapshot (used > cap). Refresh head once.
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            SPSC_ASSERT(used2 != 0u);
-            SPSC_ASSERT(used2 <= depth());
-            used = used2;
-        }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -1691,19 +1584,11 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return nullptr;
-            }
-            used = used2;
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
         }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -1712,19 +1597,11 @@ public:
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return nullptr;
-            }
-            used = used2;
+        const auto snapshot = Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
         }
-
-        const size_type h = static_cast<size_type>(t + used);
+        const size_type h = static_cast<size_type>(snapshot.opposite);
         cons_head_snapshot_ = h;
         cons_has_snapshot_  = true;
 
@@ -1734,29 +1611,17 @@ public:
 
     RB_FORCEINLINE void pop() noexcept {
         SPSC_ASSERT(is_valid());
-        SPSC_ASSERT(!consumer_empty_cached_());
-
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        size_type h = 0u;
-        if (cons_has_snapshot_) {
-            h = cons_head_snapshot_;
-        } else {
-            size_type used = static_cast<size_type>(Base::size());
-            if (RB_UNLIKELY(used == 0u)) {
-                const size_type h2    = static_cast<size_type>(Base::head());
-                const size_type used2 = static_cast<size_type>(h2 - t);
-                SPSC_ASSERT(used2 != 0u);
-                SPSC_ASSERT(used2 <= depth());
-                used = used2;
-            }
-            h = static_cast<size_type>(t + used);
-        }
-
-        const size_type delta = static_cast<size_type>(h - t);
+        const auto snapshot = cons_has_snapshot_
+            ? Base::consumer_single_snapshot()
+            : Base::consumer_single_snapshot_fresh();
+        SPSC_ASSERT(snapshot.available);
+        const size_type h = cons_has_snapshot_
+            ? cons_head_snapshot_
+            : static_cast<size_type>(snapshot.opposite);
+        const size_type delta = static_cast<size_type>(h - snapshot.owner);
         SPSC_ASSERT(delta != 0u);
         SPSC_ASSERT(delta <= depth());
-        Base::advance_tail(delta);
+        Base::consumer_commit_from_snapshot(snapshot, delta);
 
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
@@ -1767,33 +1632,24 @@ public:
             return false;
         }
 
-        const size_type t = static_cast<size_type>(Base::tail());
-
-        if (cons_has_snapshot_) {
-            const size_type h = cons_head_snapshot_;
-            const size_type delta = static_cast<size_type>(h - t);
-            if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
-                cons_head_snapshot_ = 0u;
-                cons_has_snapshot_  = false;
-                return false;
-            }
-            Base::advance_tail(delta);
+        const auto snapshot = cons_has_snapshot_
+            ? Base::consumer_single_snapshot()
+            : Base::consumer_single_snapshot_fresh();
+        if (RB_UNLIKELY(!snapshot.available)) {
             cons_head_snapshot_ = 0u;
             cons_has_snapshot_  = false;
-            return true;
+            return false;
         }
-
-        size_type used = static_cast<size_type>(Base::size());
-        if (RB_UNLIKELY(used == 0u)) {
-            const size_type h2    = static_cast<size_type>(Base::head());
-            const size_type used2 = static_cast<size_type>(h2 - t);
-            if (RB_UNLIKELY(used2 == 0u) || RB_UNLIKELY(used2 > depth())) {
-                return false;
-            }
-            used = used2;
+        const size_type h = cons_has_snapshot_
+            ? cons_head_snapshot_
+            : static_cast<size_type>(snapshot.opposite);
+        const size_type delta = static_cast<size_type>(h - snapshot.owner);
+        if (RB_UNLIKELY(delta == 0u) || RB_UNLIKELY(delta > depth())) {
+            cons_head_snapshot_ = 0u;
+            cons_has_snapshot_  = false;
+            return false;
         }
-
-        Base::advance_tail(used);
+        Base::consumer_commit_from_snapshot(snapshot, delta);
         cons_head_snapshot_ = 0u;
         cons_has_snapshot_  = false;
         return true;
@@ -1813,19 +1669,21 @@ public:
 
     template<class U>
     RB_FORCEINLINE void push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
-        reference slot = claim();
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        reference slot = storage_[snapshot.index];
         slot = std::forward<U>(value);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
     }
 
     template<class U>
     [[nodiscard]] RB_FORCEINLINE bool try_push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
-        pointer slot = try_claim();
-        if (RB_UNLIKELY(!slot)) {
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
-        *slot = std::forward<U>(value);
-        Base::increment_head();
+        storage_[snapshot.index] = std::forward<U>(value);
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -1834,9 +1692,11 @@ public:
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
         ) {
-        reference slot = claim();
+        const auto snapshot = Base::producer_single_snapshot();
+        SPSC_ASSERT(snapshot.available);
+        reference slot = storage_[snapshot.index];
         slot = value_type(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return slot;
     }
 
@@ -1845,12 +1705,13 @@ public:
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
         ) {
-        pointer slot = try_claim();
-        if (RB_UNLIKELY(!slot)) {
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return nullptr;
         }
+        pointer slot = &storage_[snapshot.index];
         *slot = value_type(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return slot;
     }
 

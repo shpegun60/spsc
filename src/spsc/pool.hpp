@@ -595,34 +595,41 @@ public:
     template<class U>
     RB_FORCEINLINE void push(const U& v) noexcept {
         static_assert(std::is_trivially_copyable_v<U>, "[pool]: U must be trivially copyable");
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
         SPSC_ASSERT(sizeof(U) <= bufferSize_.load());
 
-        pointer dst = slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        pointer dst = slots_[snapshot.index];
         std::memcpy(dst, &v, sizeof(U));
-        Base::increment_head();
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     template<class U>
     [[nodiscard]] RB_FORCEINLINE bool try_push(const U& v) noexcept {
         static_assert(std::is_trivially_copyable_v<U>, "[pool]: U must be trivially copyable");
-        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
+        if (RB_UNLIKELY(!is_valid())) { return false; }
         if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { return false; }
 
-        pointer dst = slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        pointer dst = slots_[snapshot.index];
         std::memcpy(dst, &v, sizeof(U));
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        return slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        return slots_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { return nullptr; }
-        return slots_[Base::write_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::producer_single_snapshot();
+        return snapshot.available ? slots_[snapshot.index] : nullptr;
     }
 
     template<class U>
@@ -655,13 +662,17 @@ public:
 
 
     RB_FORCEINLINE void publish() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
-        Base::increment_head();
+        if (RB_UNLIKELY(!is_valid())) { return false; }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -691,6 +702,7 @@ public:
      * - Asserts !full().
      */
     RB_FORCEINLINE void push(const void* data, const size_type size) noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
 
         const size_type bufferSize = bufferSize_.load();
@@ -698,11 +710,12 @@ public:
         const size_type copy_n = (size < bufferSize) ? size : bufferSize;
         SPSC_ASSERT((copy_n == 0u) || (data != nullptr));
 
-        pointer dst = slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        pointer dst = slots_[snapshot.index];
         if (copy_n != 0u) {
             std::memcpy(dst, data, copy_n);
         }
-        Base::increment_head();
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     /*
@@ -711,18 +724,20 @@ public:
      * Returns false ONLY if the queue is full.
      */
     [[nodiscard]] RB_FORCEINLINE bool try_push(const void* data, const size_type size) noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
+        if (RB_UNLIKELY(!is_valid())) { return false; }
 
         const size_type bufferSize = bufferSize_.load();
         // Clamp copy size to buffer capacity (saturation)
         const size_type copy_n = (size < bufferSize) ? size : bufferSize;
         if (RB_UNLIKELY((copy_n != 0u) && (data == nullptr))) { return false; }
 
-        pointer dst = slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        pointer dst = slots_[snapshot.index];
         if (copy_n != 0u) {
             std::memcpy(dst, data, copy_n);
         }
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -730,23 +745,29 @@ public:
     // Consumer Operations
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
-        return slots_[Base::read_index()];
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return slots_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
-        return slots_[Base::read_index()];
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return slots_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return nullptr; }
-        return slots_[Base::read_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? slots_[snapshot.index] : nullptr;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return nullptr; }
-        return slots_[Base::read_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? slots_[snapshot.index] : nullptr;
     }
 
     template<class U>
@@ -760,13 +781,17 @@ public:
     }
 
     RB_FORCEINLINE void pop() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
-        Base::increment_tail();
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        Base::consumer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return false; }
-        Base::increment_tail();
+        if (RB_UNLIKELY(!is_valid())) { return false; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        Base::consumer_commit_single(snapshot);
         return true;
     }
 

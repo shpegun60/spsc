@@ -109,6 +109,42 @@ struct counter_is_atomic<T, std::void_t<decltype(rb_remove_cvref_t<T>::is_atomic
 template<class T>
 inline constexpr bool counter_is_atomic_v = counter_is_atomic<T>::value;
 
+/* Whether a counter explicitly supports a relaxed owner-side load.  This is
+ * optional for custom counter backends: SPSCbase falls back to load() when the
+ * method is absent, preserving the established counter-like contract.
+ */
+template<class T, class = void>
+struct counter_has_relaxed_load : std::false_type {};
+
+template<class T>
+struct counter_has_relaxed_load<
+    T,
+    std::void_t<decltype(std::declval<const rb_remove_cvref_t<T> &>()
+                             .load_relaxed())>> : std::true_type {};
+
+template<class T>
+inline constexpr bool counter_has_relaxed_load_v =
+    counter_has_relaxed_load<T>::value;
+
+/* A counter may opt in to publication from a value already read by its sole
+ * owner.  Strict AtomicCounter deliberately remains false: its add/inc API
+ * retains the documented RMW implementation.  Unknown custom counters default
+ * to false, so existing policies keep their current commit behavior.
+ */
+template<class T, class = void>
+struct counter_is_single_writer : std::false_type {};
+
+template<class T>
+struct counter_is_single_writer<
+    T,
+    std::void_t<decltype(rb_remove_cvref_t<T>::is_single_writer)>>
+    : std::bool_constant<
+          static_cast<bool>(rb_remove_cvref_t<T>::is_single_writer)> {};
+
+template<class T>
+inline constexpr bool counter_is_single_writer_v =
+    counter_is_single_writer<T>::value;
+
 /* Helper: integral but not bool */
 template<class T>
 inline constexpr bool is_integral_not_bool_v =
@@ -126,6 +162,7 @@ class PlainCounter {
 
 public:
     static constexpr bool is_atomic = false;
+    static constexpr bool is_single_writer = true;
     using value_type = U;
 
 private:
@@ -134,6 +171,9 @@ private:
 public:
     RB_FORCEINLINE constexpr void store(const U x) noexcept { v = x; }
     [[nodiscard]] RB_FORCEINLINE constexpr U load() const noexcept { return v; }
+    [[nodiscard]] RB_FORCEINLINE constexpr U load_relaxed() const noexcept {
+        return v;
+    }
     RB_FORCEINLINE constexpr void add(const U n) noexcept { v += n; }
     RB_FORCEINLINE constexpr void inc() noexcept { ++v; }
 };
@@ -149,6 +189,7 @@ class VolatileCounter {
 
 public:
     static constexpr bool is_atomic = false;
+    static constexpr bool is_single_writer = true;
     using value_type = U;
 
 private:
@@ -157,6 +198,7 @@ private:
 public:
     RB_FORCEINLINE void store(const U x) noexcept { v = x; }
     [[nodiscard]] RB_FORCEINLINE U load() const noexcept { return v; }
+    [[nodiscard]] RB_FORCEINLINE U load_relaxed() const noexcept { return v; }
     RB_FORCEINLINE void add(const U n) noexcept {
         // Single load + single store (no double-reads of volatile).
         const U cur = v;
@@ -292,6 +334,7 @@ class AtomicCounter {
 
 public:
     static constexpr bool is_atomic = true;
+    static constexpr bool is_single_writer = false;
     using value_type = U;
 
 private:
@@ -315,6 +358,9 @@ private:
 public:
     RB_FORCEINLINE void store(const U x) noexcept { v.store(x, Orders::store); }
     [[nodiscard]] RB_FORCEINLINE U load() const noexcept { return v.load(Orders::load); }
+    [[nodiscard]] RB_FORCEINLINE U load_relaxed() const noexcept {
+        return v.load(std::memory_order_relaxed);
+    }
     RB_FORCEINLINE void add(const U n) noexcept { (void)v.fetch_add(n, Orders::rmw); }
     RB_FORCEINLINE void inc() noexcept { (void)v.fetch_add(U{1}, Orders::rmw); }
 };
@@ -335,6 +381,7 @@ class FastAtomicCounter {
 
 public:
     static constexpr bool is_atomic = true;
+    static constexpr bool is_single_writer = true;
     using value_type = U;
 
 private:
@@ -356,6 +403,9 @@ private:
 public:
     RB_FORCEINLINE void store(const U x) noexcept { v.store(x, Orders::store); }
     [[nodiscard]] RB_FORCEINLINE U load() const noexcept { return v.load(Orders::load); }
+    [[nodiscard]] RB_FORCEINLINE U load_relaxed() const noexcept {
+        return v.load(std::memory_order_relaxed);
+    }
     RB_FORCEINLINE void add(const U n) noexcept {
         const U x = v.load(std::memory_order_relaxed) + n;
         v.store(x, Orders::store);
@@ -388,6 +438,7 @@ template<
 class alignas(AlignB) CachelineCounter {
 public:
     static constexpr bool is_atomic = counter_is_atomic_v<Counter>;
+    static constexpr bool is_single_writer = counter_is_single_writer_v<Counter>;
     using underlying_type = Counter;
     using value_type      = counter_value_t<Counter>;
 
@@ -408,6 +459,13 @@ public:
 
     RB_FORCEINLINE void store(const value_type x) noexcept { slot_.value.store(x); }
     [[nodiscard]] RB_FORCEINLINE value_type load() const noexcept { return slot_.value.load(); }
+    [[nodiscard]] RB_FORCEINLINE value_type load_relaxed() const noexcept {
+        if constexpr (counter_has_relaxed_load_v<underlying_type>) {
+            return slot_.value.load_relaxed();
+        } else {
+            return slot_.value.load();
+        }
+    }
     RB_FORCEINLINE void add(const value_type n) noexcept { slot_.value.add(n); }
     RB_FORCEINLINE void inc() noexcept { slot_.value.inc(); }
 

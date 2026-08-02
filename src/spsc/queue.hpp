@@ -610,70 +610,91 @@ public:
     template <class U, typename = std::enable_if_t<
                           std::is_constructible_v<value_type, U &&>>>
     RB_FORCEINLINE void push(U &&v) {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        new (&storage_[Base::write_index()]) value_type(std::forward<U>(v));
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        new (&storage_[snapshot.index]) value_type(std::forward<U>(v));
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     template <class U, typename = std::enable_if_t<
                           std::is_constructible_v<value_type, U &&>>>
     [[nodiscard]] RB_FORCEINLINE bool try_push(U &&v) {
-        if (RB_UNLIKELY(producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        new (&storage_[Base::write_index()]) value_type(std::forward<U>(v));
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        new (&storage_[snapshot.index]) value_type(std::forward<U>(v));
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
     template <class... Args, typename = std::enable_if_t<
                                 std::is_constructible_v<value_type, Args &&...>>>
     RB_FORCEINLINE reference emplace(Args &&...args) {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        pointer slot = &storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        pointer slot = &storage_[snapshot.index];
         slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
         slot = std::launder(slot);
-        Base::increment_head();
+        Base::producer_commit_owner(snapshot.owner);
         return *slot;
     }
 
     template <class... Args, typename = std::enable_if_t<
                                 std::is_constructible_v<value_type, Args &&...>>>
     [[nodiscard]] pointer try_emplace(Args &&...args) {
-        if (RB_UNLIKELY(producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        pointer slot = &storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
+        }
+        pointer slot = &storage_[snapshot.index];
         slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
         slot = std::launder(slot);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return slot;
     }
 
     // Returns pointer to raw storage. You MUST construct T in-place before
     // publish().
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        return &storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        return &storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return &storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        return snapshot.available ? &storage_[snapshot.index] : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -696,45 +717,57 @@ public:
     // Consumer Operations (Explicit Destructor)
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
-        return *slot_ptr(Base::read_index());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return *slot_ptr(snapshot.index);
     }
 
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
-        return *slot_ptr(Base::read_index());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return *slot_ptr(snapshot.index);
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return slot_ptr(Base::read_index());
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? slot_ptr(snapshot.index) : nullptr;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return slot_ptr(Base::read_index());
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? slot_ptr(snapshot.index) : nullptr;
     }
 
     RB_FORCEINLINE void pop() noexcept {
+        SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!consumer_empty_cached_());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
         if constexpr (!std::is_trivially_destructible_v<value_type>) {
-            detail::destroy_at(slot_ptr(Base::read_index()));
+            detail::destroy_at(slot_ptr(snapshot.index));
         }
-        Base::increment_tail();
+        Base::consumer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) {
+        if (RB_UNLIKELY(!is_valid())) {
+            return false;
+        }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
         if constexpr (!std::is_trivially_destructible_v<value_type>) {
-            detail::destroy_at(slot_ptr(Base::read_index()));
+            detail::destroy_at(slot_ptr(snapshot.index));
         }
-        Base::increment_tail();
+        Base::consumer_commit_single(snapshot);
         return true;
     }
 

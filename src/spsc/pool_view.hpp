@@ -746,38 +746,46 @@ public:
     template<class U>
     RB_FORCEINLINE void push(const U& v) noexcept {
         static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
-        if (RB_UNLIKELY(producer_full_cached_())) { SPSC_ASSERT(!producer_full_cached_()); return; }
+        if (RB_UNLIKELY(!is_valid())) { SPSC_ASSERT(is_valid()); return; }
         if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { SPSC_ASSERT(sizeof(U) <= bufferSize_.load()); return; }
 
-        pointer dst = slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { SPSC_ASSERT(snapshot.available); return; }
+        pointer dst = slots_[snapshot.index];
         if (RB_UNLIKELY(dst == nullptr)) { SPSC_ASSERT(dst != nullptr); return; }
         std::memcpy(dst, &v, sizeof(U));
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
     }
 
     template<class U>
     [[nodiscard]] RB_FORCEINLINE bool try_push(const U& v) noexcept {
         static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
-        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
+        if (RB_UNLIKELY(!is_valid())) { return false; }
         if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { return false; }
 
-        pointer dst = slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        pointer dst = slots_[snapshot.index];
         if (RB_UNLIKELY(dst == nullptr)) { return false; }
         std::memcpy(dst, &v, sizeof(U));
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { SPSC_ASSERT(!producer_full_cached_()); return nullptr; }
-        pointer p = slots_[Base::write_index()];
+        if (RB_UNLIKELY(!is_valid())) { SPSC_ASSERT(is_valid()); return nullptr; }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { SPSC_ASSERT(snapshot.available); return nullptr; }
+        pointer p = slots_[snapshot.index];
         if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
         return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { return nullptr; }
-        pointer p = slots_[Base::write_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return nullptr; }
+        pointer p = slots_[snapshot.index];
         if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
         return p;
     }
@@ -810,18 +818,22 @@ public:
     }
 
     RB_FORCEINLINE void publish() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { SPSC_ASSERT(!producer_full_cached_()); return; }
-        if (RB_UNLIKELY(slots_[Base::write_index()] == nullptr)) {
-            SPSC_ASSERT(slots_[Base::write_index()] != nullptr);
+        if (RB_UNLIKELY(!is_valid())) { SPSC_ASSERT(is_valid()); return; }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { SPSC_ASSERT(snapshot.available); return; }
+        if (RB_UNLIKELY(slots_[snapshot.index] == nullptr)) {
+            SPSC_ASSERT(slots_[snapshot.index] != nullptr);
             return;
         }
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
-        if (RB_UNLIKELY(slots_[Base::write_index()] == nullptr)) { return false; }
-        Base::increment_head();
+        if (RB_UNLIKELY(!is_valid())) { return false; }
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        if (RB_UNLIKELY(slots_[snapshot.index] == nullptr)) { return false; }
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -855,33 +867,37 @@ public:
     // Raw Buffer Push API
     // --------------------------------------------------------------------------
     RB_FORCEINLINE void push(const void* data, const size_type size) noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { SPSC_ASSERT(!producer_full_cached_()); return; }
+        if (RB_UNLIKELY(!is_valid())) { SPSC_ASSERT(is_valid()); return; }
 
         const size_type bufferSize = bufferSize_.load();
         const size_type copy_n = (size < bufferSize) ? size : bufferSize;
         if (RB_UNLIKELY((copy_n != 0u) && (data == nullptr))) { SPSC_ASSERT((copy_n == 0u) || (data != nullptr)); return; }
 
-        pointer dst = slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { SPSC_ASSERT(snapshot.available); return; }
+        pointer dst = slots_[snapshot.index];
         if (RB_UNLIKELY(dst == nullptr)) { SPSC_ASSERT(dst != nullptr); return; }
         if (copy_n != 0u) {
             std::memcpy(dst, data, copy_n);
         }
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_push(const void* data, const size_type size) noexcept {
-        if (RB_UNLIKELY(producer_full_cached_())) { return false; }
+        if (RB_UNLIKELY(!is_valid())) { return false; }
 
         const size_type bufferSize = bufferSize_.load();
         const size_type copy_n = (size < bufferSize) ? size : bufferSize;
         if (RB_UNLIKELY((copy_n != 0u) && (data == nullptr))) { return false; }
 
-        pointer dst = slots_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        pointer dst = slots_[snapshot.index];
         if (RB_UNLIKELY(dst == nullptr)) { return false; }
         if (copy_n != 0u) {
             std::memcpy(dst, data, copy_n);
         }
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -889,29 +905,37 @@ public:
     // Consumer Operations
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { SPSC_ASSERT(!consumer_empty_cached_()); return nullptr; }
-        pointer p = slots_[Base::read_index()];
+        if (RB_UNLIKELY(!is_valid())) { SPSC_ASSERT(is_valid()); return nullptr; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { SPSC_ASSERT(snapshot.available); return nullptr; }
+        pointer p = slots_[snapshot.index];
         if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
         return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { SPSC_ASSERT(!consumer_empty_cached_()); return nullptr; }
-        const_pointer p = slots_[Base::read_index()];
+        if (RB_UNLIKELY(!is_valid())) { SPSC_ASSERT(is_valid()); return nullptr; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { SPSC_ASSERT(snapshot.available); return nullptr; }
+        const_pointer p = slots_[snapshot.index];
         if (RB_UNLIKELY(p == nullptr)) { SPSC_ASSERT(p != nullptr); return nullptr; }
         return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return nullptr; }
-        pointer p = slots_[Base::read_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return nullptr; }
+        pointer p = slots_[snapshot.index];
         if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
         return p;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return nullptr; }
-        const_pointer p = slots_[Base::read_index()];
+        if (RB_UNLIKELY(!is_valid())) { return nullptr; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return nullptr; }
+        const_pointer p = slots_[snapshot.index];
         if (RB_UNLIKELY(p == nullptr)) { return nullptr; }
         return p;
     }
@@ -927,13 +951,17 @@ public:
     }
 
     RB_FORCEINLINE void pop() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { SPSC_ASSERT(!consumer_empty_cached_()); return; }
-        Base::increment_tail();
+        if (RB_UNLIKELY(!is_valid())) { SPSC_ASSERT(is_valid()); return; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { SPSC_ASSERT(snapshot.available); return; }
+        Base::consumer_commit_single(snapshot);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        if (RB_UNLIKELY(consumer_empty_cached_())) { return false; }
-        Base::increment_tail();
+        if (RB_UNLIKELY(!is_valid())) { return false; }
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) { return false; }
+        Base::consumer_commit_single(snapshot);
         return true;
     }
 

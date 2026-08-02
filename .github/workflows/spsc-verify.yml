@@ -90,6 +90,29 @@ jobs:
             --compiler clang++ \
             --sanitizer '${{ matrix.sanitizer }}'
 
+  linux-hotpath-assembly:
+    name: Linux ${{ matrix.compiler }} H8 hot-path assembly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: g++
+            package: g++
+          - compiler: clang++
+            package: clang
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ${{ matrix.package }}
+      - name: Verify owner-load count in the single-item FIFO probe
+        run: bash scripts/check_h8_hotpath_asm.sh --compiler '${{ matrix.compiler }}'
+
   linux-clean-dashboard:
     name: Linux clean qmake dashboard build
     runs-on: ubuntu-24.04
@@ -179,5 +202,26 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
           $command = "call `"$vcvars`" && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++20 /W4 /WX /EHsc /DSPSC_HAS_SPAN=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp"
+          cmd.exe /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  windows-msvc-hotpath-assembly:
+    name: Windows MSVC H8 hot-path assembly
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Verify owner-load count in the single-item FIFO probe
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
+          $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
+          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
