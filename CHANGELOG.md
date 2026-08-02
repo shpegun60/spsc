@@ -14,12 +14,20 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Changed
 
+- The SPSC benchmark now uses topology-aware physical-core affinity,
+  longer paired alternating samples, median/standard-deviation summaries,
+  CPU-relax retries rather than scheduler yields, endpoint CPU-time telemetry,
+  and optional cross-revision header selection for controlled comparisons.
 - qmake dashboard/test runner builds now target C++17 and keep Debug/Release binaries in separate `bin/debug` and `bin/release` directories.
 - qmake C++17 test runners force `SPSC_HAS_SPAN=0`; `std::span` helpers remain available only for C++20-capable builds that enable span support.
 - The default SPSC policy remains plain (`SPSC_DEFAULT_POLICY_ATOMIC=0`), while lock-free atomics remain required by default (`SPSC_REQUIRE_LOCK_FREE=1`).
 
 ### Fixed
 
+- Atomic SPSC index metadata and eligible shadows now live in separate
+  cache-line-aligned producer/consumer owner blocks. Non-atomic and
+  shadow-disabled storage stays compact, while atomic shadow eligibility is
+  unchanged.
 - Restored Qt shadow-build MOC/test runner layout so the dashboard resolves per-config runner executables reliably.
 
 ### Removed

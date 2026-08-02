@@ -51,6 +51,7 @@
 #endif
 
 #include "test_policy_matrix.hpp"
+#include "test_spsc_layout.hpp"
 
 #include "fifo.hpp"
 #include "array_fifo.hpp"
@@ -661,6 +662,102 @@ static void test_shadow_sync_regressions() {
     moved.pop();
     QVERIFY(moved.empty());
     verify_invariants(moved);
+}
+
+
+template<reg C, class Policy>
+static void verify_owner_line_layout(const spsc::SPSCbase<C, Policy>& base) {
+    using Probe = spsc::detail::spscbase_layout_probe<C, Policy>;
+    using Storage = typename Probe::storage_type;
+
+    constexpr bool kExpectedShadow = ::spsc::detail::rb_use_shadow_v<Policy>;
+    static_assert(Storage::kHasShadows == kExpectedShadow,
+                  "Index storage must preserve the shadow eligibility contract");
+    static_assert(!kExpectedShadow ||
+                      !std::is_standard_layout<typename Policy::counter_type>::value ||
+                      std::is_standard_layout<Storage>::value,
+                  "Standard-layout counters require standard-layout index storage");
+
+    const auto snapshot = Probe::inspect(base);
+    QVERIFY(snapshot.head != nullptr);
+    QVERIFY(snapshot.tail != nullptr);
+    QVERIFY(snapshot.shadows_enabled == kExpectedShadow);
+    QVERIFY(snapshot.counter_alignment != 0u);
+    QVERIFY((reinterpret_cast<std::uintptr_t>(snapshot.head) %
+             static_cast<std::uintptr_t>(snapshot.counter_alignment)) == 0u);
+    QVERIFY((reinterpret_cast<std::uintptr_t>(snapshot.tail) %
+             static_cast<std::uintptr_t>(snapshot.counter_alignment)) == 0u);
+
+    if constexpr (!kExpectedShadow) {
+        QVERIFY(snapshot.prod_shadow_tail == nullptr);
+        QVERIFY(snapshot.cons_shadow_head == nullptr);
+        QVERIFY(snapshot.producer_block == nullptr);
+        QVERIFY(snapshot.consumer_block == nullptr);
+        QCOMPARE(sizeof(Storage), sizeof(typename Policy::counter_type) * std::size_t{2u});
+        return;
+    }
+
+    QVERIFY(snapshot.prod_shadow_tail != nullptr);
+    QVERIFY(snapshot.cons_shadow_head != nullptr);
+    QVERIFY(snapshot.producer_block != nullptr);
+    QVERIFY(snapshot.consumer_block != nullptr);
+    QVERIFY((reinterpret_cast<std::uintptr_t>(snapshot.producer_block) %
+             static_cast<std::uintptr_t>(SPSC_CACHELINE_BYTES)) == 0u);
+    QVERIFY((reinterpret_cast<std::uintptr_t>(snapshot.consumer_block) %
+             static_cast<std::uintptr_t>(SPSC_CACHELINE_BYTES)) == 0u);
+    QVERIFY((snapshot.producer_block_bytes % SPSC_CACHELINE_BYTES) == 0u);
+    QVERIFY((snapshot.consumer_block_bytes % SPSC_CACHELINE_BYTES) == 0u);
+
+    using spsc::test_layout::address_range_of;
+    using spsc::test_layout::ranges_share_cache_line;
+
+    const auto head = address_range_of(snapshot.head, snapshot.counter_bytes);
+    const auto tail = address_range_of(snapshot.tail, snapshot.counter_bytes);
+    const auto prod_shadow = address_range_of(snapshot.prod_shadow_tail, sizeof(reg));
+    const auto cons_shadow = address_range_of(snapshot.cons_shadow_head, sizeof(reg));
+    const auto producer_block =
+        address_range_of(snapshot.producer_block, snapshot.producer_block_bytes);
+    const auto consumer_block =
+        address_range_of(snapshot.consumer_block, snapshot.consumer_block_bytes);
+
+    // Opposite endpoints must not write any common configured cache line.
+    QVERIFY(!ranges_share_cache_line(producer_block, consumer_block));
+    QVERIFY(!ranges_share_cache_line(head, tail));
+    QVERIFY(!ranges_share_cache_line(head, cons_shadow));
+    QVERIFY(!ranges_share_cache_line(prod_shadow, tail));
+    QVERIFY(!ranges_share_cache_line(prod_shadow, cons_shadow));
+}
+
+template<class Policy>
+static void verify_owner_line_layout_static_and_dynamic() {
+    using StaticSubject = spsc::test_layout::layout_subject<64u, Policy>;
+    using DynamicSubject = spsc::test_layout::layout_subject<0u, Policy>;
+
+    StaticSubject fixed{};
+    verify_owner_line_layout<64u, Policy>(fixed);
+
+    DynamicSubject dynamic{64u};
+    verify_owner_line_layout<0u, Policy>(dynamic);
+}
+
+static void owner_line_layout_suite() {
+    // Non-atomic policies stay compact and shadow-free.
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::P>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::V>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::VV>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CP>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CV>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CVV>();
+
+    // Every atomic backend retains shadows when the global/width gates allow.
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::A<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::FA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::AA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CFA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CAA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::test_layout::subcacheline_atomic_policy>();
+    verify_owner_line_layout_static_and_dynamic<spsc::test_layout::over_aligned_atomic_policy>();
 }
 
 
@@ -3755,6 +3852,8 @@ private slots:
         SPSC_TEST_VERIFY_BUILD_CONFIG("fifo");
         api_compile_smoke_all();
     }
+
+    void owner_line_layout() { owner_line_layout_suite(); }
 
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }

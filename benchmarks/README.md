@@ -34,8 +34,14 @@ process-local override (it does not change the machine policy):
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_spsc_baseline.ps1
 ```
 
-The runner uses the selected `g++` compiler, emits a release-oriented binary,
-pins producer and consumer to logical CPUs `0,1` when possible, and writes:
+The runner uses the selected `g++` compiler and emits a release-oriented
+binary. On Windows it asks the benchmark to choose two distinct physical cores,
+preferring P-cores on a hybrid host (rather than sibling logical CPUs); an
+explicit `-ProducerCpu/-ConsumerCpu` pair remains available. The manifest
+records the requested and resolved pair plus the active base power scheme and
+Windows performance overlay. The default capture
+uses 20,000,000 transfers, nine measured samples, and two warm-ups per case.
+It writes:
 
 - `benchmarks/results/<timestamp>-<sha>.jsonl` — raw samples and summaries;
 - `benchmarks/results/<timestamp>-<sha>.manifest.json` — compiler, flags, CPU,
@@ -47,10 +53,11 @@ pins producer and consumer to logical CPUs `0,1` when possible, and writes:
 Useful overrides:
 
 ```powershell
-.\scripts\run_spsc_baseline.ps1 -Items 5000000 -Samples 7 -Capacity 1024
+.\scripts\run_spsc_baseline.ps1 -Items 50000000 -Samples 9 -Warmup 3 -Capacity 1024
 .\scripts\run_spsc_baseline.ps1 -Suite queue -ProducerCpu 2 -ConsumerCpu 3
 .\scripts\run_spsc_baseline.ps1 -NoAffinity
 .\scripts\run_spsc_baseline.ps1 -RequireClean
+.\scripts\run_spsc_baseline.ps1 -Suite queue -LibraryRoot C:\tmp\spsc-h0
 ```
 
 Supported static capacities are `64`, `256`, `1024`, and `4096`. The runner
@@ -93,17 +100,40 @@ atomic policy families in the metadata record.
 Every raw sample verifies delivered sequence order, item count, and checksum.
 A failed verification marks the sample and its summary as invalid.
 
+Transient full/empty retries use a CPU-relax instruction (`PAUSE` on x86), not
+`std::this_thread::yield()`. The queues can naturally observe different retry
+counts; periodically yielding would turn that difference into an uncontrolled
+Windows scheduler measurement rather than a queue measurement.
+
+For the direct `queue<CFA>` versus Rigtorp comparison, each measured pair is
+run in alternating order. The JSONL samples carry `pair_index` and
+`order_in_pair`, followed by a `paired_summary` whose rate ratio is
+`Rigtorp / spsc::queue<CFA>`. This prevents the first implementation from
+always inheriting a different thermal or scheduler state.
+
 ## Result Format
 
 The JSONL file contains one `metadata` record, one `sample` record per measured
-run, and a `summary` record for each implementation/policy/workload tuple.
-Throughput is named `transfers_per_second`: one successfully delivered item is
-one transfer, not two endpoint operations.
+run, a `summary` record for each implementation/policy/workload tuple, and a
+`paired_summary` for queue/Rigtorp cases. Summaries include median, mean,
+sample standard deviation, minimum, and maximum; use the median and paired
+ratio for comparison, not a short-run arithmetic mean. Throughput is named
+`transfers_per_second`: one successfully delivered item is one transfer, not
+two endpoint operations.
+
+Windows samples also record endpoint CPU time. It is diagnostic telemetry (its
+clock is quantized on some Windows installations), useful for detecting a run
+that became a scheduling experiment rather than proof of an exact CPU-time
+ratio.
 
 The manifest deliberately records dirty-worktree state. A retained baseline
 should normally be generated after committing the relevant source changes; a
 dirty manifest is diagnostic evidence, not a release-quality reference.
 `-RequireClean` turns that recommendation into an enforced capture precondition.
+
+`-LibraryRoot` keeps the current checkout's harness but compiles it against a
+different checked-out library revision. It is intended for controlled H0/H2
+comparisons; the manifest records both the library and harness worktrees.
 
 H0 records container sizes and alignments. Private index offsets are not made
 public merely for benchmarking; H2's friend-only layout probe will record the

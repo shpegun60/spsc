@@ -53,6 +53,7 @@ HEADERS += \
     ../macro.h \
     ../src/tests/test_config.hpp \
     ../src/tests/test_build_config.hpp \
+    ../src/tests/test_spsc_layout.hpp \
     ../src/tests/buffer_pool_test.h \
     ../src/tests/chunk_test.h \
     ../src/tests/queue_test.h \

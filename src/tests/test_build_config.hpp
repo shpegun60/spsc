@@ -71,6 +71,12 @@ inline constexpr bool kActualAtomicShadow =
 inline constexpr bool kActualCachedShadow =
     shadow_enabled_for_atomic_backend(kActualEnableShadowIndices, kActualShadowAllow32Bit);
 
+// This early header must not include SPSCbase: test TUs establish SPSC_ASSERT
+// before including library headers. test_spsc_layout.hpp verifies the actual
+// policy traits after that setup; this retains the qmake macro-gate invariant.
+static_assert(kActualAtomicShadow == kActualCachedShadow,
+              "A<> and CA<> must have identical shadow eligibility in every test variant");
+
 inline constexpr bool kExpectedAtomicShadow =
     shadow_enabled_for_atomic_backend(kExpectedEnableShadowIndices, kExpectedShadowAllow32Bit);
 

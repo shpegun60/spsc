@@ -76,7 +76,7 @@ reproducible benchmark/CI matrix.
 | --- | --- | --- | --- |
 | H1 | Unsafe bulk API consistency | none | complete (2026-08-02) |
 | H0 | Reproducible baseline and benchmark harness | none | complete (2026-08-02) |
-| H2 | Atomic shadow storage and owner-line layout | H0 | pending |
+| H2 | Atomic shadow storage and owner-line layout | H0 | complete (2026-08-02) |
 | H3 | Role-safe public introspection | H0, H2 | pending |
 | H4 | Container, policy, and concurrency documentation | H1-H3 | pending |
 | H5 | Counter-wrap and invariant tests | H2, H3 | pending |
@@ -191,25 +191,25 @@ Low. This slice adds measurement infrastructure and does not change the library.
   `scripts/run_spsc_baseline.ps1`, JSONL/manifest/assembly capture, and the
   pinned `rigtorp/SPSCQueue` v1.1 gitlink
   `565a5149d54930463d58cb0f69b978d439555e66`.
-- A full default capture on 2026-08-02 produced one metadata record, 60 raw
-  samples, and 12 summaries; all checksums and sequence checks passed and both
-  requested CPU affinities were applied for all samples. The captured manifest
-  intentionally marks the then-dirty worktree; `-RequireClean` is available
-  for a release-quality recapture after committing the exact source state.
-- On that capture (`i9-14900HX`, GCC 15.2, 2,000,000 transfers/sample,
-  five measured samples plus one warm-up, capacity 1024, CPUs `0,1`), the
-  like-for-like lifetime-managed queue comparison was:
-
-  | Workload | `spsc::queue<CFA>` | Rigtorp v1.1 | Rigtorp delta |
-  | --- | ---: | ---: | ---: |
-  | steady | 94.8 M transfers/s | 115.2 M transfers/s | +21.5% |
-  | forced empty/full boundary | 189.6 M transfers/s | 228.8 M transfers/s | +20.7% |
-
-  This is a machine-specific pre-H2 baseline, not a general library ranking.
-  Rigtorp's steady samples also varied more widely (79.8-128.9 M) than this
-  queue's samples (91.3-97.4 M); both comparison summaries verified all items.
-- GCC 15.2 C++17 strict smoke for the benchmark and hot-path probe passed with
-  `-Wall -Wextra -Werror -pedantic-errors`.
+- The initial short capture (2,000,000 transfers, five samples, CPUs `0,1`)
+  is retained only as diagnostic history. It used sibling logical CPUs and a
+  retry loop which periodically called `std::this_thread::yield()`, so its
+  throughput table is not a valid H0 performance reference.
+- The harness was hardened during H2 validation: defaults are now 20,000,000
+  transfers, nine samples, and two warm-ups; Windows `auto` affinity chooses
+  two distinct physical cores and prefers P-cores on a hybrid host; queue/Rigtorp samples are paired in alternating
+  order; raw results record median, standard deviation, endpoint CPU time, and
+  the resolved affinity; the manifest records the Windows base plan and
+  performance overlay; retries use CPU-relax rather than scheduler yield;
+  and `-LibraryRoot` supports an H0/H2 build comparison using one harness.
+- The H2 -> H0 -> H2 control sequence still showed host-state movement larger
+  than a layout-only change. The active Windows Balanced power plan and
+  scheduler/thermal state are therefore recorded as an unresolved external
+  variable, not misreported as a library gain or regression. A release-quality
+  cross-version result needs a controlled performance power plan/idle host and
+  paired interleaving of the two revision executables.
+- GCC 15.2 strict benchmark and hot-path checks passed in C++17 and C++20 with
+  shadows both off and on, using `-Wall -Wextra -Werror -pedantic-errors`.
 - Existing SPSC regression executables passed: 27/27 Debug and 27/27 Release
   suite-runs across `shadow_off`, `shadow_on`, and `shadow_heur`.
 
@@ -276,6 +276,60 @@ Medium. This intentionally changes atomic object layout, size, and performance,
 but does not change which policies are shadow-eligible. Roll back the unified
 index-storage representation as one unit if a supported compiler violates the
 tested owner-line properties.
+
+### Verification Record
+
+- Replaced the old split shadow base plus naked index members with direct
+  `rb_index_storage<Cnt, kUseShadow>` storage. The no-shadow specialization is
+  exactly two counters; the shadow specialization stores producer-owned
+  `head`/`prod_shadow_tail` and consumer-owned `tail`/`cons_shadow_head` in
+  separate cache-line-sized owner blocks.
+- Eligibility is unchanged: all atomic built-ins (`A`, `FA`, `AA`, `CA`,
+  `CFA`, `CAA`) and custom atomic policies retain shadows when the global and
+  width gates allow them; `P`, `V`, `VV`, `CP`, `CV`, and `CVV` never allocate
+  shadow storage. `CAlign` does not participate in that decision.
+- Added a friend-only layout probe in `src/tests/test_spsc_layout.hpp`; no
+  public base-class state or test-only production macro was added. The FIFO
+  layout test covers static and dynamic capacity for the six non-atomic and six
+  built-in atomic policies, an atomic `CacheAligned` policy with sub-cacheline
+  `CAlign`, and an over-aligned custom atomic counter. It checks real field and
+  owner-block addresses, configured cache-line separation, block size, and
+  counter alignment. `test_build_config.hpp` also keeps the early qmake
+  `A<>`/`CA<>` gate invariant explicit without changing test assertion setup.
+- Final validation: all six qmake runners rebuilt; 54/54 Debug/Release suite
+  runs passed across `shadow_off`, `shadow_on`, and `shadow_heur`. The focused
+  owner-line test passed in all six configurations. GCC 15.2 strict syntax
+  checks passed 12/12: C++17/C++20 × shadows off/on × benchmark, hot-path, and
+  layout-probe translation units with `-Wall -Wextra -Werror -pedantic-errors`.
+- Object layout on the benchmark host changed as intended. `queue` with
+  `A`/`FA`/`AA` grew from 192 B to 256 B; `queue` with `CA`/`CFA`/`CAA` stayed
+  384 B. The measured `fifo` objects stayed 8320 B (`A`/`FA`/`AA`) and 8448 B
+  (`CA`/`CFA`/`CAA`), all aligned to 64 B. These are recorded compiler-specific
+  observations, not a portable ABI promise.
+- A controlled H0 -> H2 -> H0 -> H2 check used the hardened harness on the
+  i9-14900HX/GCC 15.2 host: 30,000,000 transfers, 11 measured pairs, three
+  warm-ups, capacity 1024, topology-selected CPUs `0,2`, and Windows Max
+  Performance Overlay `ded574b5-45a0-4f42-8737-46345c09c238` over the Balanced
+  base scheme. The stable adjacent H0/H2 series was:
+
+  | Workload | H0 `spsc::queue<CFA>` median | H2 median | H2 delta | Rigtorp/SPSC paired ratio H0 / H2 |
+  | --- | ---: | ---: | ---: | ---: |
+  | steady | 258.8 M/s | 261.3 M/s | +1.0% | 0.916 / 0.962 |
+  | forced empty/full boundary | 263.3 M/s | 256.9 M/s | -2.4% | 0.636 / 0.660 |
+
+  Both deltas are within the 4-10% steady and 2-5% boundary sample variation;
+  H2 therefore has no measured throughput regression or gain on this host. An
+  intervening run in which both SPSC and unchanged Rigtorp slowed by roughly
+  6x was excluded as host interference, then immediately followed by the
+  stable H0/H2 pair above. The earlier short/yield-based captures remain
+  diagnostic history only, not release evidence or a general library ranking.
+- The generated GCC 15.2 hot-path probe confirms that H2 changes index-member
+  displacements and owner-line geometry, not the producer/consumer control
+  flow: the producer still reloads its owner head and the consumer still
+  reloads its owner tail. Eliminating those redundant relaxed owner loads is
+  explicitly H8's job; it must carry one owner snapshot through availability,
+  address calculation, and release publication without weakening opposite-side
+  acquire semantics.
 
 ## H3 - Role-Safe Public Introspection
 

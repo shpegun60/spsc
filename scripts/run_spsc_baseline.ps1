@@ -1,13 +1,13 @@
 [CmdletBinding()]
 param(
     [ValidateRange(1, 9223372036854775807)]
-    [UInt64]$Items = 2000000,
+    [UInt64]$Items = 20000000,
 
     [ValidateRange(1, 1000)]
-    [int]$Samples = 5,
+    [int]$Samples = 9,
 
     [ValidateRange(0, 1000)]
-    [int]$Warmup = 1,
+    [int]$Warmup = 2,
 
     [ValidateSet(64, 256, 1024, 4096)]
     [int]$Capacity = 1024,
@@ -16,6 +16,10 @@ param(
     [string]$Suite = 'all',
 
     [string]$Compiler = 'g++',
+
+    # Keep the current checkout's benchmark harness while compiling it against
+    # another checked-out library revision for an A/B comparison.
+    [string]$LibraryRoot = '',
 
     [int]$ProducerCpu = -1,
     [int]$ConsumerCpu = -1,
@@ -39,18 +43,27 @@ function Invoke-Checked {
     }
 }
 
-$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$benchDir = Join-Path $repoRoot 'benchmarks'
+$harnessRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+if ([string]::IsNullOrWhiteSpace($LibraryRoot)) {
+    $libraryRoot = $harnessRoot
+} else {
+    if (-not (Test-Path -LiteralPath $LibraryRoot -PathType Container)) {
+        throw "LibraryRoot does not exist: $LibraryRoot"
+    }
+    $libraryRoot = [IO.Path]::GetFullPath($LibraryRoot)
+}
+
+$benchDir = Join-Path $harnessRoot 'benchmarks'
 $sourcePath = Join-Path $benchDir 'spsc_bench.cpp'
 $probePath = Join-Path $benchDir 'hotpath_probe.cpp'
-$rigtorpHeader = Join-Path $repoRoot 'third_party\rigtorp_spscqueue\include\rigtorp\SPSCQueue.h'
+$rigtorpHeader = Join-Path $libraryRoot 'third_party\rigtorp_spscqueue\include\rigtorp\SPSCQueue.h'
 $rigtorpExpectedCommit = '565a5149d54930463d58cb0f69b978d439555e66'
 $buildDir = Join-Path $benchDir '.build'
 $resultsDir = Join-Path $benchDir 'results'
 
 if (-not (Test-Path -LiteralPath $rigtorpHeader)) {
     Invoke-Checked -File 'git' -Arguments @(
-        '-C', $repoRoot, 'submodule', 'update', '--init', '--recursive',
+        '-C', $libraryRoot, 'submodule', 'update', '--init', '--recursive',
         '--', 'third_party/rigtorp_spscqueue'
     ) -FailureMessage 'Unable to initialize the pinned Rigtorp submodule'
 }
@@ -60,30 +73,38 @@ $compilerPath = $compilerCommand.Source
 [IO.Directory]::CreateDirectory($buildDir) | Out-Null
 [IO.Directory]::CreateDirectory($resultsDir) | Out-Null
 
-$commit = (& git -C $repoRoot rev-parse HEAD).Trim()
+$commit = (& git -C $libraryRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to resolve the benchmark source revision'
 }
-$shortCommit = (& git -C $repoRoot rev-parse --short=12 HEAD).Trim()
+$shortCommit = (& git -C $libraryRoot rev-parse --short=12 HEAD).Trim()
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to resolve the short benchmark source revision'
 }
-$gitStatus = @(& git -C $repoRoot status --porcelain)
+$gitStatus = @(& git -C $libraryRoot status --porcelain)
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to capture git worktree state'
 }
 if ($RequireClean -and $gitStatus.Count -ne 0) {
     throw 'A clean worktree is required for this baseline capture'
 }
-$rigtorpState = @(& git -C $repoRoot submodule status -- third_party/rigtorp_spscqueue)
+$harnessCommit = (& git -C $harnessRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to resolve the benchmark harness revision'
+}
+$harnessStatus = @(& git -C $harnessRoot status --porcelain)
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to capture benchmark harness worktree state'
+}
+$rigtorpState = @(& git -C $libraryRoot submodule status -- third_party/rigtorp_spscqueue)
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to capture the pinned Rigtorp gitlink'
 }
-$rigtorpCommit = (& git -C (Join-Path $repoRoot 'third_party\rigtorp_spscqueue') rev-parse HEAD).Trim()
+$rigtorpCommit = (& git -C (Join-Path $libraryRoot 'third_party\rigtorp_spscqueue') rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $rigtorpCommit -ne $rigtorpExpectedCommit) {
     throw "Rigtorp must be pinned at $rigtorpExpectedCommit"
 }
-$rigtorpWorktreeStatus = @(& git -C (Join-Path $repoRoot 'third_party\rigtorp_spscqueue') status --porcelain)
+$rigtorpWorktreeStatus = @(& git -C (Join-Path $libraryRoot 'third_party\rigtorp_spscqueue') status --porcelain)
 if ($LASTEXITCODE -ne 0 -or $rigtorpWorktreeStatus.Count -ne 0 -or
     $rigtorpState.Count -ne 1 -or $rigtorpState[0] -match '^[+-]') {
     throw 'Rigtorp submodule must match its clean pinned gitlink'
@@ -114,9 +135,9 @@ if ($compilerCommand.Name -match 'g\+\+') {
 }
 
 $includeFlags = @(
-    "-I$repoRoot",
-    "-I$(Join-Path $repoRoot 'src')",
-    "-I$(Join-Path $repoRoot 'third_party\rigtorp_spscqueue\include')"
+    "-I$libraryRoot",
+    "-I$(Join-Path $libraryRoot 'src')",
+    "-I$(Join-Path $libraryRoot 'third_party\rigtorp_spscqueue\include')"
 )
 $compileArgs = @()
 $compileArgs += $compileFlags
@@ -142,7 +163,7 @@ if (-not $NoAffinity) {
         }
         $affinity = "$ProducerCpu,$ConsumerCpu"
     } elseif ($logicalProcessors -ge 2) {
-        $affinity = '0,1'
+        $affinity = 'auto'
     }
 }
 
@@ -164,6 +185,14 @@ $metadataRecord = Get-Content -LiteralPath $resultPath -TotalCount 1 | ConvertFr
 if ($metadataRecord.kind -ne 'metadata') {
     throw 'Benchmark result did not begin with a metadata record'
 }
+$firstSampleRecord = Get-Content -LiteralPath $resultPath |
+    ForEach-Object { $_ | ConvertFrom-Json } |
+    Where-Object { $_.kind -eq 'sample' } |
+    Select-Object -First 1
+if ($null -eq $firstSampleRecord) {
+    throw 'Benchmark result did not contain a sample record'
+}
+$resolvedAffinity = "$($firstSampleRecord.affinity.producer_cpu),$($firstSampleRecord.affinity.consumer_cpu)"
 
 $compilerVersion = @(& $compilerPath '--version') | Select-Object -First 2
 $cpuInfo = @()
@@ -178,14 +207,44 @@ if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
         }
     })
 }
+$powerScheme = $null
+$powerOverlayAc = $null
+$powerOverlayDc = $null
+if ($env:OS -eq 'Windows_NT' -and (Get-Command powercfg.exe -ErrorAction SilentlyContinue)) {
+    $powerScheme = ((& powercfg.exe /GETACTIVESCHEME) | Out-String).Trim()
+
+    # Windows 10/11 can retain the Balanced base scheme while applying a
+    # performance overlay through the Power mode slider. Record both states:
+    # the base scheme alone would otherwise mislabel a Best performance run.
+    $overlayPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes'
+    if (Test-Path -LiteralPath $overlayPath) {
+        $overlayState = Get-ItemProperty -LiteralPath $overlayPath -ErrorAction SilentlyContinue
+        if ($null -ne $overlayState) {
+            $acProperty = $overlayState.PSObject.Properties['ActiveOverlayAcPowerScheme']
+            $dcProperty = $overlayState.PSObject.Properties['ActiveOverlayDcPowerScheme']
+            if ($null -ne $acProperty) {
+                $powerOverlayAc = $acProperty.Value
+            }
+            if ($null -ne $dcProperty) {
+                $powerOverlayDc = $dcProperty.Value
+            }
+        }
+    }
+}
 
 $manifest = [ordered]@{
-    format_version = 1
+    format_version = 2
     captured_at_local = (Get-Date).ToString('o')
     git = [ordered]@{
         commit = $commit
         status_porcelain = $gitStatus
         rigtorp_submodule = $rigtorpState
+        library_root = $libraryRoot
+    }
+    harness = [ordered]@{
+        root = $harnessRoot
+        commit = $harnessCommit
+        status_porcelain = $harnessStatus
     }
     compiler = [ordered]@{
         path = $compilerPath
@@ -198,6 +257,11 @@ $manifest = [ordered]@{
         logical_processors = $logicalProcessors
         processors = $cpuInfo
         affinity_requested = $affinity
+        affinity_selection = $metadataRecord.affinity_selection
+        affinity_resolved = $resolvedAffinity
+        power_scheme = $powerScheme
+        power_overlay_ac = $powerOverlayAc
+        power_overlay_dc = $powerOverlayDc
     }
     benchmark = [ordered]@{
         suite = $Suite
@@ -209,8 +273,10 @@ $manifest = [ordered]@{
         payload_layout = $metadataRecord.payload_layout
         type_layout = $metadataRecord.type_layout
         spsc_cacheline_bytes = $metadataRecord.spsc_cacheline_bytes
+        retry_backoff = $metadataRecord.retry_backoff
         shadow_indices_enabled = 1
         shadow_allow_32bit = 0
+        queue_comparison_protocol = 'paired-alternating-order'
     }
     artifacts = [ordered]@{
         jsonl = $resultPath
