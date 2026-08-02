@@ -82,7 +82,7 @@ reproducible benchmark/CI matrix.
 | H5 | Counter-wrap and invariant tests | H2, H3 | complete (2026-08-02) |
 | H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | complete (2026-08-02) |
 | H7 | Clean builds, CI, and sanitizers | H5, H6 | complete (2026-08-02) |
-| H8 | Fused single-item hot path | H0, H3, H5-H7 | pending |
+| H8 | Fused single-item hot path | H0, H3, H5-H7 | complete (2026-08-02) |
 | H9 | Shadow-aware bulk snapshot path | H8 | pending |
 | H10 | Alias and release decision | H8, H9 | pending |
 
@@ -643,6 +643,8 @@ do not silently treat a skipped sanitizer or runtime job as a pass.
 
 ## H8 - Fused Single-Item Hot Path
 
+Status: complete
+
 ### Goal
 
 Remove redundant owner-index loads without weakening publication semantics.
@@ -667,6 +669,47 @@ Remove redundant owner-index loads without weakening publication semantics.
 
 High. Review memory-order changes independently from mechanical call-site
 fusion, even if they land in the same release phase.
+
+### Implementation And Verification Record
+
+- `SPSCbase` now has immediate-use checked snapshots for `try_*` endpoints and
+  owner-only snapshots for contract-precondition endpoints.  The checked form
+  carries one owner value through availability, slot index, payload access, and
+  publication/retirement; the owner-only form deliberately avoids a redundant
+  opposite-endpoint validation in Release where the public contract already
+  requires a readable/writable slot.
+- Built-in counters expose an optional `load_relaxed()` for the endpoint-owned
+  index.  The opposite endpoint continues to use its configured acquire or
+  `seq_cst` load. `FastAtomicCounter`, plain, and volatile counters publish
+  from the captured owner value; strict `AtomicCounter` remains a RMW backend
+  and deliberately continues to use `inc()`/`add()` for commit.
+- `fifo`, `fifo_view`, `queue`, `pool`, and `typed_pool` use the owner-only
+  path for precondition operations and the checked path for `try_*` operations.
+  `latest` retains its fresh-producer-head path because it selects the newest
+  element rather than FIFO's oldest. No persistent index metadata was added;
+  H2 owner-line and shadow layout therefore remains unchanged.
+- The public consumer probe is intentionally `try_front()` followed by
+  `pop()`. It now has two consumer-tail loads—one for each public operation.
+  Collapsing that further would require a new reservation/token contract and
+  is intentionally out of scope.
+- Added compiler-specific H8 assembly gates. Local GCC 15.2 (UCRT64) and MSVC
+  19.50 both report `producer-head=1` and `consumer-tail=2`; GitHub Actions
+  runs the same check for GCC, Clang, and MSVC.
+- Local final verification passed all 9 suites in Debug and Release for
+  `shadow_on`, `shadow_off`, and C++20 `cxx20_span` (54 executions). Strict
+  C++17/C++20 public-header smoke passed with GCC and MSVC. Both 32-bit shadow
+  gate states passed strict `-m32 -fsyntax-only`; the local host lacks the
+  32-bit runtime needed for execution, which remains covered by CI.
+- Controlled `c5079c4 -> f074fd5` boundary captures used GCC 15.2, `CFA`,
+  capacity 1024, CPUs `0,2`, 100,000,000 transfers, and four alternating
+  before/after pairs under high process priority. All samples verified. Median
+  boundary throughput was `+5.7%` for trivial 8-byte `fifo` and `-0.2%` for
+  non-trivial-lifetime 8-byte `queue`, i.e. no measurable boundary regression.
+  Steady-state samples were strongly multi-modal on this host even with
+  affinity and priority, so they are retained as diagnostic evidence only and
+  are not presented as a library-wide throughput claim. The canonical H0
+  harness currently has these two payload models but not a literal multi-size
+  sweep; H9/H10 must extend that before any general alias or performance claim.
 
 ## H9 - Shadow-Aware Bulk Snapshot Path
 

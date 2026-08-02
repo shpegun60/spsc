@@ -25,6 +25,7 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   public-header and atomic-observer sanitizer targets, and GitHub Actions jobs
   for Linux GCC/Clang, sanitizers, genuine 32-bit execution, ARM smoke, and
   Windows MinGW/MSVC header smoke.
+- Compiler-specific H8 hot-path assembly checks for GCC, Clang, and MSVC.
 
 ### Changed
 
@@ -46,6 +47,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   directory, so a fresh out-of-source build cannot mistake an absolute MOC
   dependency for an already generated file.
 - The default SPSC policy remains plain (`SPSC_DEFAULT_POLICY_ATOMIC=0`), while lock-free atomics remain required by default (`SPSC_REQUIRE_LOCK_FREE=1`).
+- Single-item endpoint operations now reuse one owner-index snapshot. Checked
+  `try_*` operations retain the opposite-endpoint acquire check; contract-
+  precondition operations use an owner-only Release path. Strict `CA<>`
+  publication remains RMW, while single-writer counter backends publish from
+  the captured owner value.
 
 ### Fixed
 
