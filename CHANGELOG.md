@@ -6,8 +6,14 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+Planned release: **2.0.0**. The major version is required because this line
+contains intentional source and object-layout/ABI changes relative to
+`v1.0.0`.
+
 ### Added
 
+- A reproducible STM32 Cortex-M4/M7 assembly probe for the `fast_fifo` and
+  `fast_queue` alias targets, with explicit `CA<>`/`CFA<>` selectors.
 - Reproducible SPSC baseline harness with raw JSONL samples, host/compiler
   manifest, hot-path assembly capture, CPU-affinity controls, and a pinned
   `rigtorp/SPSCQueue` v1.1 comparator.
@@ -32,6 +38,14 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Changed
 
+- `fast_fifo` and `fast_queue` now select the SPSC-specialized `CFA<>`
+  single-writer atomic backend instead of strict-RMW `CA<>`. This intentional
+  concrete-type/source/ABI change is confined to 2.0; callers requiring the old
+  backend can spell `CA<>` explicitly.
+- Release documentation makes no general SPSC-versus-Rigtorp winner or parity
+  claim. H0R measurements changed classification with endpoint direction and
+  physical-core pair, so retained results are explicitly scoped or
+  `inconclusive`.
 - Documented exact SPSC endpoint ownership, same-side claim/front transaction
   rules, atomic-observer cache traffic, `CA<>` versus `CFA<>`, allocation and
   lifetime boundaries, bounded `latest` semantics, and the fact that external

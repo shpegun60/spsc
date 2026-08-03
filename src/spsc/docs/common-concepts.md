@@ -177,6 +177,12 @@ are correct under the exact one-producer/one-consumer contract; `CA<>` is not
 "more correct", it simply uses RMW increments. Choose between them for the
 target and measurement, not from a correctness ranking.
 
+In 2.0, the legacy `fast_fifo` and `fast_queue` convenience aliases select
+`CFA<>`, the single-writer atomic backend that matches the exact SPSC ownership
+rule. The word `fast` is not a cross-platform throughput claim. When concrete
+type identity or the counter backend is an important design choice, spell the
+container policy explicitly as `CA<>`, `CFA<>`, or another suitable policy.
+
 Do not use `P` for normal thread/thread or task/task handoff. It has plain
 non-atomic counters and relies on external synchronization or a genuinely
 single-context execution model.

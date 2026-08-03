@@ -144,6 +144,11 @@ static const Runner_ g_runner_{};
 
 namespace {
 
+static_assert(std::is_same_v<
+                  ::spsc::fast_fifo<int, 16>,
+                  ::spsc::fifo<int, 16, ::spsc::policy::CFA<>>>,
+              "fast_fifo must select the single-writer CFA policy in 2.0");
+
 
 // Scale fuzz to avoid painfully slow Debug runs.
 #if defined(NDEBUG)

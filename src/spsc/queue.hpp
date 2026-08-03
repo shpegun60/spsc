@@ -6,7 +6,7 @@
  * Copyright (c) 2026 Shpegun60
  * SPDX-License-Identifier: Apache-2.0
  *
- * High-performance SPSC Queue (Ring Buffer) for type T.
+ * Lifetime-managed SPSC Queue (Ring Buffer) for type T.
  * Interface compatible with spsc::fifo (owning) and queue_view (non-owning).
  *
  * Design goals:
@@ -1558,14 +1558,14 @@ private:
 
 /**
  * fast_queue<T, Capacity>:
- * Legacy convenience alias selecting CA<>: cache-aligned metadata with the
- * atomic RMW counter backend. The name is not a throughput claim; any alias
- * retargeting is intentionally deferred to the documented compatibility work.
+ * Convenience alias selecting CFA<>: cache-aligned metadata with the
+ * single-writer atomic backend matching the SPSC ownership contract. The name
+ * is not a cross-platform throughput claim.
  */
 template <class T, reg Capacity = 0,
          typename Alloc = ::spsc::alloc::policy_default_alloc_t<
-             ::spsc::policy::CA<>, alignof(T), ::spsc::alloc::align_alloc<alignof(T)>>>
-using fast_queue = queue<T, Capacity, ::spsc::policy::CA<>, Alloc>;
+             ::spsc::policy::CFA<>, alignof(T), ::spsc::alloc::align_alloc<alignof(T)>>>
+using fast_queue = queue<T, Capacity, ::spsc::policy::CFA<>, Alloc>;
 
 } // namespace spsc
 

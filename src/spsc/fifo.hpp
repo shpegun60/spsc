@@ -1599,14 +1599,14 @@ private:
 
 /**
  * fast_fifo<T, Capacity>:
- * Legacy convenience alias selecting CA<>: cache-aligned metadata with the
- * atomic RMW counter backend. The name is not a throughput claim; any alias
- * retargeting is intentionally deferred to the documented compatibility work.
+ * Convenience alias selecting CFA<>: cache-aligned metadata with the
+ * single-writer atomic backend matching the SPSC ownership contract. The name
+ * is not a cross-platform throughput claim.
  */
 template <class T, reg Capacity = 0,
          typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
-             ::spsc::policy::CA<>, T, ::spsc::alloc::default_alloc>>
-using fast_fifo = fifo<T, Capacity, ::spsc::policy::CA<>, Alloc>;
+             ::spsc::policy::CFA<>, T, ::spsc::alloc::default_alloc>>
+using fast_fifo = fifo<T, Capacity, ::spsc::policy::CFA<>, Alloc>;
 
 } // namespace spsc
 

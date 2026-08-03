@@ -101,6 +101,29 @@ The policy suite runs `A<>`, `FA<>`, `CA<>`, and `CFA<>` through that same
 `fifo` workload. It records container `sizeof` and `alignof` for the main
 atomic policy families in the metadata record.
 
+## STM32 Fast-Alias Assembly Probe
+
+`stm32_fast_alias_probe.cpp` instantiates the complete `fast_fifo` and
+`fast_queue` producer/consumer paths used by H10. With no selector macro it
+tests the public aliases. Define `H10_EXPLICIT_CA=1` or
+`H10_EXPLICIT_CFA=1` to isolate the counter backend while keeping the payload
+and operations identical.
+
+Example Cortex-M7 compilation from the repository root:
+
+```powershell
+arm-none-eabi-g++.exe -std=c++17 -O3 -DNDEBUG -Wall -Wextra -Werror `
+  -pedantic-errors -mthumb -mcpu=cortex-m7 -mfloat-abi=soft `
+  -fno-exceptions -fno-rtti -DSPSC_FORCE_CACHELINE=32 `
+  -I. -Isrc -c benchmarks/stm32_fast_alias_probe.cpp -o fast_alias_m7.o
+arm-none-eabi-objdump.exe -d fast_alias_m7.o
+```
+
+Use `-mcpu=cortex-m4` for the M4 probe. This is static code-generation
+evidence, not a hardware cycle benchmark. The source also verifies that
+`CA<>` and `CFA<>` keep identical `sizeof` and `alignof` for the probed FIFO
+and queue types on the selected toolchain.
+
 ## Workloads
 
 - `steady`: producer and consumer transfer a continuous sequence while failed

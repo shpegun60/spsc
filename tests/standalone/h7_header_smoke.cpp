@@ -78,6 +78,15 @@ using static_typed_pool =
     ::spsc::typed_pool<std::uint32_t, 8u, ::spsc::policy::CFA<>>;
 using endpoint_base = ::spsc::SPSCbase<8u, ::spsc::policy::CFA<>>;
 
+static_assert(std::is_same_v<
+                  ::spsc::fast_fifo<std::uint32_t, 8u>,
+                  ::spsc::fifo<std::uint32_t, 8u, ::spsc::policy::CFA<>>>,
+              "fast_fifo must select CFA in 2.0");
+static_assert(std::is_same_v<
+                  ::spsc::fast_queue<std::uint32_t, 8u>,
+                  ::spsc::queue<std::uint32_t, 8u, ::spsc::policy::CFA<>>>,
+              "fast_queue must select CFA in 2.0");
+
 static_assert(!exposes_is_allocated<static_queue>::value,
               "queue must not expose internal allocation state");
 static_assert(!std::is_convertible_v<

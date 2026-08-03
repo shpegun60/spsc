@@ -197,7 +197,7 @@ Typical fit:
 Examples:
 
 ```cpp
-using Fast = spsc::fifo<int, 1024, spsc::policy::CA<>>;
+using AtomicAligned = spsc::fifo<int, 1024, spsc::policy::CA<>>;
 using Plain = spsc::fifo<int, 1024, spsc::policy::P>;
 ```
 

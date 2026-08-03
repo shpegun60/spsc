@@ -60,9 +60,11 @@ reproducible benchmark/CI matrix.
    and are outside that cleanup.
 9. `CFA<>` is correct under the one-producer/one-consumer contract. `CA<>` is a
    stricter RMW backend, not a more correct SPSC queue.
-10. No `fast_*` alias changes or Rigtorp-equivalence claims are accepted without
-    measurements. `queue` is the closest lifetime-model comparison to Rigtorp;
-    `fifo` is measured separately.
+10. No Rigtorp-equivalence claim is accepted without valid measurements.
+    `queue` is the closest lifetime-model comparison to Rigtorp; `fifo` is
+    measured separately. H10 may retarget a legacy `fast_*` alias only as an
+    explicit backend-selection/API decision with its concrete-type/ABI effect
+    documented; the alias name itself is not a throughput claim.
 11. `CHANGELOG.md` calls `v1.0.0` a stable API. Direct removal of the accidental
     view overloads is nevertheless authorized because there are no consumers,
     but it remains a deliberate source-breaking change and must be recorded.
@@ -84,12 +86,14 @@ reproducible benchmark/CI matrix.
 | H7 | Clean builds, CI, and sanitizers | H5, H6 | complete (2026-08-02) |
 | H8 | Fused monolithic single-item operations | H0, H3, H5-H7 | complete (2026-08-02) |
 | H0R | Benchmark evidence validity repair | H0, H8 | complete (2026-08-03) |
-| H9 | Shadow-aware bulk snapshot path | H8, H0R | pending |
-| H10 | Alias and release decision | H8, H9 | pending |
+| H9 | Shadow-aware bulk snapshot path | H8, H0R | deferred (2026-08-03; outside the 2.0 gate) |
+| H10 | Alias and release decision | H8, H0R | implementation complete; final CI pending |
 
 `H1` precedes `H0` only because deleting forwarding overloads does not change
 runtime code generation. The critical performance sequence remains
-`H0 -> H2 -> H3 -> H8 -> H0R -> H9 -> H10`.
+`H0 -> H2 -> H3 -> H8 -> H0R -> H10`. H9 is now an optional optimization
+backlog item rather than a dependency of the 2.0 release decision. Resuming it
+requires fresh authorization and the zero-persistent-storage constraints below.
 
 ## H1 - Unsafe Bulk API Consistency
 
@@ -838,6 +842,21 @@ as a separate diagnostic format.
 
 ## H9 - Shadow-Aware Bulk Snapshot Path
 
+Status: deferred (2026-08-03); not part of the planned 2.0.0 release
+
+### Deferral Decision
+
+The current bulk path remains unchanged. The project is not willing to add
+per-container fields or increase persistent queue metadata merely to optimize
+bulk operations. No H9 runtime or `SPSCbase` change has landed.
+
+Any future H9 proposal must keep snapshots as temporary local values, reuse
+only shadows already present for the selected policy, and preserve `sizeof`
+and `alignof` for every public container/policy combination. Shadow-disabled
+and non-atomic configurations must remain the compact two-counter
+representation. If those constraints prevent a measurable improvement, H9 is
+rejected rather than paid for with additional state.
+
 ### Goal
 
 Reuse one producer/consumer snapshot for availability, index, and region
@@ -848,6 +867,7 @@ calculation while preserving the explicit unsafe raw API.
 - Add internal producer and consumer bulk snapshot helpers using the correct
   endpoint-owned shadow.
 - Reuse them in `claim_write/read` and existing RAII bulk guards.
+- Add no persistent fields and make no container layout or alignment change.
 - Do not expose a new public token in the first implementation.
 - If a public token is proposed later, require it to be move-only, queue-bound,
   one-shot, origin/count preserving, prefix-commit-only, and release-safe without
@@ -856,6 +876,8 @@ calculation while preserving the explicit unsafe raw API.
 
 ### Acceptance Criteria
 
+- `sizeof` and `alignof` remain unchanged across shadow on/off, atomic,
+  non-atomic, static-capacity, and dynamic-capacity configurations.
 - Region totals and split boundaries match the model across wrap and counter
   overflow.
 - The opposite atomic index is refreshed only at the appropriate boundary.
@@ -864,10 +886,13 @@ calculation while preserving the explicit unsafe raw API.
 
 ### Risk And Rollback
 
-High. Land the internal snapshot representation before any optional public RAII
-surface.
+High. H9 stays deferred until a zero-persistent-storage design and a measurable
+bulk benefit are demonstrated independently. Do not prototype it in
+`SPSCbase` as part of unrelated work.
 
 ## H10 - Alias And Release Decision
+
+Status: implementation complete; final CI pending
 
 ### Goal
 
@@ -875,10 +900,12 @@ Make names, release versioning, and performance claims follow measured behavior.
 
 ### Scope
 
-- Re-run the repaired `H0R` benchmark suite after `H9`.
-- Decide whether to change `fast_fifo`/`fast_queue`, add explicit
-  `single_writer_fast_*` and `strict_atomic_*` aliases, or retain existing aliases
-  with corrected documentation.
+- Use the repaired `H0R` evidence directly; H9 is deferred and therefore does
+  not require a post-H9 benchmark rerun for this release.
+- Retarget `fast_fifo` and `fast_queue` from `CA<>` to the SPSC-specialized
+  single-writer `CFA<>` backend. Do not add a second strict/single-writer alias
+  family in this release; callers that require strict RMW spell `CA<>`
+  explicitly.
 - Treat an alias target change as a concrete type/layout and source/ABI change.
 - Plan the next SemVer release as `2.0.0` for the authorized breaking cleanup,
   unless the project explicitly and publicly resets the pre-adoption versioning
@@ -886,25 +913,96 @@ Make names, release versioning, and performance claims follow measured behavior.
 
 ### Acceptance Criteria
 
-- Alias names and recommendations are backed by retained benchmark data.
+- The `fast_*` concrete mapping is locked by compile-time tests and matches the
+  exact single-writer SPSC ownership contract; it is not presented as a
+  cross-platform throughput recommendation.
 - `CA<>` is not advertised as making an SPSC queue more correct.
 - Rigtorp comparisons state workload, toolchain, hardware, and uncertainty.
-- Changelog, migration note, and release version agree about breaking changes.
+- Changelog and planned release version agree about breaking changes. No
+  migration guide is required before external adoption.
 
 ### Risk And Rollback
 
-Medium. Adding explicit aliases is the compatibility-friendly fallback if the
-measured winner varies by platform.
+Medium. Retargeting an alias changes concrete type identity and may change code
+generation even where the observed layout is identical. It is therefore part
+of the planned 2.0 source/ABI break, not a silent 1.x update. Policy defaults
+and direct `CA<>`/`CFA<>` spellings remain unchanged. The actual release tag is
+created only after the final CI gate; the changelog remains `Unreleased` until
+then.
+
+### Decision
+
+- `fast_fifo<T, Capacity>` becomes
+  `fifo<T, Capacity, spsc::policy::CFA<>, ...>` in 2.0.
+- `fast_queue<T, Capacity>` becomes
+  `queue<T, Capacity, spsc::policy::CFA<>, ...>` in 2.0.
+- The `fast_*` prefix now selects the single-writer atomic backend that matches
+  the library's exact SPSC ownership rule. It is still not a cross-platform or
+  Rigtorp throughput ranking. Code that depends on a concrete counter backend
+  should name `CA<>` or `CFA<>` explicitly.
+- `CA<>` and `CFA<>` remain equally correct under the exact SPSC contract;
+  neither receives a correctness or general performance ranking.
+- H0R supports no host-wide winner or parity claim against Rigtorp: direction
+  and physical-core-pair changes reversed the observed classification.
+- The next release is planned as `2.0.0` because the Unreleased line contains
+  intentional source, alias-type, and layout/ABI breaks relative to `v1.0.0`.
+  No `v2.0.0` tag is claimed before release.
+- No migration guide is added because the library has no external consumers;
+  the changelog and explicit policy documentation are the source of truth.
+
+### Local Implementation And Validation
+
+- Retargeted both `fast_*` aliases and their policy-derived default allocators
+  from `CA<>` to `CFA<>`. Compile-time assertions in the FIFO/queue suites and
+  the standalone cross-toolchain header smoke lock the complete alias type, not
+  just its exposed `policy_type`.
+- The decision follows the exact SPSC ownership model verified by H8:
+  single-writer counters publish the captured owner value with a release store,
+  while strict `CA<>` deliberately retains atomic RMW publication. This is not
+  presented as a numeric or cross-platform throughput guarantee.
+- The reproducible `benchmarks/stm32_fast_alias_probe.cpp` was compiled with
+  GNU Tools for STM32 14.3.1, C++17, `-O3 -DNDEBUG`, strict warnings,
+  `-mthumb -mfloat-abi=soft`, and a forced 32-byte cache line. Cortex-M4 and
+  Cortex-M7 produced the same conclusion. The 32-bit shadow-width gate remained
+  at its default off state, and compile-time checks confirmed equal `sizeof`
+  and `alignof` for the probed `CA<>`/`CFA<>` containers.
+
+  | STM32 static assembly | `main` fast (`CA<>`) | H10 fast (`CFA<>`) | Reduction |
+  | --- | ---: | ---: | ---: |
+  | M4, four functions, code bytes | 366 | 248 | 32.2% |
+  | M4, decoded instructions | 137 | 105 | 23.4% |
+  | M7, four functions, code bytes | 374 | 256 | 31.6% |
+  | M7, decoded instructions | 140 | 108 | 22.9% |
+  | M4/M7, `dmb` instructions | 24 | 10 | 58.3% |
+  | M4/M7, exclusive instructions | 8 | 0 | 100% |
+
+  The four main-branch `LDREX`/`STREX` publication loops are absent from H10.
+  Per-function code-size reductions range from 24.6% to 37.5%; decoded
+  instruction reductions range from 17.3% to 26.5%. An isolated current-code
+  `CA<> -> CFA<>` comparison attributes about 24.3-24.8% code-size and
+  18.2-18.6% decoded-instruction reduction to the alias backend change itself.
+  Actual cycle improvement remains hardware-, memory-, and interrupt-dependent.
+- GCC 15.2 strict C++17 Release header-smoke syntax passed with shadows both on
+  and off using `-Wall -Wextra -Werror -pedantic-errors`.
+- A clean Qt 6.10.1 / MinGW GCC 13.1 C++17 Release `shadow_on` build passed all
+  nine suites: `buffer_pool`, `chunk`, `fifo`, `fifo_view`, `latest`, `pool`,
+  `pool_view`, `queue`, and `typed_pool`.
+- `git diff --check` passed. H9 and `SPSCbase` runtime code remain untouched.
+  Full cross-toolchain CI on the committed revision remains the H10 closeout
+  gate.
 
 ## Final Production Gate
 
-The hardening program is complete only when:
+The release-blocking hardening program is complete only when:
 
-- all slices above are complete or explicitly rejected with evidence;
+- all release-blocking slices above are complete; optional optimizations may be
+  explicitly deferred outside the release gate;
 - the clean Debug/Release functional matrix is green;
 - C++17/C++20, GCC/Clang, sanitizers, real 32-bit, and ARM smoke results are
   recorded;
 - public observer, endpoint ownership, memory-order, allocation, lifetime, and
   DMA contracts are documented;
 - layout and counter-overflow regressions are executable tests;
-- every performance claim and alias decision points to a reproducible benchmark.
+- every comparative or numeric performance claim points to a reproducible
+  benchmark, and every alias decision records whether its basis is measurement
+  or explicit backend semantics.
