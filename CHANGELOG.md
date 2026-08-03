@@ -6,9 +6,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
-Planned release: **2.0.0**. The major version is required because this line
-contains intentional source and object-layout/ABI changes relative to
-`v1.0.0`.
+## [2.0.0] - 2026-08-03
+
+This major release contains intentional source and object-layout/ABI changes
+relative to `v1.0.0`.
 
 ### Added
 
@@ -111,6 +112,8 @@ contains intentional source and object-layout/ABI changes relative to
   regions now consistently require `claim_write(spsc::unsafe, ...)` or
   `claim_read(spsc::unsafe, ...)` across all containers. This is an intentional
   source-breaking cleanup made before those convenience overloads had consumers.
+- Removed the accidentally tracked Qt Creator per-user project file. Qt Creator
+  user files remain ignored and local to each checkout.
 
 ## [1.0.0] - 2026-03-21
 
@@ -138,5 +141,6 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
-[Unreleased]: https://github.com/shpegun60/spsc/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/shpegun60/spsc/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/shpegun60/spsc/releases/tag/v1.0.0

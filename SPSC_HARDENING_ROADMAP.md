@@ -1,6 +1,6 @@
 # SPSC Hardening Roadmap
 
-Status: active
+Status: complete (2026-08-03)
 Audit baseline: `eaea6fbb06c1`
 Created: 2026-08-02
 Scope: `src/spsc`, its tests, documentation, benchmarks, and build/CI support
@@ -925,10 +925,9 @@ Make names, release versioning, and performance claims follow measured behavior.
 
 Medium. Retargeting an alias changes concrete type identity and may change code
 generation even where the observed layout is identical. It is therefore part
-of the planned 2.0 source/ABI break, not a silent 1.x update. Policy defaults
-and direct `CA<>`/`CFA<>` spellings remain unchanged. The actual release tag is
-created only after the final CI gate; the changelog remains `Unreleased` until
-then.
+of the 2.0 source/ABI break, not a silent 1.x update. Policy defaults and direct
+`CA<>`/`CFA<>` spellings remain unchanged. The `v2.0.0` tag is created only
+after the release-prep revision passes the final CI gate.
 
 ### Decision
 
@@ -944,9 +943,9 @@ then.
   neither receives a correctness or general performance ranking.
 - H0R supports no host-wide winner or parity claim against Rigtorp: direction
   and physical-core-pair changes reversed the observed classification.
-- The next release is planned as `2.0.0` because the Unreleased line contains
-  intentional source, alias-type, and layout/ABI breaks relative to `v1.0.0`.
-  No `v2.0.0` tag is claimed before release.
+- The release version is `2.0.0` because it contains intentional source,
+  alias-type, and layout/ABI breaks relative to `v1.0.0`. The tag is created
+  only after release-prep and post-merge CI pass.
 - No migration guide is added because the library has no external consumers;
   the changelog and explicit policy documentation are the source of truth.
 
@@ -997,7 +996,9 @@ then.
 
 ## Final Production Gate
 
-The release-blocking hardening program is complete only when:
+Status: satisfied for `v2.0.0` (2026-08-03)
+
+The release-blocking hardening program requires:
 
 - all release-blocking slices above are complete; optional optimizations may be
   explicitly deferred outside the release gate;
