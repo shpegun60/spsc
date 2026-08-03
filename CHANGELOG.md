@@ -38,9 +38,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   views cannot realign caller-owned storage. `fast_*` names are now explicitly
   documented as legacy aliases rather than throughput claims.
 - The SPSC benchmark now uses topology-aware physical-core affinity,
-  persistent pinned workers, both producer/consumer CPU assignments, paired
-  alternating samples, pre-touched queues, CPU-relax retries, endpoint CPU-time
-  and thread-cycle telemetry, and optional cross-revision header selection.
+  prefers two non-zero physical P/SMT cores when Windows topology permits,
+  uses persistent pinned workers, both producer/consumer CPU assignments,
+  paired alternating samples, pre-touched queues, CPU-relax retries, endpoint
+  CPU-time and thread-cycle telemetry, and optional cross-revision header
+  selection.
 - Benchmark format version 2 emits per-direction paired summaries and a gated
   `spsc_faster`/`rigtorp_faster`/`parity`/`inconclusive` comparison result.
   Legacy single-direction captures are diagnostic-only after identical Windows
@@ -85,6 +87,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   the public container API.
 - GitHub Actions now verifies that relaxed atomic publication policies fail for
   the intended memory-order assertion.
+- The relaxed-publication compile-fail contract now exits successfully after
+  observing the expected compiler rejection, instead of leaking that
+  intentional non-zero compiler status through Linux `pwsh`.
 
 ### Removed
 

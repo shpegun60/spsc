@@ -50,3 +50,4 @@ if ($diagnosticText -notmatch 'AtomicCounter: SPSC payload publication requires 
 }
 
 Write-Output "PASS: relaxed publication was rejected by $compilerPath"
+exit 0

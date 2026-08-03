@@ -459,22 +459,32 @@ struct sample_result {
         throw std::runtime_error("auto affinity needs two distinct physical cores in processor group zero");
     }
 
-    // On hybrid Intel systems a core record with two logical threads identifies
-    // a P-core. Select two distinct such cores first, never sibling threads.
+    // CPU 0 commonly carries Windows housekeeping and interrupt work. Prefer
+    // two non-zero physical cores when the topology provides them. On hybrid
+    // Intel systems a core record with two logical threads identifies a
+    // P-core, so retain that same-class preference before falling back to
+    // no-SMT cores or CPU 0 on smaller hosts.
     std::vector<int> selected;
-    for (const core_candidate &candidate : candidates) {
-        if (candidate.logical_threads > 1u && selected.size() < 2u) {
-            selected.push_back(candidate.cpu);
+    const auto append_candidates = [&candidates, &selected](const bool require_smt,
+                                                            const bool avoid_cpu_zero) {
+        for (const core_candidate &candidate : candidates) {
+            if (selected.size() >= 2u) {
+                break;
+            }
+            if ((require_smt && candidate.logical_threads <= 1u) ||
+                (avoid_cpu_zero && candidate.cpu == 0)) {
+                continue;
+            }
+            if (std::find(selected.begin(), selected.end(), candidate.cpu) ==
+                selected.end()) {
+                selected.push_back(candidate.cpu);
+            }
         }
-    }
-    for (const core_candidate &candidate : candidates) {
-        if (selected.size() >= 2u) {
-            break;
-        }
-        if (std::find(selected.begin(), selected.end(), candidate.cpu) == selected.end()) {
-            selected.push_back(candidate.cpu);
-        }
-    }
+    };
+    append_candidates(true, true);
+    append_candidates(true, false);
+    append_candidates(false, true);
+    append_candidates(false, false);
     if (selected.size() != 2u) {
         throw std::runtime_error("auto affinity could not select two distinct physical cores");
     }

@@ -37,13 +37,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_spsc_baseline.
 
 The runner uses the selected `g++` compiler and emits a release-oriented
 binary. On Windows it asks the benchmark to choose two distinct physical cores,
-preferring P-cores on a hybrid host (rather than sibling logical CPUs); an
-explicit `-ProducerCpu/-ConsumerCpu` pair remains available. By default each
-case is measured in both endpoint assignments (`P -> C` and `C -> P`) on
-persistent pinned worker threads. The manifest records both assignments and
-the base power scheme/Windows performance overlay before and after execution.
+preferring two non-zero P-cores on a hybrid host (rather than CPU 0 or sibling
+logical CPUs). CPU 0 remains a fallback for hosts without two other suitable
+physical cores; an explicit `-ProducerCpu/-ConsumerCpu` pair remains available.
+By default each case is measured in both endpoint assignments (`P -> C` and
+`C -> P`) on persistent pinned worker threads. The manifest records both
+assignments and the base power scheme/Windows performance overlay before and
+after execution.
 The default capture
 uses 20,000,000 transfers, nine measured samples, and two warm-ups per case.
+
+`auto` selects one deterministic physical-core pair; it does not assume that
+all same-class cores on a hybrid or turbo-controlled host are performance
+equivalent. A host-wide ranking must be repeated on additional explicit
+same-class core pairs and treated as inconclusive if those pair-level
+classifications disagree.
+
 It writes:
 
 - `benchmarks/results/<timestamp>-<sha>.jsonl` — raw samples and summaries;

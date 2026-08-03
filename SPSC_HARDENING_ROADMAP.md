@@ -204,8 +204,10 @@ Low. This slice adds measurement infrastructure and does not change the library.
   H8 artifacts still need to be generated after this closeout is committed.
 - The harness was hardened during H2 validation: defaults are now 20,000,000
   transfers, nine samples, and two warm-ups; Windows `auto` affinity chooses
-  two distinct physical cores and prefers P-cores on a hybrid host; queue/Rigtorp samples are paired in alternating
-  order; raw results record median, standard deviation, endpoint CPU time, and
+  two distinct physical cores and prefers two non-zero P-cores on a hybrid
+  host, retaining CPU 0 only as a fallback for smaller topologies;
+  queue/Rigtorp samples are paired in alternating order; raw results record
+  median, standard deviation, endpoint CPU time, and
   the resolved affinity; the manifest records the Windows base plan and
   performance overlay; retries use CPU-relax rather than scheduler yield;
   and `-LibraryRoot` supports an H0/H2 build comparison using one harness.
@@ -778,6 +780,9 @@ allowing a machine-specific capture to force a queue ranking.
   verification.
 - Release evidence uses at least nine pairs in both affinity directions on
   distinct pinned CPUs.
+- A host-wide winner claim requires agreement from additional same-class
+  physical-core pairs; a passing single-pair classification remains local to
+  that pair.
 - A direction fails ranking eligibility when paired-ratio CV exceeds 10%,
   minimum endpoint CPU occupancy is below 80%, affinity is not applied, or the
   sample count is insufficient.
@@ -814,6 +819,16 @@ as a separate diagnostic format.
   Boundary medians were `0.975` and `0.976`; their minimum CPU occupancy was
   below the conservative 80% gate, so boundary was also `inconclusive` rather
   than an unsupported parity claim.
+- A follow-up non-zero-core diagnostic repeated the same default-scale protocol
+  on P-core pairs `2,4`, `4,6`, and `6,8` under one unchanged Balanced power
+  plan. All 216 measured samples were verified. Steady forward/reverse ratios
+  were `0.734/1.261`, `1.077/1.131`, and `0.888/0.572`, respectively. Only
+  `4,6` passed both direction gates (`Rigtorp / SPSC` geometric ratio `1.104`);
+  the reverse runs on `2,4` and `6,8` failed the paired-variation gate. Avoiding
+  CPU 0 therefore removes a housekeeping concern but does not create a
+  core-pair-independent ranking. `auto` now prefers the first two non-zero
+  P/SMT physical cores, while any host-wide claim must remain inconclusive
+  unless additional same-class pairs agree.
 - GCC/Clang and MSVC protocol smoke steps are present in GitHub Actions. H0R
   remains CI-pending until those checks run on the committed revision.
 
