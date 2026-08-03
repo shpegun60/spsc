@@ -1711,10 +1711,9 @@ static void test_two_thread_spsc_pool_view(Q& q,
 // ------------------------------ extra paranoia (black-box) ------------------------------
 
 template <class Q>
-static void warm_producer_queries(Q& q) {
-    (void)q.write_size();
-    (void)q.can_write(1u);
-    (void)q.free();
+static void warm_producer_endpoint_cache(Q& q) {
+    // Only producer operations may refresh the producer-owned shadow.
+    (void)q.try_claim();
 }
 
 template <class Q>
@@ -1779,7 +1778,7 @@ static void test_shadow_swap_move_regression_static() {
 
     // Warm producer-side caches on 'a'.
     QVERIFY(a.empty());
-    warm_producer_queries(a);
+    warm_producer_endpoint_cache(a);
 
     fill_full(b, 1000u);
 
@@ -1801,7 +1800,7 @@ static void test_shadow_swap_move_regression_static() {
     // Move-assign into a pre-warmed valid target: full-state must be preserved.
     Q assigned(st_a.slot_table, kBufSz, Policy{});
     QVERIFY(assigned.is_valid());
-    warm_producer_queries(assigned);
+    warm_producer_endpoint_cache(assigned);
     assigned = std::move(moved);
 
     QVERIFY(assigned.is_valid());
@@ -1828,7 +1827,7 @@ static void test_shadow_swap_move_regression_dynamic() {
     QVERIFY(b.is_valid());
 
     QVERIFY(a.empty());
-    warm_producer_queries(a);
+    warm_producer_endpoint_cache(a);
 
     fill_full(b, 2000u);
 
@@ -1847,7 +1846,7 @@ static void test_shadow_swap_move_regression_dynamic() {
 
     Q assigned(st_a.slot_table.data(), st_a.depth, kBufSz, Policy{});
     QVERIFY(assigned.is_valid());
-    warm_producer_queries(assigned);
+    warm_producer_endpoint_cache(assigned);
     assigned = std::move(moved);
 
     QVERIFY(assigned.is_valid());

@@ -110,6 +110,9 @@ Use this for:
 - block-oriented writes
 - `array_fifo` / `chunk_fifo`, where value-based producer methods are intentionally deleted
 
+Treat `claim -> fill/construct -> publish` as one producer transaction. Do not
+interleave it with another producer-side claim, push, bulk region, or guard.
+
 Bulk publish is also available:
 
 ```cpp
@@ -171,6 +174,10 @@ That same shape works for:
 - `pool_view`
 - `typed_pool`
 - wrappers built on them
+
+Treat `front -> process -> pop` as one consumer transaction. Do not obtain a
+second front, snapshot, bulk region, or read guard while the first retained
+view is active.
 
 For `latest`, remember that `front()` is the newest committed slot, not the oldest queued element.
 

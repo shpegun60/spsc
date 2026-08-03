@@ -51,6 +51,7 @@
 #endif
 
 #include "test_policy_matrix.hpp"
+#include "test_spsc_layout.hpp"
 
 #include "fifo.hpp"
 #include "array_fifo.hpp"
@@ -142,6 +143,11 @@ static const Runner_ g_runner_{};
 } // namespace spsc_fifo_death_detail
 
 namespace {
+
+static_assert(std::is_same_v<
+                  ::spsc::fast_fifo<int, 16>,
+                  ::spsc::fifo<int, 16, ::spsc::policy::CFA<>>>,
+              "fast_fifo must select the single-writer CFA policy in 2.0");
 
 
 // Scale fuzz to avoid painfully slow Debug runs.
@@ -614,20 +620,17 @@ static void test_shadow_sync_regressions() {
     a.clear();
     b.clear();
 
-    // Fill 'a' and warm both producer+consumer paths so shadows are non-trivial.
+    // Fill 'a' and exercise both endpoint paths. Public observation queries
+    // are deliberately not used to warm a shadow cache (H3 contract).
     QVERIFY(a.try_push(Traced{1}));
     QVERIFY(a.try_push(Traced{2}));
-    (void)a.empty();      // consumer path
-    (void)a.read_size();  // consumer path
-    (void)a.full();       // producer path
-    (void)a.write_size(); // producer path
+    QVERIFY(a.try_claim() != nullptr); // producer endpoint path
+    QVERIFY(a.try_front() != nullptr); // consumer endpoint path
     verify_invariants(a);
 
-    // Warm 'b' too (keep it empty but touch both paths).
-    (void)b.empty();
-    (void)b.read_size();
-    (void)b.full();
-    (void)b.write_size();
+    // Exercise both endpoint paths on an empty queue too.
+    QVERIFY(b.try_claim() != nullptr);
+    QVERIFY(b.try_front() == nullptr);
     verify_invariants(b);
 
     // Swap regression: if swap doesn't sync shadow with new head/tail, invariants can break.
@@ -644,12 +647,11 @@ static void test_shadow_sync_regressions() {
     QVERIFY(b.empty());
     verify_invariants(b);
 
-    // Move regression: move a warmed, non-empty queue.
+    // Move regression: move an endpoint-exercised, non-empty queue.
     QVERIFY(b.try_push(Traced{7}));
     QVERIFY(b.try_push(Traced{8}));
-    (void)b.empty();
-    (void)b.read_size();
-    (void)b.write_size();
+    QVERIFY(b.try_claim() != nullptr);
+    QVERIFY(b.try_front() != nullptr);
     verify_invariants(b);
 
     Q moved(std::move(b));
@@ -661,6 +663,288 @@ static void test_shadow_sync_regressions() {
     moved.pop();
     QVERIFY(moved.empty());
     verify_invariants(moved);
+}
+
+
+template<reg C, class Policy>
+static void verify_owner_line_layout(const spsc::SPSCbase<C, Policy>& base) {
+    using Probe = spsc::detail::spscbase_layout_probe<C, Policy>;
+    using Storage = typename Probe::storage_type;
+
+    constexpr bool kExpectedShadow = ::spsc::detail::rb_use_shadow_v<Policy>;
+    static_assert(Storage::kHasShadows == kExpectedShadow,
+                  "Index storage must preserve the shadow eligibility contract");
+    static_assert(!kExpectedShadow ||
+                      !std::is_standard_layout<typename Policy::counter_type>::value ||
+                      std::is_standard_layout<Storage>::value,
+                  "Standard-layout counters require standard-layout index storage");
+
+    const auto snapshot = Probe::inspect(base);
+    QVERIFY(snapshot.head != nullptr);
+    QVERIFY(snapshot.tail != nullptr);
+    QVERIFY(snapshot.shadows_enabled == kExpectedShadow);
+    QVERIFY(snapshot.counter_alignment != 0u);
+    QVERIFY((reinterpret_cast<std::uintptr_t>(snapshot.head) %
+             static_cast<std::uintptr_t>(snapshot.counter_alignment)) == 0u);
+    QVERIFY((reinterpret_cast<std::uintptr_t>(snapshot.tail) %
+             static_cast<std::uintptr_t>(snapshot.counter_alignment)) == 0u);
+
+    if constexpr (!kExpectedShadow) {
+        QVERIFY(snapshot.prod_shadow_tail == nullptr);
+        QVERIFY(snapshot.cons_shadow_head == nullptr);
+        QVERIFY(snapshot.producer_block == nullptr);
+        QVERIFY(snapshot.consumer_block == nullptr);
+        QCOMPARE(sizeof(Storage), sizeof(typename Policy::counter_type) * std::size_t{2u});
+        return;
+    }
+
+    QVERIFY(snapshot.prod_shadow_tail != nullptr);
+    QVERIFY(snapshot.cons_shadow_head != nullptr);
+    QVERIFY(snapshot.producer_block != nullptr);
+    QVERIFY(snapshot.consumer_block != nullptr);
+    QVERIFY((reinterpret_cast<std::uintptr_t>(snapshot.producer_block) %
+             static_cast<std::uintptr_t>(SPSC_CACHELINE_BYTES)) == 0u);
+    QVERIFY((reinterpret_cast<std::uintptr_t>(snapshot.consumer_block) %
+             static_cast<std::uintptr_t>(SPSC_CACHELINE_BYTES)) == 0u);
+    QVERIFY((snapshot.producer_block_bytes % SPSC_CACHELINE_BYTES) == 0u);
+    QVERIFY((snapshot.consumer_block_bytes % SPSC_CACHELINE_BYTES) == 0u);
+
+    using spsc::test_layout::address_range_of;
+    using spsc::test_layout::ranges_share_cache_line;
+
+    const auto head = address_range_of(snapshot.head, snapshot.counter_bytes);
+    const auto tail = address_range_of(snapshot.tail, snapshot.counter_bytes);
+    const auto prod_shadow = address_range_of(snapshot.prod_shadow_tail, sizeof(reg));
+    const auto cons_shadow = address_range_of(snapshot.cons_shadow_head, sizeof(reg));
+    const auto producer_block =
+        address_range_of(snapshot.producer_block, snapshot.producer_block_bytes);
+    const auto consumer_block =
+        address_range_of(snapshot.consumer_block, snapshot.consumer_block_bytes);
+
+    // Opposite endpoints must not write any common configured cache line.
+    QVERIFY(!ranges_share_cache_line(producer_block, consumer_block));
+    QVERIFY(!ranges_share_cache_line(head, tail));
+    QVERIFY(!ranges_share_cache_line(head, cons_shadow));
+    QVERIFY(!ranges_share_cache_line(prod_shadow, tail));
+    QVERIFY(!ranges_share_cache_line(prod_shadow, cons_shadow));
+}
+
+template<class Policy>
+static void verify_owner_line_layout_static_and_dynamic() {
+    using StaticSubject = spsc::test_layout::layout_subject<64u, Policy>;
+    using DynamicSubject = spsc::test_layout::layout_subject<0u, Policy>;
+
+    StaticSubject fixed{};
+    verify_owner_line_layout<64u, Policy>(fixed);
+
+    DynamicSubject dynamic{64u};
+    verify_owner_line_layout<0u, Policy>(dynamic);
+}
+
+static void owner_line_layout_suite() {
+    // Non-atomic policies stay compact and shadow-free.
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::P>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::V>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::VV>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CP>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CV>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CVV>();
+
+    // Every atomic backend retains shadows when the global/width gates allow.
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::A<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::FA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::AA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CFA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::policy::CAA<>>();
+    verify_owner_line_layout_static_and_dynamic<spsc::test_layout::subcacheline_atomic_policy>();
+    verify_owner_line_layout_static_and_dynamic<spsc::test_layout::over_aligned_atomic_policy>();
+}
+
+template<class Policy>
+static void verify_observer_queries_do_not_touch_shadow_cache() {
+    using Subject = spsc::test_layout::observer_subject<64u, Policy>;
+    using Probe = spsc::detail::spscbase_layout_probe<64u, Policy>;
+
+    Subject q;
+
+    // Establish distinct non-zero cache values using only the role-local
+    // cached helpers. The test then calls every direct observer query.
+    q.set_indices_for_test(1u, 0u);
+    QVERIFY(!q.consumer_empty_cached_for_test());
+
+    q.set_indices_for_test(64u, 1u);
+    QVERIFY(!q.producer_full_cached_for_test());
+
+    const reg producer_before = Probe::producer_shadow_value(q);
+    const reg consumer_before = Probe::consumer_shadow_value(q);
+
+    if constexpr (Probe::kUseShadow) {
+        QCOMPARE(producer_before, reg{1u});
+        QCOMPARE(consumer_before, reg{1u});
+    }
+
+    (void)q.size();
+    (void)q.empty();
+    (void)q.full();
+    (void)q.free();
+    (void)q.can_write(1u);
+    (void)q.can_read(1u);
+    (void)q.write_size();
+    (void)q.read_size();
+
+    QCOMPARE(Probe::producer_shadow_value(q), producer_before);
+    QCOMPARE(Probe::consumer_shadow_value(q), consumer_before);
+}
+
+static void observer_queries_do_not_touch_shadow_cache_suite() {
+    verify_observer_queries_do_not_touch_shadow_cache<spsc::policy::A<>>();
+    verify_observer_queries_do_not_touch_shadow_cache<spsc::policy::CFA<>>();
+    verify_observer_queries_do_not_touch_shadow_cache<
+        spsc::test_layout::over_aligned_atomic_policy>();
+}
+
+template<reg C, class Policy>
+static void verify_counter_wrap_base_subject(
+    spsc::test_layout::counter_wrap_subject<C, Policy>& q) {
+    using Probe = spsc::detail::spscbase_layout_probe<C, Policy>;
+
+    const reg cap = q.capacity();
+    QCOMPARE(cap, reg{8u});
+
+    const reg before_wrap = static_cast<reg>(std::numeric_limits<reg>::max() - 3u);
+    QVERIFY(q.restore_indices_for_test(before_wrap, before_wrap));
+    QCOMPARE(q.head_for_test(), before_wrap);
+    QCOMPARE(q.tail_for_test(), before_wrap);
+    QCOMPARE(q.size(), reg{0u});
+    QCOMPARE(q.free(), cap);
+    QVERIFY(q.empty());
+    QVERIFY(!q.full());
+    QCOMPARE(q.write_index_for_test(), reg{4u});
+    QCOMPARE(q.read_index_for_test(), reg{4u});
+    QCOMPARE(q.write_size(), reg{4u});
+    QCOMPARE(q.read_size(), reg{0u});
+    QCOMPARE(q.producer_write_size_cached_for_test(), reg{4u});
+    QVERIFY(q.consumer_empty_cached_for_test());
+
+    for (reg i = 0u; i < 4u; ++i) {
+        q.increment_head_for_test();
+    }
+
+    // The logical head crossed max -> 0 while its physical index remains valid.
+    QCOMPARE(q.head_for_test(), reg{0u});
+    QCOMPARE(q.size(), reg{4u});
+    QCOMPARE(q.free(), reg{4u});
+    QVERIFY(q.can_read(reg{4u}));
+    QVERIFY(!q.can_read(reg{5u}));
+    QVERIFY(q.can_write(reg{4u}));
+    QVERIFY(!q.can_write(reg{5u}));
+    QCOMPARE(q.write_index_for_test(), reg{0u});
+    QCOMPARE(q.read_index_for_test(), reg{4u});
+    QCOMPARE(q.write_size(), reg{4u});
+    QCOMPARE(q.read_size(), reg{4u});
+    QVERIFY(!q.consumer_empty_cached_for_test());
+
+    if constexpr (Probe::kUseShadow) {
+        QCOMPARE(Probe::consumer_shadow_value(q), reg{0u});
+    }
+
+    for (reg i = 0u; i < 4u; ++i) {
+        q.increment_head_for_test();
+    }
+
+    QCOMPARE(q.head_for_test(), reg{4u});
+    QCOMPARE(q.size(), cap);
+    QCOMPARE(q.free(), reg{0u});
+    QVERIFY(q.full());
+    QVERIFY(q.producer_full_cached_for_test());
+    QCOMPARE(q.write_size(), reg{0u});
+    QCOMPARE(q.read_size(), reg{4u});
+
+    q.increment_tail_for_test();
+    QCOMPARE(q.tail_for_test(), static_cast<reg>(before_wrap + 1u));
+    QVERIFY(!q.producer_full_cached_for_test());
+
+    if constexpr (Probe::kUseShadow) {
+        QCOMPARE(Probe::producer_shadow_value(q), q.tail_for_test());
+    }
+
+    for (reg i = 0u; i < 3u; ++i) {
+        q.increment_tail_for_test();
+    }
+
+    // The logical tail crossed max -> 0 too; both endpoint caches still
+    // describe the same bounded queue.
+    QCOMPARE(q.tail_for_test(), reg{0u});
+    QCOMPARE(q.size(), reg{4u});
+    QCOMPARE(q.write_index_for_test(), reg{4u});
+    QCOMPARE(q.read_index_for_test(), reg{0u});
+    QCOMPARE(q.write_size(), reg{4u});
+    QCOMPARE(q.read_size(), reg{4u});
+    QVERIFY(!q.consumer_empty_cached_for_test());
+
+    if constexpr (Probe::kUseShadow) {
+        QCOMPARE(Probe::consumer_shadow_value(q), q.head_for_test());
+    }
+
+    for (reg i = 0u; i < 4u; ++i) {
+        q.increment_tail_for_test();
+    }
+
+    QCOMPARE(q.head_for_test(), reg{4u});
+    QCOMPARE(q.tail_for_test(), reg{4u});
+    QVERIFY(q.empty());
+    QCOMPARE(q.size(), reg{0u});
+    QCOMPARE(q.free(), cap);
+    QVERIFY(q.consumer_empty_cached_for_test());
+
+    const reg corrupt_tail = before_wrap;
+    const reg corrupt_head = static_cast<reg>(corrupt_tail + cap + 1u);
+    q.set_indices_unchecked_for_test(corrupt_head, corrupt_tail);
+
+    if constexpr (::spsc::detail::is_atomic_counter_backend_v<Policy>) {
+        // Atomic public observations fail closed on a stable impossible state.
+        QCOMPARE(q.size(), reg{0u});
+        QCOMPARE(q.free(), reg{0u});
+        QVERIFY(q.empty());
+        QVERIFY(q.full());
+        QVERIFY(!q.can_read(reg{1u}));
+        QVERIFY(!q.can_write(reg{1u}));
+        QCOMPARE(q.read_size(), reg{0u});
+        QCOMPARE(q.write_size(), reg{0u});
+    }
+
+    // Restore/adopt validation rejects the same impossible state and resets
+    // both endpoint caches through the normal non-concurrent path.
+    QVERIFY(!q.restore_indices_for_test(corrupt_head, corrupt_tail));
+    QCOMPARE(q.head_for_test(), reg{0u});
+    QCOMPARE(q.tail_for_test(), reg{0u});
+    QVERIFY(q.empty());
+    QVERIFY(!q.full());
+    QCOMPARE(q.size(), reg{0u});
+    QCOMPARE(q.free(), cap);
+    QVERIFY(q.consumer_empty_cached_for_test());
+    QVERIFY(!q.producer_full_cached_for_test());
+}
+
+template<reg C, class Policy>
+static void verify_counter_wrap_base() {
+    using Subject = spsc::test_layout::counter_wrap_subject<C, Policy>;
+
+    if constexpr (C == 0u) {
+        Subject q{8u};
+        verify_counter_wrap_base_subject<C, Policy>(q);
+    } else {
+        Subject q{};
+        verify_counter_wrap_base_subject<C, Policy>(q);
+    }
+}
+
+static void counter_wrap_and_invariant_suite() {
+    verify_counter_wrap_base<8u, spsc::policy::P>();
+    verify_counter_wrap_base<0u, spsc::policy::P>();
+    verify_counter_wrap_base<8u, spsc::policy::CFA<>>();
+    verify_counter_wrap_base<0u, spsc::policy::CFA<>>();
 }
 
 
@@ -2160,6 +2444,189 @@ static void threaded_spsc_stress_fifo(Q& q, const int iters = kThreadIters, cons
     verify_invariants(q);
 }
 
+// Three-thread H3 regression: producer + consumer own their endpoint caches,
+// while an independent observer repeatedly invokes every public occupancy
+// query. The observer must never mutate either endpoint shadow.
+template <class Q>
+static void threaded_observer_stress_fifo(Q& q,
+                                          const int iters = (kThreadIters / 4),
+                                          const int timeout_ms = kThreadTimeoutMs) {
+    static_assert(std::is_same_v<typename Q::value_type, ThreadMsg>,
+                  "threaded_observer_stress_fifo: Q::value_type must be ThreadMsg");
+
+    QVERIFY(q.is_valid());
+    QVERIFY(q.empty());
+
+    std::atomic<bool> abort{false};
+    std::atomic<int> fail_code{0};
+    std::atomic<std::uint32_t> fail_seq{0u};
+    std::atomic<std::uint32_t> produced{0u};
+    std::atomic<std::uint32_t> consumed{0u};
+    std::atomic<std::uint32_t> observations{0u};
+    std::atomic<bool> prod_done{false};
+    std::atomic<bool> cons_done{false};
+    std::atomic<bool> observer_done{false};
+    std::atomic<int> workers_ready{0};
+    std::atomic<bool> start{false};
+
+    auto record_fail = [&](const int code, const std::uint32_t seq) noexcept {
+        int expected = 0;
+        if (fail_code.compare_exchange_strong(expected, code)) {
+            fail_seq.store(seq, std::memory_order_relaxed);
+        }
+        abort.store(true, std::memory_order_relaxed);
+    };
+
+    auto await_start = [&]() noexcept {
+        workers_ready.fetch_add(1, std::memory_order_relaxed);
+        while (!abort.load(std::memory_order_relaxed) &&
+               !start.load(std::memory_order_relaxed)) {
+            std::this_thread::yield();
+        }
+    };
+
+    std::thread producer([&] {
+        await_start();
+        std::uint32_t spins = 0u;
+        std::uint32_t seq = 1u;
+
+        while (!abort.load(std::memory_order_relaxed) &&
+               seq <= static_cast<std::uint32_t>(iters)) {
+            auto* slot = q.try_claim();
+            if (slot == nullptr) {
+                backoff_step(spins);
+                continue;
+            }
+
+            *slot = make_msg(seq);
+            if (!q.try_publish()) {
+                record_fail(1, seq);
+                break;
+            }
+
+            produced.fetch_add(1u, std::memory_order_relaxed);
+            ++seq;
+            spins = 0u;
+        }
+
+        prod_done.store(true, std::memory_order_relaxed);
+    });
+
+    std::thread consumer([&] {
+        await_start();
+        std::uint32_t spins = 0u;
+        std::uint32_t expected = 1u;
+
+        while (!abort.load(std::memory_order_relaxed) &&
+               expected <= static_cast<std::uint32_t>(iters)) {
+            const auto* value = q.try_front();
+            if (value == nullptr) {
+                backoff_step(spins);
+                continue;
+            }
+
+            if (!msg_matches(*value, expected)) {
+                record_fail(2, expected);
+                break;
+            }
+            if (!q.try_pop()) {
+                record_fail(3, expected);
+                break;
+            }
+
+            consumed.fetch_add(1u, std::memory_order_relaxed);
+            ++expected;
+            spins = 0u;
+        }
+
+        cons_done.store(true, std::memory_order_relaxed);
+    });
+
+    std::thread observer([&] {
+        await_start();
+        // On a lightly loaded CI runner both endpoint threads may finish
+        // before the observer receives its first timeslice. Take one
+        // non-mutating sample unconditionally, then continue while either
+        // endpoint is active.
+        do {
+            const reg cap = q.capacity();
+            const reg size = q.size();
+            const reg free = q.free();
+            const reg writable = q.write_size();
+            const reg readable = q.read_size();
+
+            (void)q.empty();
+            (void)q.full();
+            (void)q.can_write(1u);
+            (void)q.can_read(1u);
+
+            if (size > cap || free > cap || writable > cap || readable > cap) {
+                record_fail(4, observations.load(std::memory_order_relaxed));
+                break;
+            }
+            observations.fetch_add(1u, std::memory_order_relaxed);
+        } while (!abort.load(std::memory_order_relaxed) &&
+                 !(prod_done.load(std::memory_order_relaxed) &&
+                   cons_done.load(std::memory_order_relaxed)));
+
+        observer_done.store(true, std::memory_order_relaxed);
+    });
+
+    const auto started = std::chrono::steady_clock::now();
+    while (workers_ready.load(std::memory_order_relaxed) != 3) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
+        if (elapsed.count() > timeout_ms) {
+            abort.store(true, std::memory_order_relaxed);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    start.store(true, std::memory_order_relaxed);
+
+    while (!abort.load(std::memory_order_relaxed) &&
+           !(prod_done.load(std::memory_order_relaxed) &&
+             cons_done.load(std::memory_order_relaxed) &&
+             observer_done.load(std::memory_order_relaxed))) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
+        if (elapsed.count() > timeout_ms) {
+            abort.store(true, std::memory_order_relaxed);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    if (producer.joinable()) {
+        producer.join();
+    }
+    if (consumer.joinable()) {
+        consumer.join();
+    }
+    if (observer.joinable()) {
+        observer.join();
+    }
+
+    const int code = fail_code.load(std::memory_order_relaxed);
+    if (code != 0) {
+        const QString message =
+            QString("3-thread observer stress failed: code=%1 seq=%2 produced=%3 consumed=%4 observations=%5 size=%6")
+                .arg(code)
+                .arg(fail_seq.load(std::memory_order_relaxed))
+                .arg(produced.load(std::memory_order_relaxed))
+                .arg(consumed.load(std::memory_order_relaxed))
+                .arg(observations.load(std::memory_order_relaxed))
+                .arg(q.size());
+        QVERIFY2(false, qPrintable(message));
+    }
+
+    QCOMPARE(static_cast<int>(produced.load(std::memory_order_relaxed)), iters);
+    QCOMPARE(static_cast<int>(consumed.load(std::memory_order_relaxed)), iters);
+    QVERIFY(observations.load(std::memory_order_relaxed) != 0u);
+    QVERIFY(q.empty());
+    verify_invariants(q);
+}
+
 template <typename Policy>
 static void run_threaded_suite() {
     using Qs = spsc::fifo<ThreadMsg, 4096u, Policy>;
@@ -3644,6 +4111,13 @@ static void array_fifo_wrapper_runtime_smoke_suite() {
     }
 }
 
+template <typename Policy>
+static void run_threaded_observer_suite() {
+    using Q = spsc::fifo<ThreadMsg, 4096u, Policy>;
+    Q q;
+    threaded_observer_stress_fifo(q);
+}
+
 static void extended_policy_smoke_suite() {
     ::spsc::test::for_each_extended_nonthreaded_policy([](auto policy_tag) {
         using Policy = typename decltype(policy_tag)::type;
@@ -3675,6 +4149,102 @@ static void extended_policy_threaded_atomic_like_suite() {
     run_threaded_bulk_regions_suite<spsc::policy::CFA<>>("threaded_fifo_bulk_cached_fast_atomic");
     run_threaded_bulk_regions_suite<spsc::policy::CAA<>>("threaded_fifo_bulk_cached_atomic_atomic");
 }
+
+static void custom_atomic_order_policy_suite() {
+    ::spsc::test::for_each_custom_atomic_order_policy([](auto policy_tag) {
+        using Policy = typename decltype(policy_tag)::type;
+        run_static_suite<Policy>();
+        run_dynamic_suite<Policy>();
+    });
+
+    using AcquireRelease = ::spsc::test::explicit_acquire_release_orders;
+    using SeqCst = ::spsc::test::explicit_seq_cst_orders;
+
+    // Exercise both the single-writer atomic path and its cache-aligned form
+    // concurrently with each valid custom publication palette.
+    run_threaded_suite<spsc::policy::FA<AcquireRelease>>();
+    run_threaded_suite<spsc::policy::CFA<AcquireRelease>>();
+    run_threaded_suite<spsc::policy::FA<SeqCst>>();
+    run_threaded_suite<spsc::policy::CFA<SeqCst>>();
+}
+
+#if SPSC_HAS_SPAN
+template <class Q>
+static void verify_fifo_span_contract(Q& q) {
+    using value_type = typename Q::value_type;
+
+    QVERIFY(q.is_valid());
+    QVERIFY(q.empty());
+
+    auto storage = q.span();
+    QCOMPARE(static_cast<reg>(storage.size()), q.capacity());
+    QCOMPARE(storage.data(), q.data());
+
+    const Q& cq = q;
+    auto const_storage = cq.span();
+    QCOMPARE(static_cast<reg>(const_storage.size()), q.capacity());
+    QCOMPARE(const_storage.data(), cq.data());
+
+    const auto storage_alignment = static_cast<std::uintptr_t>(
+        ::spsc::alloc::policy_storage_alignment_v<typename Q::policy_type, value_type>);
+    QVERIFY(storage_alignment != 0u);
+    QCOMPARE(reinterpret_cast<std::uintptr_t>(storage.data()) % storage_alignment,
+             std::uintptr_t{0u});
+
+    const reg cap = q.capacity();
+    QCOMPARE(cap, reg{8u});
+    for (reg value = 0u; value < cap; ++value) {
+        QVERIFY(q.try_push(static_cast<value_type>(value)));
+    }
+    QVERIFY(q.full());
+    QCOMPARE(static_cast<reg>(q.span().size()), cap);
+
+    for (reg value = 0u; value < 4u; ++value) {
+        QCOMPARE(q.front(), static_cast<value_type>(value));
+        q.pop();
+    }
+    for (reg value = cap; value < cap + 4u; ++value) {
+        QVERIFY(q.try_push(static_cast<value_type>(value)));
+    }
+
+    // span() is the physical capacity storage, not a logical FIFO view. After
+    // a wrap its first half has the newly written elements and the second half
+    // still contains the older logical front.
+    storage = q.span();
+    for (reg i = 0u; i < 4u; ++i) {
+        QCOMPARE(storage[static_cast<std::size_t>(i)], static_cast<value_type>(cap + i));
+        QCOMPARE(storage[static_cast<std::size_t>(i + 4u)], static_cast<value_type>(i + 4u));
+    }
+
+    for (reg value = 4u; value < cap + 4u; ++value) {
+        QCOMPARE(q.front(), static_cast<value_type>(value));
+        q.pop();
+    }
+    QVERIFY(q.empty());
+    QCOMPARE(static_cast<reg>(q.span().size()), cap);
+}
+
+static void fifo_span_contract_suite() {
+    {
+        spsc::fifo<std::uint32_t, 8u, spsc::policy::P> q;
+        verify_fifo_span_contract(q);
+    }
+    {
+        spsc::fifo<std::uint32_t, 0u, spsc::policy::P> q;
+        QVERIFY(q.resize(8u));
+        verify_fifo_span_contract(q);
+    }
+    {
+        spsc::fifo<std::uint32_t, 8u, spsc::policy::CA<>> q;
+        verify_fifo_span_contract(q);
+    }
+    {
+        spsc::fifo<std::uint32_t, 0u, spsc::policy::CA<>> q;
+        QVERIFY(q.resize(8u));
+        verify_fifo_span_contract(q);
+    }
+}
+#endif // SPSC_HAS_SPAN
 
 static void death_tests_debug_only_suite() {
 #if !defined(NDEBUG)
@@ -3756,6 +4326,17 @@ private slots:
         api_compile_smoke_all();
     }
 
+    void owner_line_layout() { owner_line_layout_suite(); }
+    void observer_queries_do_not_touch_shadow_cache() {
+        observer_queries_do_not_touch_shadow_cache_suite();
+    }
+    void counter_wrap_and_invariants() { counter_wrap_and_invariant_suite(); }
+    void custom_atomic_order_policies() { custom_atomic_order_policy_suite(); }
+
+#if SPSC_HAS_SPAN
+    void span_contract() { fifo_span_contract_suite(); }
+#endif
+
     void static_plain_P()    { run_static_suite<spsc::policy::P>(); }
     void static_volatile_V() { run_static_suite<spsc::policy::V>(); }
     void static_atomic_A()   { run_static_suite<spsc::policy::A<>>(); }
@@ -3774,6 +4355,12 @@ private slots:
 
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>(); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>(); }
+    void threaded_observer_atomic_A() {
+        run_threaded_observer_suite<spsc::policy::A<>>();
+    }
+    void threaded_observer_cached_CA() {
+        run_threaded_observer_suite<spsc::policy::CA<>>();
+    }
 
     void threaded_snapshot_atomic_A() {
         run_threaded_snapshot_suite<spsc::policy::A<>>("threaded_snapshot_atomic");

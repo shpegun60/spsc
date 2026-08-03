@@ -1,8 +1,19 @@
 QT += core testlib
-CONFIG += console c++17
+CONFIG += console
+
+isEmpty(SPSC_TEST_CXX_STANDARD) {
+    CONFIG += c++17
+} else {
+    CONFIG += $$SPSC_TEST_CXX_STANDARD
+}
+
 TEMPLATE = app
 DEFINES += SPSC_TESTS_WITH_QT=1
-DEFINES += SPSC_HAS_SPAN=0
+isEmpty(SPSC_TEST_SPAN_ENABLED) {
+    DEFINES += SPSC_HAS_SPAN=0
+} else {
+    DEFINES += SPSC_HAS_SPAN=$$SPSC_TEST_SPAN_ENABLED
+}
 DEFINES += SPSC_TEST_ACTUAL_TARGET_NAME=\\\"$${TARGET}\\\"
 
 CONFIG(debug, debug|release) {
@@ -18,12 +29,15 @@ INCLUDEPATH += \
     $$PWD/../src/tests
 
 DESTDIR = $$OUT_PWD/../bin/$${BUILD_CONFIG_NAME}
-OBJECTS_DIR = $$OUT_PWD/.obj/$${BUILD_CONFIG_NAME}/$${TARGET}
-MOC_DIR = $$OUT_PWD/.moc/$${BUILD_CONFIG_NAME}/$${TARGET}
-RCC_DIR = $$OUT_PWD/.rcc/$${BUILD_CONFIG_NAME}/$${TARGET}
-UI_DIR = $$OUT_PWD/.ui/$${BUILD_CONFIG_NAME}/$${TARGET}
+# Keep generated files in the isolated qmake output directory.
+OBJECTS_DIR = .obj/$${BUILD_CONFIG_NAME}/$${TARGET}
+MOC_DIR = .moc/$${BUILD_CONFIG_NAME}/$${TARGET}
+RCC_DIR = .rcc/$${BUILD_CONFIG_NAME}/$${TARGET}
+UI_DIR = .ui/$${BUILD_CONFIG_NAME}/$${TARGET}
 
-INCLUDEPATH += $$MOC_DIR
+# Qt's moc.prf adds MOC_DIR as an output-directory include path.  Do not add
+# it here: rebasing its normalized relative spelling against $$PWD lets stale
+# source-tree MOC files leak into an out-of-source build.
 
 DEPENDPATH += \
     $$PWD/../src \
@@ -53,6 +67,7 @@ HEADERS += \
     ../macro.h \
     ../src/tests/test_config.hpp \
     ../src/tests/test_build_config.hpp \
+    ../src/tests/test_spsc_layout.hpp \
     ../src/tests/buffer_pool_test.h \
     ../src/tests/chunk_test.h \
     ../src/tests/queue_test.h \

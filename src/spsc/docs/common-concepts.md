@@ -12,6 +12,20 @@ Every container in this library is **strictly SPSC**:
 
 This applies even when the API looks "safe". The containers are hardened against corrupted state, but they are not MPSC or MPMC queues.
 
+### Endpoint ownership
+
+| Role while the queue is live | May call | Must not call concurrently |
+| --- | --- | --- |
+| Producer | producer-side methods: `push`, `emplace`, `claim`, `publish`, write regions, and write guards | consumer-side methods or management |
+| Consumer | consumer-side methods: `front`, `pop`, snapshots, read regions, and read guards | producer-side methods or management |
+| Third observer | only `size`, `empty`, `full`, `free`, `can_write`, `can_read`, `write_size`, and `read_size`, and only with an atomic-backed policy | endpoint methods, state-management methods, or a reservation decision based on an observation |
+| Both endpoints stopped | `resize`, `clear`, `destroy`, `swap`, copy/move, `attach`, `adopt`, and state restore | restart traffic until management is complete |
+
+The observer row is deliberately narrow. Its atomic-policy result is an
+approximate snapshot, not a third endpoint or a reservation. See
+[Concurrency and FreeRTOS](concurrency-and-freertos.md) for the supported
+policy families.
+
 ## 2. Static vs Dynamic Geometry
 
 Most containers come in two forms:
@@ -31,11 +45,24 @@ spsc::pool<0> dynamic_pool{64, 256};
 
 The dynamic variants are typically **grow-oriented**. They may normalize the requested depth/capacity internally.
 
+Static capacity fixes ring geometry; it does **not** universally mean that no
+heap allocation occurs. The storage and lifetime model belongs to the
+container family:
+
+| Family | Static-capacity storage | Lifetime / allocation contract |
+| --- | --- | --- |
+| `fifo<T>` | in-object `T` slots | slots are already live; producer assigns and `pop()` does not destroy a slot |
+| `queue<T>` | fixed geometry, dynamically allocated object storage | placement-new before publish and destruction on `pop()`; static `queue` can allocate |
+| `pool` | fixed pointer-ring geometry | configured raw buffers are allocated separately |
+| `typed_pool<T>` | fixed pointer-ring geometry | independent owning typed slots are allocated separately and destroyed on consume |
+| static typed `latest<T, Depth>` | in-object typed slots | newest-state storage is bounded; dynamic forms allocate as needed |
+| `*_view` | caller-owned backing storage | no ownership, allocation, or realignment of the backing storage |
+
 ## 3. Owning vs View Containers
 
 There are two major families:
 
-- owning containers allocate and own their storage
+- owning containers own their storage, either inline or through allocation
 - `*_view` containers only track head/tail/capacity and operate on memory that you provide
 
 Use a view when:
@@ -79,6 +106,10 @@ This is the preferred path when:
 - a producer fills a slot directly
 - DMA or another subsystem writes into the slot memory
 
+The producer transaction is `claim -> fill/construct -> publish`. Complete it
+before another producer-side operation: do not claim a second slot, push, or
+start a bulk/guard transaction while the first claim is outstanding.
+
 ### 4.3. Sticky-Latest
 
 Specific to `latest`:
@@ -106,6 +137,10 @@ Pick the simplest model that matches your consumer:
 between snapshot capture and consume. Use `try_consume(snapshot)` when the
 consumer path may branch, delay, or perform another consumer-side operation first.
 
+Likewise, complete `front -> process -> pop` before another consumer-side
+operation. A retained `front()` pointer, snapshot, bulk region, or guard is an
+active consumer transaction; same-side interleaving invalidates its contract.
+
 For copy-paste patterns covering these shared interface families, see [Method Recipes](method-recipes.md).
 For guard- and bulk-helper specific APIs, see [Guard and Bulk Helpers](guard-and-bulk-helpers.md).
 
@@ -116,11 +151,12 @@ All main containers use a `Policy` parameter controlling the metadata counters.
 Ready-made families:
 
 - `default_policy`: `P` by default; define `SPSC_DEFAULT_POLICY_ATOMIC=1` only when you deliberately want `A<>` as the default
-- `P`: plain counters, fastest on simple single-core paths
+- `P`: plain counters for a single context or externally synchronized use
 - `V`: volatile counters for ISR/task style communication
 - `VV`: both counters and geometry volatile
-- `A<>`: strict atomic counters
-- `FA<>`: fast single-writer atomic counters
+- `A<>`: atomic counters whose increments use atomic RMW operations
+- `FA<>`: single-writer atomic counters whose increments use a relaxed load
+  followed by a release store
 - `AA<>`: atomic counters and atomic geometry
 
 Cache-line aligned aliases:
@@ -135,6 +171,18 @@ using Policy = spsc::policy::CA<>;
 spsc::fifo<int, 1024, Policy> q;
 ```
 
+`CA<>` is `CacheAligned<A<>>`: the cache-aligned strict-RMW counter backend.
+`CFA<>` is `CacheAligned<FA<>>`: the cache-aligned single-writer backend. Both
+are correct under the exact one-producer/one-consumer contract; `CA<>` is not
+"more correct", it simply uses RMW increments. Choose between them for the
+target and measurement, not from a correctness ranking.
+
+In 2.0, the legacy `fast_fifo` and `fast_queue` convenience aliases select
+`CFA<>`, the single-writer atomic backend that matches the exact SPSC ownership
+rule. The word `fast` is not a cross-platform throughput claim. When concrete
+type identity or the counter backend is an important design choice, spell the
+container policy explicitly as `CA<>`, `CFA<>`, or another suitable policy.
+
 Do not use `P` for normal thread/thread or task/task handoff. It has plain
 non-atomic counters and relies on external synchronization or a genuinely
 single-context execution model.
@@ -143,11 +191,27 @@ For task/ISR guidance and policy selection under RTOS-style concurrency, read [C
 
 ## 7. Alignment and Cache-Line Notes
 
-`CacheAligned` policies now influence more than just metadata:
+When shadows are enabled for an eligible atomic-backed policy, `SPSCbase`
+places producer-owned (`head` plus cached `tail`) and consumer-owned (`tail`
+plus cached `head`) metadata in separate owner blocks. This endpoint isolation
+does not depend on `CacheAligned`. The global shadow switch, counter-width gate,
+and explicit 32-bit opt-in still decide whether those shadow-enabled blocks are
+present.
+
+`CacheAligned` policies influence policy-owned metadata and owning allocator
+paths:
 
 - metadata counters and geometry are cache-line padded
 - default allocators derived from the policy can pick aligned allocation automatically
 - raw-slot containers such as `pool` and `latest<void>` can round slot size upward when the policy requires it
+
+Thus `A<>`/`FA<>` and `CA<>`/`CFA<>` have the same shadow eligibility. The
+cache-aligned variants additionally pad their policy counters and geometry and
+propagate allocator-alignment hints.
+
+They cannot change an external buffer's address, alignment, or size. A
+`fifo_view` or `pool_view` caller must align and size its own backing storage
+for `T`, DMA, and cache-maintenance requirements.
 
 Important boundary:
 
@@ -172,9 +236,9 @@ Choose the payload model first, then choose the container:
 
 - `fifo<T>`: assignment-based typed ring
 - `queue<T>`: lifetime-managed typed ring
-- `typed_pool<T>`: stable slots holding one `T` each
+- `typed_pool<T>`: independent owning typed-slot container with pool-style pointers
 - `pool`: raw byte buffers
-- `latest<T>` / `latest<void>`: newest-state only
+- `latest<T>` / `latest<void>`: newest-state only, but still finite and able to become full
 - `chunk<T>`: contiguous block used as a payload type
 
 ## 9. Which Container Fits Which Problem

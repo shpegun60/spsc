@@ -80,6 +80,8 @@ spsc::pool_view<kDepth, spsc::policy::CA<>> q{slots, kBytes};
 ```
 
 `pool_view` does not allocate, round, or validate the external payload buffers.
+`CacheAligned` affects only the view's metadata; it cannot realign a slot
+pointer or resize a caller-owned buffer.
 For STM32F7/STM32H7-style DMA, make each slot start cache-line aligned and
 make the maintained byte span cover whole cache lines.
 

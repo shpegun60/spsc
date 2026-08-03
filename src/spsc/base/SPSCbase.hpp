@@ -42,6 +42,7 @@
 #ifndef SPSC_RING_BASE_HPP_
 #define SPSC_RING_BASE_HPP_
 
+#include <cstddef>
 #include <limits>
 #include <type_traits>
 
@@ -81,28 +82,174 @@ template <class T>
 inline constexpr bool is_atomic_counter_backend_v =
     ::spsc::cnt::counter_is_atomic_v<typename T::counter_type>;
 
-/* Shadow indices storage (EBO when disabled).
- * Threading contract (when enabled):
- *   - prod_shadow_tail is updated ONLY by producer-side methods.
- *   - cons_shadow_head is updated ONLY by consumer-side methods.
+/* Friend-only test hook. It is defined in src/tests/test_spsc_layout.hpp and
+ * intentionally does not become a public SPSCbase API.
  */
-template<bool Enabled>
-struct rb_shadow_indices {
-    // Empty base when disabled (EBO).
+template<reg C, class PolicyT>
+struct spscbase_layout_probe;
+
+/* All data writable by one endpoint belongs to the same owner block.
+ *
+ * For the shadow-enabled representation:
+ *   producer block: _head + prod_shadow_tail
+ *   consumer block: _tail + cons_shadow_head
+ *
+ * Blocks are independently cache-line aligned and sized in full cache-line
+ * multiples. This avoids relying on fragile base/member placement or tail
+ * padding while allowing same-owner fields to remain close together.
+ */
+inline constexpr std::size_t rb_cacheline_bytes =
+    static_cast<std::size_t>(SPSC_CACHELINE_BYTES);
+
+static_assert(rb_cacheline_bytes != 0u,
+              "SPSC cache-line size must be non-zero");
+static_assert((rb_cacheline_bytes & (rb_cacheline_bytes - 1u)) == 0u,
+              "SPSC cache-line size must be a power of two");
+
+[[nodiscard]] constexpr std::size_t rb_max_size_(const std::size_t a,
+                                                  const std::size_t b) noexcept {
+    return (a > b) ? a : b;
+}
+
+[[nodiscard]] constexpr std::size_t rb_align_up_(const std::size_t value,
+                                                  const std::size_t alignment) noexcept {
+    return (value + alignment - 1u) & ~(alignment - 1u);
+}
+
+template<class Cnt>
+struct rb_owner_block_layout {
+    static constexpr std::size_t kAlignment =
+        rb_max_size_(rb_cacheline_bytes,
+                     rb_max_size_(alignof(Cnt), alignof(reg)));
+    static constexpr std::size_t kShadowOffset =
+        rb_align_up_(sizeof(Cnt), alignof(reg));
+    static constexpr std::size_t kContentBytes =
+        kShadowOffset + sizeof(reg);
+    static constexpr std::size_t kBlockBytes =
+        rb_align_up_(kContentBytes, kAlignment);
+    static constexpr std::size_t kTrailingBytes =
+        kBlockBytes - kContentBytes;
+
+    static_assert((kAlignment & (kAlignment - 1u)) == 0u,
+                  "Owner-block alignment must be a power of two");
+    static_assert(kAlignment >= rb_cacheline_bytes,
+                  "Owner-block alignment must cover one cache line");
+    static_assert((kBlockBytes % rb_cacheline_bytes) == 0u,
+                  "Owner block must occupy a whole number of cache lines");
 };
 
-template<>
-struct SPSC_ALIGNED(SPSC_CACHELINE_BYTES) rb_shadow_indices<true> {
-    alignas(SPSC_CACHELINE_BYTES) mutable reg prod_shadow_tail{0u};
-    alignas(SPSC_CACHELINE_BYTES) mutable reg cons_shadow_head{0u};
+template<class Cnt, bool HasExplicitPadding =
+                       (rb_owner_block_layout<Cnt>::kTrailingBytes != 0u)>
+struct rb_producer_index_block_impl;
+
+template<class Cnt>
+struct alignas(rb_owner_block_layout<Cnt>::kAlignment)
+    rb_producer_index_block_impl<Cnt, true> {
+    using layout_type = rb_owner_block_layout<Cnt>;
+
+    Cnt head{};
+    mutable reg prod_shadow_tail{0u};
+    unsigned char padding[layout_type::kTrailingBytes]{};
 };
 
-// Paranoid compile-time guarantees.
-static_assert(alignof(rb_shadow_indices<true>) >= SPSC_CACHELINE_BYTES, "Shadow struct must be cacheline-aligned");
-static_assert((offsetof(rb_shadow_indices<true>, prod_shadow_tail) % SPSC_CACHELINE_BYTES) == 0, "prod_shadow_tail not cacheline-aligned");
-static_assert((offsetof(rb_shadow_indices<true>, cons_shadow_head) % SPSC_CACHELINE_BYTES) == 0, "cons_shadow_head not cacheline-aligned");
-static_assert(offsetof(rb_shadow_indices<true>, cons_shadow_head) >= SPSC_CACHELINE_BYTES, "Shadows must be on different cache lines");
-static_assert((sizeof(rb_shadow_indices<true>) % SPSC_CACHELINE_BYTES) == 0, "Size should be a multiple of cache line");
+template<class Cnt>
+struct alignas(rb_owner_block_layout<Cnt>::kAlignment)
+    rb_producer_index_block_impl<Cnt, false> {
+    Cnt head{};
+    mutable reg prod_shadow_tail{0u};
+};
+
+template<class Cnt>
+using rb_producer_index_block = rb_producer_index_block_impl<Cnt>;
+
+template<class Cnt, bool HasExplicitPadding =
+                       (rb_owner_block_layout<Cnt>::kTrailingBytes != 0u)>
+struct rb_consumer_index_block_impl;
+
+template<class Cnt>
+struct alignas(rb_owner_block_layout<Cnt>::kAlignment)
+    rb_consumer_index_block_impl<Cnt, true> {
+    using layout_type = rb_owner_block_layout<Cnt>;
+
+    Cnt tail{};
+    mutable reg cons_shadow_head{0u};
+    unsigned char padding[layout_type::kTrailingBytes]{};
+};
+
+template<class Cnt>
+struct alignas(rb_owner_block_layout<Cnt>::kAlignment)
+    rb_consumer_index_block_impl<Cnt, false> {
+    Cnt tail{};
+    mutable reg cons_shadow_head{0u};
+};
+
+template<class Cnt>
+using rb_consumer_index_block = rb_consumer_index_block_impl<Cnt>;
+
+template<class Cnt, bool Enabled>
+struct rb_index_storage;
+
+template<class Cnt>
+struct rb_index_storage<Cnt, false> {
+    static constexpr bool kHasShadows = false;
+
+    Cnt head{};
+    Cnt tail{};
+
+    [[nodiscard]] RB_FORCEINLINE Cnt& head_counter() noexcept { return head; }
+    [[nodiscard]] RB_FORCEINLINE const Cnt& head_counter() const noexcept { return head; }
+    [[nodiscard]] RB_FORCEINLINE Cnt& tail_counter() noexcept { return tail; }
+    [[nodiscard]] RB_FORCEINLINE const Cnt& tail_counter() const noexcept { return tail; }
+};
+
+template<class Cnt>
+struct rb_index_storage<Cnt, true> {
+    using layout_type = rb_owner_block_layout<Cnt>;
+    using producer_block_type = rb_producer_index_block<Cnt>;
+    using consumer_block_type = rb_consumer_index_block<Cnt>;
+
+    static constexpr bool kHasShadows = true;
+
+    static_assert(alignof(producer_block_type) >= layout_type::kAlignment,
+                  "Producer owner block lost required alignment");
+    static_assert(alignof(consumer_block_type) >= layout_type::kAlignment,
+                  "Consumer owner block lost required alignment");
+    static_assert(sizeof(producer_block_type) == layout_type::kBlockBytes,
+                  "Producer owner block must match its calculated layout");
+    static_assert(sizeof(consumer_block_type) == layout_type::kBlockBytes,
+                  "Consumer owner block must match its calculated layout");
+    static_assert((sizeof(producer_block_type) % rb_cacheline_bytes) == 0u,
+                  "Producer owner block must end at a cache-line boundary");
+    static_assert((sizeof(consumer_block_type) % rb_cacheline_bytes) == 0u,
+                  "Consumer owner block must end at a cache-line boundary");
+    static_assert(!std::is_standard_layout<Cnt>::value ||
+                      std::is_standard_layout<producer_block_type>::value,
+                  "A standard-layout counter requires a standard-layout producer block");
+    static_assert(!std::is_standard_layout<Cnt>::value ||
+                      std::is_standard_layout<consumer_block_type>::value,
+                  "A standard-layout counter requires a standard-layout consumer block");
+
+    producer_block_type producer{};
+    consumer_block_type consumer{};
+
+    [[nodiscard]] RB_FORCEINLINE Cnt& head_counter() noexcept { return producer.head; }
+    [[nodiscard]] RB_FORCEINLINE const Cnt& head_counter() const noexcept { return producer.head; }
+    [[nodiscard]] RB_FORCEINLINE Cnt& tail_counter() noexcept { return consumer.tail; }
+    [[nodiscard]] RB_FORCEINLINE const Cnt& tail_counter() const noexcept { return consumer.tail; }
+
+    [[nodiscard]] RB_FORCEINLINE reg& prod_shadow_tail() noexcept {
+        return producer.prod_shadow_tail;
+    }
+    [[nodiscard]] RB_FORCEINLINE reg& prod_shadow_tail() const noexcept {
+        return producer.prod_shadow_tail;
+    }
+    [[nodiscard]] RB_FORCEINLINE reg& cons_shadow_head() noexcept {
+        return consumer.cons_shadow_head;
+    }
+    [[nodiscard]] RB_FORCEINLINE reg& cons_shadow_head() const noexcept {
+        return consumer.cons_shadow_head;
+    }
+};
 
 template <class PolicyT>
 inline constexpr bool rb_use_shadow_v =
@@ -112,10 +259,15 @@ inline constexpr bool rb_use_shadow_v =
 
 } // namespace detail
 
+/* Internal implementation base for the owning containers and views.
+ *
+ * This type remains in namespace spsc for source compatibility, but deriving
+ * from it or reopening its protected endpoint helpers is not a supported
+ * extension API. Public containers inherit it privately.
+ */
 template<reg C, typename PolicyT = ::spsc::policy::default_policy>
 class SPSCbase
     : private ::spsc::cap::CapacityCtrl<C, PolicyT>
-    , private ::spsc::detail::rb_shadow_indices<::spsc::detail::rb_use_shadow_v<PolicyT>>
 {
     static_assert((C == 0u) || cap::rb_is_pow2(C),
                   "[SPSCbase]: Capacity must be power of 2 or 0");
@@ -147,6 +299,18 @@ class SPSCbase
     static constexpr bool kUseShadow =
         ::spsc::detail::rb_use_shadow_v<PolicyT>;
 
+    using IndexStorage = ::spsc::detail::rb_index_storage<Cnt, kUseShadow>;
+
+    static_assert(IndexStorage::kHasShadows == kUseShadow,
+                  "Index storage must exactly match shadow eligibility");
+    static_assert(kUseShadow || sizeof(IndexStorage) == (sizeof(Cnt) * 2u),
+                  "Shadow-disabled index storage must remain compact");
+    static_assert(!kUseShadow || !std::is_standard_layout<Cnt>::value ||
+                      std::is_standard_layout<IndexStorage>::value,
+                  "Standard-layout counters require standard-layout index storage");
+
+    friend struct ::spsc::detail::spscbase_layout_probe<C, PolicyT>;
+
 private:
     [[nodiscard]] static RB_FORCEINLINE reg rb_min_(const reg a, const reg b) noexcept {
         return (a < b) ? a : b;
@@ -154,6 +318,19 @@ private:
 
     [[nodiscard]] static RB_FORCEINLINE reg rb_mask_(const reg cap) noexcept {
         return static_cast<reg>(cap - 1u);
+    }
+
+    template<class Counter>
+    [[nodiscard]] static RB_FORCEINLINE reg
+    rb_owner_load_(const Counter &counter) noexcept {
+        if constexpr (::spsc::cnt::counter_has_relaxed_load_v<Counter>) {
+            return static_cast<reg>(counter.load_relaxed());
+        } else {
+            // Third-party counter backends still need only the original
+            // store/load/add/inc surface. Their owner load remains correct,
+            // just not specially relaxed.
+            return static_cast<reg>(counter.load());
+        }
     }
 
 
@@ -239,10 +416,10 @@ protected:
     // Call this ONLY when the queue is not used concurrently.
     RB_FORCEINLINE void sync_cache() noexcept {
         if constexpr (kUseShadow) {
-            const reg t = _tail.load();
-            const reg h = _head.load();
-            this->prod_shadow_tail = t;
-            this->cons_shadow_head = h;
+            const reg t = _indices.tail_counter().load();
+            const reg h = _indices.head_counter().load();
+            _indices.prod_shadow_tail() = t;
+            _indices.cons_shadow_head() = h;
         }
     }
 
@@ -251,7 +428,74 @@ protected:
     RB_FORCEINLINE void swap_base(SPSCbase &other) noexcept;
 
 protected:
-    // Core occupancy helpers.
+    /* Immediate-use single-slot snapshots for endpoint hot paths.
+     *
+     * These are deliberately protected implementation details, not public
+     * reservation tokens. A derived container must use a snapshot only for
+     * the immediately following payload access and matching commit on the
+     * owning endpoint. The snapshot carries one owner counter value through
+     * availability, physical index calculation, and publication/retirement.
+     */
+    struct single_write_snapshot final {
+        reg owner{0u};
+        reg opposite{0u};
+        reg index{0u};
+        bool available{false};
+    };
+
+    struct single_read_snapshot final {
+        reg owner{0u};
+        reg opposite{0u};
+        reg index{0u};
+        bool available{false};
+    };
+
+    // Precondition-only endpoint operations (`push`, `front`, `pop`, ...)
+    // need the owner index and sometimes its physical slot, but they do not
+    // need to revalidate the opposite endpoint in release builds.  Keep that
+    // short path separate from the checked `try_*` snapshots above.
+    struct single_write_owner_snapshot final {
+        reg owner{0u};
+        reg index{0u};
+    };
+
+    struct single_read_owner_snapshot final {
+        reg owner{0u};
+        reg index{0u};
+    };
+
+    [[nodiscard]] RB_FORCEINLINE single_write_owner_snapshot
+    producer_single_owner_snapshot() const noexcept;
+
+    [[nodiscard]] RB_FORCEINLINE single_read_owner_snapshot
+    consumer_single_owner_snapshot() const noexcept;
+
+    [[nodiscard]] RB_FORCEINLINE single_write_snapshot
+    producer_single_snapshot() const noexcept;
+
+    [[nodiscard]] RB_FORCEINLINE single_read_snapshot
+    consumer_single_snapshot() const noexcept;
+
+    // `latest` selects the newest published element rather than the oldest
+    // FIFO element, so it intentionally asks for a fresh producer head.
+    [[nodiscard]] RB_FORCEINLINE single_read_snapshot
+    consumer_single_snapshot_fresh() const noexcept;
+
+    RB_FORCEINLINE void
+    producer_commit_single(const single_write_snapshot &) noexcept;
+
+    RB_FORCEINLINE void
+    consumer_commit_single(const single_read_snapshot &) noexcept;
+
+    RB_FORCEINLINE void
+    consumer_commit_from_snapshot(const single_read_snapshot &, reg) noexcept;
+
+    RB_FORCEINLINE void producer_commit_owner(reg) noexcept;
+    RB_FORCEINLINE void consumer_commit_owner(reg) noexcept;
+    RB_FORCEINLINE void consumer_commit_from_owner(reg, reg) noexcept;
+
+    // Direct occupancy observations. These never read or write either shadow,
+    // so containers may expose them safely as atomic observer queries.
     [[nodiscard]] RB_FORCEINLINE reg  size()  const noexcept;
     [[nodiscard]] RB_FORCEINLINE bool empty() const noexcept;
     [[nodiscard]] RB_FORCEINLINE bool full()  const noexcept;
@@ -271,9 +515,20 @@ protected:
     [[nodiscard]] RB_FORCEINLINE reg write_index() const noexcept;
     [[nodiscard]] RB_FORCEINLINE reg read_index () const noexcept;
 
-    // Contiguous sizes from current head/tail.
+    // Direct contiguous-size observations from current head/tail.
     [[nodiscard]] RB_FORCEINLINE reg write_size() const noexcept;
     [[nodiscard]] RB_FORCEINLINE reg read_size () const noexcept;
+
+    // Endpoint-local cached occupancy helpers. These are only for the
+    // producer/consumer operation paths; public query wrappers must use the
+    // direct methods above so a third-party observer never races a shadow.
+    [[nodiscard]] RB_FORCEINLINE bool producer_full_cached() const noexcept;
+    [[nodiscard]] RB_FORCEINLINE bool producer_can_write_cached(const reg n = 1u) const noexcept;
+    [[nodiscard]] RB_FORCEINLINE reg  producer_write_size_cached() const noexcept;
+
+    [[nodiscard]] RB_FORCEINLINE bool consumer_empty_cached() const noexcept;
+    [[nodiscard]] RB_FORCEINLINE bool consumer_can_read_cached(const reg n = 1u) const noexcept;
+    [[nodiscard]] RB_FORCEINLINE reg  consumer_read_size_cached() const noexcept;
 
     [[nodiscard]] RB_FORCEINLINE reg write_to_end_capacity() const noexcept;
     [[nodiscard]] RB_FORCEINLINE reg read_to_end_capacity () const noexcept;
@@ -293,33 +548,238 @@ protected:
     RB_FORCEINLINE void set_tail(const reg) noexcept;
 
 private:
-    Cnt _head{};
-    Cnt _tail{};
+    IndexStorage _indices{};
 };
 
 /* ----------------------------- definitions ----------------------------- */
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::clear() noexcept {
-    _tail.store(0u);
-    _head.store(0u);
+    _indices.tail_counter().store(0u);
+    _indices.head_counter().store(0u);
 
     if constexpr (kUseShadow) {
         // clear() is non-concurrent by contract: safe to reset both.
-        this->prod_shadow_tail = 0u;
-        this->cons_shadow_head = 0u;
+        _indices.prod_shadow_tail() = 0u;
+        _indices.cons_shadow_head() = 0u;
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_write_owner_snapshot
+SPSCbase<C, PolicyT>::producer_single_owner_snapshot() const noexcept {
+    single_write_owner_snapshot snapshot{};
+    const reg cap = capacity();
+
+    // The producer is the sole writer of head. Reading that owner value does
+    // not need to synchronize payload from the consumer, so use the relaxed
+    // form when the counter backend exposes one.
+    const reg h = rb_owner_load_(_indices.head_counter());
+    snapshot.owner = h;
+
+    if constexpr (C != 0) {
+        snapshot.index = static_cast<reg>(h & rb_mask_(cap));
+    } else if (RB_LIKELY(cap != 0u)) {
+        snapshot.index = static_cast<reg>(h & rb_mask_(cap));
+    }
+
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_read_owner_snapshot
+SPSCbase<C, PolicyT>::consumer_single_owner_snapshot() const noexcept {
+    single_read_owner_snapshot snapshot{};
+    const reg cap = capacity();
+
+    // The consumer is the sole writer of tail. As above, this owner read is
+    // relaxed whenever the backend provides that specialized operation.
+    const reg t = rb_owner_load_(_indices.tail_counter());
+    snapshot.owner = t;
+
+    if constexpr (C != 0) {
+        snapshot.index = static_cast<reg>(t & rb_mask_(cap));
+    } else if (RB_LIKELY(cap != 0u)) {
+        snapshot.index = static_cast<reg>(t & rb_mask_(cap));
+    }
+
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_write_snapshot
+SPSCbase<C, PolicyT>::producer_single_snapshot() const noexcept {
+    single_write_snapshot snapshot{};
+    const reg cap = capacity();
+    const auto owner_snapshot = producer_single_owner_snapshot();
+    const reg h = owner_snapshot.owner;
+    snapshot.owner = h;
+    snapshot.index = owner_snapshot.index;
+
+    if constexpr (C == 0) {
+        if (RB_UNLIKELY(cap == 0u)) {
+            return snapshot;
+        }
+    }
+
+    if constexpr (kUseShadow) {
+        reg t = _indices.prod_shadow_tail();
+        reg used = static_cast<reg>(h - t);
+
+        // The producer may trust its cached opposite index until the queue
+        // looks full. Refreshing tail is the acquire operation that observes
+        // consumer retirement and makes the slot reusable.
+        if (used >= cap) {
+            t = _indices.tail_counter().load();
+            _indices.prod_shadow_tail() = t;
+            used = static_cast<reg>(h - t);
+        }
+
+        snapshot.opposite = t;
+        snapshot.available = used < cap;
+    } else {
+        // Without a shadow, tail is the opposite endpoint's published index
+        // and must retain its counter-configured acquire/seq_cst load.
+        const reg t = _indices.tail_counter().load();
+        snapshot.opposite = t;
+        snapshot.available = static_cast<reg>(h - t) < cap;
+    }
+
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_read_snapshot
+SPSCbase<C, PolicyT>::consumer_single_snapshot() const noexcept {
+    single_read_snapshot snapshot{};
+    const reg cap = capacity();
+    const auto owner_snapshot = consumer_single_owner_snapshot();
+    const reg t = owner_snapshot.owner;
+    snapshot.owner = t;
+    snapshot.index = owner_snapshot.index;
+
+    if constexpr (C == 0) {
+        if (RB_UNLIKELY(cap == 0u)) {
+            return snapshot;
+        }
+    }
+
+    if constexpr (kUseShadow) {
+        reg h = _indices.cons_shadow_head();
+        reg available = static_cast<reg>(h - t);
+
+        // The consumer refreshes only when its cached producer index cannot
+        // prove a readable slot. This acquire observes producer publication
+        // before the payload is accessed.
+        if ((available == 0u) || (available > cap)) {
+            h = _indices.head_counter().load();
+            _indices.cons_shadow_head() = h;
+            available = static_cast<reg>(h - t);
+        }
+
+        snapshot.opposite = h;
+        snapshot.available = (available != 0u) && (available <= cap);
+    } else {
+        // Head belongs to the producer, so this remains the configured
+        // acquire/seq_cst load on every no-shadow path.
+        const reg h = _indices.head_counter().load();
+        const reg available = static_cast<reg>(h - t);
+        snapshot.opposite = h;
+        snapshot.available = (available != 0u) && (available <= cap);
+    }
+
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE typename SPSCbase<C, PolicyT>::single_read_snapshot
+SPSCbase<C, PolicyT>::consumer_single_snapshot_fresh() const noexcept {
+    single_read_snapshot snapshot{};
+    const reg cap = capacity();
+    const auto owner_snapshot = consumer_single_owner_snapshot();
+    const reg t = owner_snapshot.owner;
+    snapshot.owner = t;
+    snapshot.index = owner_snapshot.index;
+
+    if constexpr (C == 0) {
+        if (RB_UNLIKELY(cap == 0u)) {
+            return snapshot;
+        }
+    }
+
+    // This deliberately bypasses a valid-but-stale consumer shadow: callers
+    // use it only when choosing the newest producer-published element.
+    const reg h = _indices.head_counter().load();
+    if constexpr (kUseShadow) {
+        _indices.cons_shadow_head() = h;
+    }
+
+    snapshot.opposite = h;
+    const reg available = static_cast<reg>(h - t);
+    snapshot.available = (available != 0u) && (available <= cap);
+    return snapshot;
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_single(
+    const single_write_snapshot &snapshot) noexcept {
+    producer_commit_owner(snapshot.owner);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_owner(
+    const reg owner) noexcept {
+    if constexpr (::spsc::cnt::counter_is_single_writer_v<Cnt>) {
+        // The endpoint's owner value came from a producer owner snapshot. A
+        // release/seq_cst store publishes the payload without a second owner
+        // load. Strict AtomicCounter intentionally keeps its RMW path below.
+        _indices.head_counter().store(static_cast<reg>(owner + 1u));
+    } else {
+        (void)owner;
+        _indices.head_counter().inc();
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_single(
+    const single_read_snapshot &snapshot) noexcept {
+    consumer_commit_from_snapshot(snapshot, 1u);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_from_snapshot(
+    const single_read_snapshot &snapshot, const reg count) noexcept {
+    consumer_commit_from_owner(snapshot.owner, count);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_owner(
+    const reg owner) noexcept {
+    consumer_commit_from_owner(owner, 1u);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_from_owner(
+    const reg owner, const reg count) noexcept {
+    if constexpr (::spsc::cnt::counter_is_single_writer_v<Cnt>) {
+        // A release/seq_cst store makes the retired slot visible to the
+        // producer while reusing the owner snapshot's counter value.
+        _indices.tail_counter().store(static_cast<reg>(owner + count));
+    } else {
+        (void)owner;
+        _indices.tail_counter().add(count);
     }
 }
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::sync_tail_to_head() noexcept {
     // Consumer-owned operation (consume all).
-    const reg h = _head.load();
-    _tail.store(h);
+    const reg h = _indices.head_counter().load();
+    _indices.tail_counter().store(h);
 
     if constexpr (kUseShadow) {
         // Touch ONLY consumer-owned shadow to avoid a data race.
-        this->cons_shadow_head = h;
+        _indices.cons_shadow_head() = h;
     }
 }
 
@@ -334,20 +794,20 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::size() const noexcept {
     }
 
     if constexpr (!kAtomicBackend) {
-        const reg t = _tail.load();
-        const reg h = _head.load();
+        const reg t = _indices.tail_counter().load();
+        const reg h = _indices.head_counter().load();
         return static_cast<reg>(h - t);
     } else {
         // Consumer-safe size:
         // - Retry once on impossible snapshots (used > cap).
         // - If still impossible, report empty (0) to avoid any over-read of typed storage.
-        reg t = _tail.load();
-        reg h = _head.load();
+        reg t = _indices.tail_counter().load();
+        reg h = _indices.head_counter().load();
         reg used = static_cast<reg>(h - t);
 
         if (RB_UNLIKELY(used > cap)) {
-            t = _tail.load();
-            h = _head.load();
+            t = _indices.tail_counter().load();
+            h = _indices.head_counter().load();
             used = static_cast<reg>(h - t);
 
             if (RB_UNLIKELY(used > cap)) {
@@ -369,29 +829,15 @@ RB_FORCEINLINE bool SPSCbase<C, PolicyT>::empty() const noexcept {
         }
     }
 
-    const reg t = _tail.load();
+    const reg t = _indices.tail_counter().load();
+    const reg h = _indices.head_counter().load();
 
-    if constexpr (!kUseShadow) {
-        const reg h = _head.load();
-
-        if constexpr (!kAtomicBackend) {
-            return h == t;
-        } else {
-            const reg av = static_cast<reg>(h - t);
-            // Conservative on impossible snapshots.
-            return (av == 0u) || RB_UNLIKELY(av > cap);
-        }
+    if constexpr (!kAtomicBackend) {
+        return h == t;
     } else {
-        // Consumer-side hot-path using shadow head.
-        reg h  = this->cons_shadow_head;
-        reg av = static_cast<reg>(h - t);
-
-        if ((av == 0u) || (av > cap)) {
-            h = _head.load();
-            this->cons_shadow_head = h;
-            av = static_cast<reg>(h - t);
-        }
-
+        const reg av = static_cast<reg>(h - t);
+        // Conservative on impossible snapshots. This is an observer path and
+        // deliberately does not update the consumer-owned shadow.
         return (av == 0u) || RB_UNLIKELY(av > cap);
     }
 }
@@ -406,31 +852,14 @@ RB_FORCEINLINE bool SPSCbase<C, PolicyT>::full() const noexcept {
         }
     }
 
-    const reg h = _head.load();
+    const reg h = _indices.head_counter().load();
+    const reg t = _indices.tail_counter().load();
+    const reg used = static_cast<reg>(h - t);
 
-    if constexpr (!kUseShadow) {
-        const reg t    = _tail.load();
-        const reg used = static_cast<reg>(h - t);
-
-        if constexpr (kAtomicBackend) {
-            return (used == cap) || RB_UNLIKELY(used > cap);
-        } else {
-            return used == cap;
-        }
-    } else {
-        // Producer-side hot-path using shadow tail.
-        reg t    = this->prod_shadow_tail;
-        reg used = static_cast<reg>(h - t);
-
-        if (used < cap) {
-            return false;
-        }
-
-        t = _tail.load();
-        this->prod_shadow_tail = t;
-        used = static_cast<reg>(h - t);
-
+    if constexpr (kAtomicBackend) {
         return (used == cap) || RB_UNLIKELY(used > cap);
+    } else {
+        return used == cap;
     }
 }
 
@@ -445,21 +874,21 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::free() const noexcept {
     }
 
     if constexpr (!kAtomicBackend) {
-        const reg t = _tail.load();
-        const reg h = _head.load();
+        const reg t = _indices.tail_counter().load();
+        const reg h = _indices.head_counter().load();
         const reg used = static_cast<reg>(h - t);
         return (used >= cap) ? 0u : static_cast<reg>(cap - used);
     } else {
         // Producer-safe free space:
         // - Retry once on impossible snapshots (used > cap).
         // - If still impossible, report no space (0) to prevent overwrite.
-        reg t = _tail.load();
-        reg h = _head.load();
+        reg t = _indices.tail_counter().load();
+        reg h = _indices.head_counter().load();
         reg used = static_cast<reg>(h - t);
 
         if (RB_UNLIKELY(used > cap)) {
-            t = _tail.load();
-            h = _head.load();
+            t = _indices.tail_counter().load();
+            h = _indices.head_counter().load();
             used = static_cast<reg>(h - t);
 
             if (RB_UNLIKELY(used > cap)) {
@@ -489,39 +918,18 @@ RB_FORCEINLINE bool SPSCbase<C, PolicyT>::can_write(const reg n) const noexcept 
         return false;
     }
 
-    const reg h     = _head.load();
+    const reg h     = _indices.head_counter().load();
     const reg limit = static_cast<reg>(cap - n); // safe because n <= cap
+    const reg t     = _indices.tail_counter().load();
+    const reg used  = static_cast<reg>(h - t);
 
-    if constexpr (!kUseShadow) {
-        const reg t    = _tail.load();
-        const reg used = static_cast<reg>(h - t);
-
-        if constexpr (kAtomicBackend) {
-            if (RB_UNLIKELY(used > cap)) {
-                return false;
-            }
-        }
-
-        return used <= limit;
-    } else {
-        // Producer-side hot-path using shadow tail.
-        reg t    = this->prod_shadow_tail;
-        reg used = static_cast<reg>(h - t);
-
-        if (used <= limit) {
-            return true;
-        }
-
-        t = _tail.load();
-        this->prod_shadow_tail = t;
-        used = static_cast<reg>(h - t);
-
+    if constexpr (kAtomicBackend) {
         if (RB_UNLIKELY(used > cap)) {
             return false;
         }
-
-        return used <= limit;
     }
+
+    return used <= limit;
 }
 
 template<reg C, typename PolicyT>
@@ -542,46 +950,27 @@ RB_FORCEINLINE bool SPSCbase<C, PolicyT>::can_read(const reg n) const noexcept {
         return false;
     }
 
-    const reg t = _tail.load();
+    const reg t = _indices.tail_counter().load();
+    const reg h = _indices.head_counter().load();
+    const reg av = static_cast<reg>(h - t);
 
-    if constexpr (!kUseShadow) {
-        const reg h  = _head.load();
-        const reg av = static_cast<reg>(h - t);
-
-        if constexpr (kAtomicBackend) {
-            if (RB_UNLIKELY(av > cap)) {
-                return false;
-            }
+    if constexpr (kAtomicBackend) {
+        if (RB_UNLIKELY(av > cap)) {
+            return false;
         }
-
-        return av >= n;
-    } else {
-        // Consumer-side hot-path using shadow head.
-        reg h  = this->cons_shadow_head;
-        reg av = static_cast<reg>(h - t);
-
-        if ((av < n) || (av > cap)) {
-            h = _head.load();
-            this->cons_shadow_head = h;
-            av = static_cast<reg>(h - t);
-
-            if (RB_UNLIKELY(av > cap)) {
-                return false;
-            }
-        }
-
-        return av >= n;
     }
+
+    return av >= n;
 }
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE reg SPSCbase<C, PolicyT>::head() const noexcept {
-    return _head.load();
+    return _indices.head_counter().load();
 }
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE reg SPSCbase<C, PolicyT>::tail() const noexcept {
-    return _tail.load();
+    return _indices.tail_counter().load();
 }
 
 template<reg C, typename PolicyT>
@@ -594,7 +983,7 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::write_index() const noexcept {
         }
     }
 
-    return static_cast<reg>(_head.load() & rb_mask_(cap));
+    return static_cast<reg>(_indices.head_counter().load() & rb_mask_(cap));
 }
 
 template<reg C, typename PolicyT>
@@ -607,7 +996,7 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::read_index() const noexcept {
         }
     }
 
-    return static_cast<reg>(_tail.load() & rb_mask_(cap));
+    return static_cast<reg>(_indices.tail_counter().load() & rb_mask_(cap));
 }
 
 template<reg C, typename PolicyT>
@@ -620,23 +1009,142 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::write_size() const noexcept {
         }
     }
 
-    const reg h = _head.load();
+    const reg h = _indices.head_counter().load();
     const reg m = rb_mask_(cap);
+    const reg t = _indices.tail_counter().load();
+    const reg used = static_cast<reg>(h - t);
 
-    if constexpr (!kUseShadow) {
-        const reg t    = _tail.load();
-        const reg used = static_cast<reg>(h - t);
+    if (used >= cap) {
+        return 0u;
+    }
 
-        if (used >= cap) {
+    const reg fr  = static_cast<reg>(cap - used);
+    const reg w2e = static_cast<reg>(cap - (h & m));
+    return rb_min_(w2e, fr);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE reg SPSCbase<C, PolicyT>::read_size() const noexcept {
+    const reg cap = capacity();
+
+    if constexpr (C == 0) {
+        if (RB_UNLIKELY(cap == 0u)) {
             return 0u;
         }
+    }
 
-        const reg fr  = static_cast<reg>(cap - used);
-        const reg w2e = static_cast<reg>(cap - (h & m));
-        return rb_min_(w2e, fr);
+    const reg t = _indices.tail_counter().load();
+    const reg m = rb_mask_(cap);
+    reg h  = _indices.head_counter().load();
+    reg av = static_cast<reg>(h - t);
+
+    if constexpr (kAtomicBackend) {
+        // Confirm once on empty or impossible snapshots. This observer path
+        // never touches the consumer-owned shadow.
+        if ((av == 0u) || (av > cap)) {
+            h  = _indices.head_counter().load();
+            av = static_cast<reg>(h - t);
+            if ((av == 0u) || (av > cap)) {
+                return 0u;
+            }
+        }
     } else {
-        // Producer-side hot-path using shadow tail.
-        reg t    = this->prod_shadow_tail;
+        if (av == 0u) {
+            return 0u;
+        }
+    }
+
+    const reg r2e = static_cast<reg>(cap - (t & m));
+    return rb_min_(r2e, av);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE bool SPSCbase<C, PolicyT>::producer_full_cached() const noexcept {
+    if constexpr (!kUseShadow) {
+        return full();
+    } else {
+        const reg cap = capacity();
+
+        if constexpr (C == 0) {
+            if (RB_UNLIKELY(cap == 0u)) {
+                return true;
+            }
+        }
+
+        const reg h = _indices.head_counter().load();
+        reg t = _indices.prod_shadow_tail();
+        reg used = static_cast<reg>(h - t);
+
+        if (used < cap) {
+            return false;
+        }
+
+        t = _indices.tail_counter().load();
+        _indices.prod_shadow_tail() = t;
+        used = static_cast<reg>(h - t);
+
+        return (used == cap) || RB_UNLIKELY(used > cap);
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE bool SPSCbase<C, PolicyT>::producer_can_write_cached(const reg n) const noexcept {
+    if constexpr (!kUseShadow) {
+        return can_write(n);
+    } else {
+        if (n == 0u) {
+            return true;
+        }
+
+        const reg cap = capacity();
+
+        if constexpr (C == 0) {
+            if (RB_UNLIKELY(cap == 0u)) {
+                return false;
+            }
+        }
+
+        if (RB_UNLIKELY(n > cap)) {
+            return false;
+        }
+
+        const reg h = _indices.head_counter().load();
+        const reg limit = static_cast<reg>(cap - n); // safe because n <= cap
+        reg t = _indices.prod_shadow_tail();
+        reg used = static_cast<reg>(h - t);
+
+        if (used <= limit) {
+            return true;
+        }
+
+        t = _indices.tail_counter().load();
+        _indices.prod_shadow_tail() = t;
+        used = static_cast<reg>(h - t);
+
+        if (RB_UNLIKELY(used > cap)) {
+            return false;
+        }
+
+        return used <= limit;
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE reg SPSCbase<C, PolicyT>::producer_write_size_cached() const noexcept {
+    if constexpr (!kUseShadow) {
+        return write_size();
+    } else {
+        const reg cap = capacity();
+
+        if constexpr (C == 0) {
+            if (RB_UNLIKELY(cap == 0u)) {
+                return 0u;
+            }
+        }
+
+        const reg h = _indices.head_counter().load();
+        const reg m = rb_mask_(cap);
+        reg t = _indices.prod_shadow_tail();
         reg used = static_cast<reg>(h - t);
 
         // Compute free space conservatively (0 on full/invalid).
@@ -648,8 +1156,8 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::write_size() const noexcept {
 #else
         if (fr == 0u) {
 #endif /* SPSC_SHADOW_REFRESH_HEURISTIC */
-            t = _tail.load();
-            this->prod_shadow_tail = t;
+            t = _indices.tail_counter().load();
+            _indices.prod_shadow_tail() = t;
             used = static_cast<reg>(h - t);
             fr = (used < cap) ? static_cast<reg>(cap - used) : 0u;
         }
@@ -664,42 +1172,87 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::write_size() const noexcept {
 }
 
 template<reg C, typename PolicyT>
-RB_FORCEINLINE reg SPSCbase<C, PolicyT>::read_size() const noexcept {
-    const reg cap = capacity();
-
-    if constexpr (C == 0) {
-        if (RB_UNLIKELY(cap == 0u)) {
-            return 0u;
-        }
-    }
-
-    const reg t = _tail.load();
-    const reg m = rb_mask_(cap);
-
+RB_FORCEINLINE bool SPSCbase<C, PolicyT>::consumer_empty_cached() const noexcept {
     if constexpr (!kUseShadow) {
-        reg h  = _head.load();
+        return empty();
+    } else {
+        const reg cap = capacity();
+
+        if constexpr (C == 0) {
+            if (RB_UNLIKELY(cap == 0u)) {
+                return true;
+            }
+        }
+
+        const reg t = _indices.tail_counter().load();
+        reg h = _indices.cons_shadow_head();
         reg av = static_cast<reg>(h - t);
 
-        if constexpr (kAtomicBackend) {
-            // Confirm once on empty or impossible snapshots.
-            if ((av == 0u) || (av > cap)) {
-                h  = _head.load();
-                av = static_cast<reg>(h - t);
-                if ((av == 0u) || (av > cap)) {
-                    return 0u;
-                }
+        if ((av == 0u) || (av > cap)) {
+            h = _indices.head_counter().load();
+            _indices.cons_shadow_head() = h;
+            av = static_cast<reg>(h - t);
+        }
+
+        return (av == 0u) || RB_UNLIKELY(av > cap);
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE bool SPSCbase<C, PolicyT>::consumer_can_read_cached(const reg n) const noexcept {
+    if constexpr (!kUseShadow) {
+        return can_read(n);
+    } else {
+        if (n == 0u) {
+            return true;
+        }
+
+        const reg cap = capacity();
+
+        if constexpr (C == 0) {
+            if (RB_UNLIKELY(cap == 0u)) {
+                return false;
             }
-        } else {
-            if (av == 0u) {
+        }
+
+        if (RB_UNLIKELY(n > cap)) {
+            return false;
+        }
+
+        const reg t = _indices.tail_counter().load();
+        reg h = _indices.cons_shadow_head();
+        reg av = static_cast<reg>(h - t);
+
+        if ((av < n) || (av > cap)) {
+            h = _indices.head_counter().load();
+            _indices.cons_shadow_head() = h;
+            av = static_cast<reg>(h - t);
+
+            if (RB_UNLIKELY(av > cap)) {
+                return false;
+            }
+        }
+
+        return av >= n;
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE reg SPSCbase<C, PolicyT>::consumer_read_size_cached() const noexcept {
+    if constexpr (!kUseShadow) {
+        return read_size();
+    } else {
+        const reg cap = capacity();
+
+        if constexpr (C == 0) {
+            if (RB_UNLIKELY(cap == 0u)) {
                 return 0u;
             }
         }
 
-        const reg r2e = static_cast<reg>(cap - (t & m));
-        return rb_min_(r2e, av);
-    } else {
-        // Consumer-side hot-path using shadow head.
-        reg h  = this->cons_shadow_head;
+        const reg t = _indices.tail_counter().load();
+        const reg m = rb_mask_(cap);
+        reg h = _indices.cons_shadow_head();
         reg av = static_cast<reg>(h - t);
 
         // Clamp availability to 0 on empty/invalid; used only to decide refresh.
@@ -711,8 +1264,8 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::read_size() const noexcept {
 #else
         if (av_ok == 0u) {
 #endif /* SPSC_SHADOW_REFRESH_HEURISTIC */
-            h = _head.load();
-            this->cons_shadow_head = h;
+            h = _indices.head_counter().load();
+            _indices.cons_shadow_head() = h;
             av = static_cast<reg>(h - t);
 
             if ((av == 0u) || (av > cap)) {
@@ -736,7 +1289,7 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::write_to_end_capacity() const noexcept 
         }
     }
 
-    const reg hix = static_cast<reg>(_head.load() & rb_mask_(cap));
+    const reg hix = static_cast<reg>(_indices.head_counter().load() & rb_mask_(cap));
     return static_cast<reg>(cap - hix);
 }
 
@@ -750,40 +1303,40 @@ RB_FORCEINLINE reg SPSCbase<C, PolicyT>::read_to_end_capacity() const noexcept {
         }
     }
 
-    const reg tix = static_cast<reg>(_tail.load() & rb_mask_(cap));
+    const reg tix = static_cast<reg>(_indices.tail_counter().load() & rb_mask_(cap));
     return static_cast<reg>(cap - tix);
 }
 
 /* head ops */
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::set_head(const reg new_head) noexcept {
-    _head.store(new_head);
+    _indices.head_counter().store(new_head);
 }
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::increment_head() noexcept {
-    _head.inc();
+    _indices.head_counter().inc();
 }
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_head(const reg n) noexcept {
-    _head.add(n);
+    _indices.head_counter().add(n);
 }
 
 /* tail ops */
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::set_tail(const reg new_tail) noexcept {
-    _tail.store(new_tail);
+    _indices.tail_counter().store(new_tail);
 }
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::increment_tail() noexcept {
-    _tail.inc();
+    _indices.tail_counter().inc();
 }
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_tail(const reg n) noexcept {
-    _tail.add(n);
+    _indices.tail_counter().add(n);
 }
 
 template<reg C, typename PolicyT>

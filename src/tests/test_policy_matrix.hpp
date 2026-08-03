@@ -1,6 +1,7 @@
 #ifndef SPSC_TEST_POLICY_MATRIX_HPP_
 #define SPSC_TEST_POLICY_MATRIX_HPP_
 
+#include <atomic>
 #include <type_traits>
 #include <utility>
 
@@ -156,6 +157,7 @@ using extended_nonthreaded_policy_pack =
         ::spsc::policy::AA<>,
         ::spsc::policy::CP,
         ::spsc::policy::CV,
+        ::spsc::policy::VV,
         ::spsc::policy::CVV,
         ::spsc::policy::CFA<>,
         ::spsc::policy::CAA<>
@@ -178,6 +180,34 @@ using extended_cached_policy_pack =
         ::spsc::policy::CAA<>
     >;
 
+// H6 deliberately uses named custom order palettes instead of merely
+// reusing default_orders. That proves policy users can choose an equivalent
+// acquire/release palette or a stronger seq_cst palette without bypassing the
+// counter publication checks.
+struct explicit_acquire_release_orders {
+    static constexpr std::memory_order load  = std::memory_order_acquire;
+    static constexpr std::memory_order store = std::memory_order_release;
+    static constexpr std::memory_order rmw   = std::memory_order_acq_rel;
+};
+
+struct explicit_seq_cst_orders {
+    static constexpr std::memory_order load  = std::memory_order_seq_cst;
+    static constexpr std::memory_order store = std::memory_order_seq_cst;
+    static constexpr std::memory_order rmw   = std::memory_order_seq_cst;
+};
+
+using custom_atomic_order_policy_pack =
+    policy_pack<
+        ::spsc::policy::A<explicit_acquire_release_orders>,
+        ::spsc::policy::FA<explicit_acquire_release_orders>,
+        ::spsc::policy::CA<explicit_acquire_release_orders>,
+        ::spsc::policy::CFA<explicit_acquire_release_orders>,
+        ::spsc::policy::A<explicit_seq_cst_orders>,
+        ::spsc::policy::FA<explicit_seq_cst_orders>,
+        ::spsc::policy::CA<explicit_seq_cst_orders>,
+        ::spsc::policy::CFA<explicit_seq_cst_orders>
+    >;
+
 template <class... Policies, class Fn>
 constexpr void for_each_policy(policy_pack<Policies...>, Fn&& fn) {
     (fn(type_tag<Policies>{}), ...);
@@ -196,6 +226,11 @@ constexpr void for_each_extended_atomic_like_policy(Fn&& fn) {
 template <class Fn>
 constexpr void for_each_extended_cached_policy(Fn&& fn) {
     for_each_policy(extended_cached_policy_pack{}, std::forward<Fn>(fn));
+}
+
+template <class Fn>
+constexpr void for_each_custom_atomic_order_policy(Fn&& fn) {
+    for_each_policy(custom_atomic_order_policy_pack{}, std::forward<Fn>(fn));
 }
 
 } // namespace spsc::test

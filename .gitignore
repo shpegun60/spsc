@@ -15,6 +15,9 @@ build/
 build-*/
 cmake-build-*/
 out/
+
+# qmake dashboard and per-suite runner output
+bin/
 out-*/
 
 # Qt generated (qmake/moc/rcc/ui)
@@ -70,7 +73,16 @@ Thumbs.db
 *.swo
 *.tmp
 *.log
+dbg_fifo.xml
+on_fifo.xml
+deps_available.txt
+err.txt
+out.txt
 
 # IDE (optional)
 .vscode/
 .idea/
+
+# Reproducible benchmark build intermediates. Timestamped results under
+# benchmarks/results/ are intentionally retained.
+benchmarks/.build/

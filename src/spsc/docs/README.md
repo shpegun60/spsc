@@ -48,7 +48,7 @@ If you are new to the library, read in this order:
 ## Practical Reading Strategy
 
 - Start with `fifo` if you want the most typical SPSC queue.
-- Move to `queue` when object lifetime matters more than raw speed.
+- Move to `queue` when explicit object lifetime control is required.
 - Move to `pool` / `typed_pool` when the producer and consumer exchange ownership of slots or buffers.
 - Move to `latest` when the consumer should only observe the newest state.
 - Use `*_view` variants when storage is owned by DMA, shared memory, static RAM, or another subsystem.

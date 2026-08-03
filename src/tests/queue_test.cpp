@@ -245,6 +245,11 @@ constexpr int kThreadTimeoutMs  = 15'000;
 // Compile-time API smoke
 // -------------------------
 
+static_assert(std::is_same_v<
+                  ::spsc::fast_queue<int, 16>,
+                  ::spsc::queue<int, 16, ::spsc::policy::CFA<>>>,
+              "fast_queue must select the single-writer CFA policy in 2.0");
+
 template <class Q>
 static void api_smoke_compile() {
     using value_type = typename Q::value_type;
@@ -1988,8 +1993,46 @@ static void raw_bytes_suite(Q& q) {
     QVERIFY(bytes.data() != nullptr);
     QCOMPARE(bytes.size(), static_cast<std::size_t>(q.capacity()) * sizeof(typename Q::value_type));
 
-    auto cbytes = const_cast<const Q&>(q).raw_bytes();
+    const Q& cq = q;
+    auto cbytes = cq.raw_bytes();
     QCOMPARE(cbytes.size(), bytes.size());
+    QCOMPARE(cbytes.data(), bytes.data());
+
+    const auto storage_alignment = static_cast<std::uintptr_t>(
+        ::spsc::alloc::policy_storage_alignment_v<typename Q::policy_type,
+                                                   typename Q::value_type>);
+    QVERIFY(storage_alignment != 0u);
+    QCOMPARE(reinterpret_cast<std::uintptr_t>(bytes.data()) % storage_alignment,
+             std::uintptr_t{0u});
+
+    // raw_bytes() is the full allocation, including while empty, full, and
+    // after logical FIFO wrap. It is not a view of constructed elements.
+    QVERIFY(q.empty());
+    const auto* allocation = bytes.data();
+    const reg cap = q.capacity();
+    for (reg i = 0u; i < cap; ++i) {
+        QVERIFY(q.try_push(typename Q::value_type{}));
+    }
+    QVERIFY(q.full());
+    QCOMPARE(q.raw_bytes().data(), allocation);
+    QCOMPARE(q.raw_bytes().size(), bytes.size());
+
+    const reg wrap_count = (cap < reg{4u}) ? cap : reg{4u};
+    for (reg i = 0u; i < wrap_count; ++i) {
+        q.pop();
+    }
+    for (reg i = 0u; i < wrap_count; ++i) {
+        QVERIFY(q.try_push(typename Q::value_type{}));
+    }
+    QVERIFY(q.full());
+    QCOMPARE(q.raw_bytes().data(), allocation);
+    QCOMPARE(cq.raw_bytes().size(), bytes.size());
+
+    while (!q.empty()) {
+        q.pop();
+    }
+    QVERIFY(q.empty());
+    QCOMPARE(q.raw_bytes().data(), allocation);
 #endif
 }
 
@@ -2602,6 +2645,17 @@ private slots:
         }
         {
             spsc::queue<Blob, 0, spsc::policy::P> q;
+            QVERIFY(q.resize(128));
+            raw_bytes_suite(q);
+            q.destroy();
+        }
+        {
+            spsc::queue<Blob, 64, spsc::policy::CA<>> q;
+            raw_bytes_suite(q);
+            q.destroy();
+        }
+        {
+            spsc::queue<Blob, 0, spsc::policy::CA<>> q;
             QVERIFY(q.resize(128));
             raw_bytes_suite(q);
             q.destroy();

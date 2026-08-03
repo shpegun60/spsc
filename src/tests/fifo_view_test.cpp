@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>    // std::memcpy
 #include <deque>
+#include <limits>
 #include <random>
 #include <thread>
 #include <type_traits>
@@ -34,6 +35,17 @@
 #include "test_policy_matrix.hpp"
 
 #include "fifo_view.hpp"
+
+namespace spsc_fifo_view_moc_detail {
+
+// Qt 6.4 qmake's MOC scanner can miss the actual Q_OBJECT later in this
+// intentionally large translation unit. This early anchor makes qmake invoke
+// moc for the file; moc then emits metadata for the real test class below.
+class fifo_view_test_moc_anchor final : public QObject {
+    Q_OBJECT
+};
+
+} // namespace spsc_fifo_view_moc_detail
 
 // This test intentionally instantiates/uses the entire public API surface of
 // fifo_view.hpp (static + dynamic variants) and stresses edge cases.
@@ -245,24 +257,13 @@ static void verify_invariants(const Q& q) {
     QCOMPARE(static_cast<reg>(st.head - st.tail), sz);
 }
 
-// Warm up producer/consumer shadow caches by calling query APIs a few times.
-// This is intentionally side-effect-free in terms of visible queue state.
+// Exercise producer/consumer endpoint cache paths without changing queue state.
+// Public query APIs intentionally do not warm a shadow cache (H3 contract).
 template<class Q>
-static void shadow_warm_queries(Q& q) {
-    // These calls exercise the shadow-refresh paths in SPSCbase when enabled.
+static void shadow_warm_endpoints(Q& q) {
     for (int i = 0; i < 8; ++i) {
-        (void)q.capacity();
-        (void)q.size();
-        (void)q.free();
-        (void)q.empty();
-        (void)q.full();
-        (void)q.can_write();
-        (void)q.can_read();
-        (void)q.write_size();
-        (void)q.read_size();
-        (void)q.claim_read(::spsc::unsafe, 1u);
-        (void)q.claim_write(::spsc::unsafe, 1u);
-        (void)q.make_snapshot();
+        (void)q.try_claim(); // producer-owned cache path
+        (void)q.try_front(); // consumer-owned cache path
     }
 }
 
@@ -1211,14 +1212,9 @@ struct fifo_view_type_traits<::spsc::fifo_view<T, Cap, Policy>> {
 
 template <class Q>
 static void shadow_warm(Q& q) {
-    // Touch both consumer-side and producer-side paths so shadows become non-trivial.
-    (void)q.empty();
-    (void)q.read_size();
-    (void)q.can_read(reg{1u});
-
-    (void)q.full();
-    (void)q.write_size();
-    (void)q.can_write(reg{1u});
+    // Public observers never warm shadows. Use the actual endpoint paths.
+    (void)q.try_claim(); // producer-owned cache path
+    (void)q.try_front(); // consumer-owned cache path
 }
 
 template <class Q>
@@ -1945,8 +1941,8 @@ static void test_shadow_full_swap_move_claim_regression_static() {
     QVERIFY(a.is_valid());
     QVERIFY(b.is_valid());
 
-    // Warm A on empty so producer shadow caches tail=0.
-    shadow_warm_queries(a);
+    // Exercise both endpoint caches while A is empty.
+    shadow_warm_endpoints(a);
 
     // Fill B to full.
     for (reg i = 0; i < b.capacity(); ++i) {
@@ -1958,8 +1954,8 @@ static void test_shadow_full_swap_move_claim_regression_static() {
     QVERIFY(b.full());
     QVERIFY(b.try_claim() == nullptr);
 
-    // Warm B on full.
-    shadow_warm_queries(b);
+    // Exercise both endpoint caches while B is full.
+    shadow_warm_endpoints(b);
 
     // Swap: A must become full and still refuse claim.
     using std::swap;
@@ -1999,8 +1995,8 @@ static void test_shadow_full_swap_move_claim_regression_dynamic() {
     QVERIFY(a.is_valid());
     QVERIFY(b.is_valid());
 
-    // Warm A on empty.
-    shadow_warm_queries(a);
+    // Exercise both endpoint caches while A is empty.
+    shadow_warm_endpoints(a);
 
     // Fill B to full.
     const reg cap = b.capacity();
@@ -2013,8 +2009,8 @@ static void test_shadow_full_swap_move_claim_regression_dynamic() {
     QVERIFY(b.full());
     QVERIFY(b.try_claim() == nullptr);
 
-    // Warm B on full.
-    shadow_warm_queries(b);
+    // Exercise both endpoint caches while B is full.
+    shadow_warm_endpoints(b);
 
     // Swap and validate.
     using std::swap;
@@ -2063,8 +2059,8 @@ static void test_shadow_adopt_overwrite_regression_static() {
     }
     QVERIFY(q.empty());
 
-    // 3) Warm producer queries with tail high (16).
-    shadow_warm_queries(q);
+    // 3) Exercise endpoint caches with tail high (16).
+    shadow_warm_endpoints(q);
 
     // 4) Adopt FULL state head=16, tail=0 (re-expose old items).
     QVERIFY(q.adopt(buf.data(), 16u, 0u));
@@ -2108,8 +2104,8 @@ static void test_shadow_adopt_overwrite_regression_dynamic() {
     QVERIFY(q.try_pop(cap));
     QVERIFY(q.empty());
 
-    // 3) Warm producer queries with tail high.
-    shadow_warm_queries(q);
+    // 3) Exercise endpoint caches with tail high.
+    shadow_warm_endpoints(q);
 
     // 4) Adopt FULL state head=cap, tail=0.
     QVERIFY(q.adopt(buf.data(), static_cast<reg>(buf.size()), cap, 0u));
@@ -3043,6 +3039,119 @@ static void state_machine_fuzz_sweep_suite() {
     }
 }
 
+template<class Policy>
+static void counter_wrap_static_view_one() {
+    constexpr reg kCapacity = 8u;
+    using Q = spsc::fifo_view<Traced, kCapacity, Policy>;
+
+    std::array<Traced, kCapacity> storage{};
+    const reg before_wrap = static_cast<reg>(std::numeric_limits<reg>::max() - 3u);
+
+    Q q;
+    QVERIFY(q.adopt(storage.data(), before_wrap, before_wrap));
+    verify_invariants(q);
+    QVERIFY(q.empty());
+
+    for (int value = 0; value < static_cast<int>(kCapacity); ++value) {
+        QVERIFY(q.try_push(Traced{value}));
+    }
+    QVERIFY(q.full());
+    QCOMPARE(q.state().head, static_cast<reg>(before_wrap + kCapacity));
+    QCOMPARE(q.state().tail, before_wrap);
+
+    for (int value = 0; value < 4; ++value) {
+        auto* front = q.try_front();
+        QVERIFY(front != nullptr);
+        QCOMPARE(front->v, value);
+        q.pop();
+    }
+    QCOMPARE(q.state().head, reg{4u});
+    QCOMPARE(q.state().tail, reg{0u});
+
+    for (int value = 8; value < 12; ++value) {
+        QVERIFY(q.try_push(Traced{value}));
+    }
+    QCOMPARE(q.state().head, reg{8u});
+    QCOMPARE(q.state().tail, reg{0u});
+
+    for (int value = 4; value < 12; ++value) {
+        auto* front = q.try_front();
+        QVERIFY(front != nullptr);
+        QCOMPARE(front->v, value);
+        q.pop();
+    }
+    QVERIFY(q.empty());
+    QCOMPARE(q.state().head, reg{8u});
+    QCOMPARE(q.state().tail, reg{8u});
+    verify_invariants(q);
+
+    const reg corrupt_head = static_cast<reg>(before_wrap + kCapacity + 1u);
+    Q rejected;
+    QVERIFY(!rejected.adopt(storage.data(), corrupt_head, before_wrap));
+    QVERIFY(!rejected.is_valid());
+    verify_invariants(rejected);
+}
+
+template<class Policy>
+static void counter_wrap_dynamic_view_one() {
+    constexpr reg kCapacity = 8u;
+    using Q = spsc::fifo_view<Traced, 0u, Policy>;
+
+    std::vector<Traced> storage(static_cast<std::size_t>(kCapacity));
+    const reg before_wrap = static_cast<reg>(std::numeric_limits<reg>::max() - 3u);
+
+    Q q;
+    QVERIFY(q.adopt(storage.data(), kCapacity, before_wrap, before_wrap));
+    verify_invariants(q);
+    QVERIFY(q.empty());
+
+    for (int value = 0; value < static_cast<int>(kCapacity); ++value) {
+        QVERIFY(q.try_push(Traced{value}));
+    }
+    QVERIFY(q.full());
+    QCOMPARE(q.state().head, static_cast<reg>(before_wrap + kCapacity));
+    QCOMPARE(q.state().tail, before_wrap);
+
+    for (int value = 0; value < 4; ++value) {
+        auto* front = q.try_front();
+        QVERIFY(front != nullptr);
+        QCOMPARE(front->v, value);
+        q.pop();
+    }
+    QCOMPARE(q.state().head, reg{4u});
+    QCOMPARE(q.state().tail, reg{0u});
+
+    for (int value = 8; value < 12; ++value) {
+        QVERIFY(q.try_push(Traced{value}));
+    }
+    QCOMPARE(q.state().head, reg{8u});
+    QCOMPARE(q.state().tail, reg{0u});
+
+    for (int value = 4; value < 12; ++value) {
+        auto* front = q.try_front();
+        QVERIFY(front != nullptr);
+        QCOMPARE(front->v, value);
+        q.pop();
+    }
+    QVERIFY(q.empty());
+    QCOMPARE(q.state().head, reg{8u});
+    QCOMPARE(q.state().tail, reg{8u});
+    verify_invariants(q);
+
+    const reg corrupt_head = static_cast<reg>(before_wrap + kCapacity + 1u);
+    Q rejected;
+    QVERIFY(!rejected.adopt(storage.data(), kCapacity, corrupt_head, before_wrap));
+    QVERIFY(!rejected.is_valid());
+    verify_invariants(rejected);
+}
+
+static void counter_wrap_view_suite() {
+    counter_wrap_static_view_one<spsc::policy::P>();
+    counter_wrap_dynamic_view_one<spsc::policy::P>();
+    counter_wrap_static_view_one<spsc::policy::CFA<>>();
+    counter_wrap_dynamic_view_one<spsc::policy::CFA<>>();
+}
+
 static void death_tests_debug_only_suite() {
 #if !defined(NDEBUG)
     QString blockedReason;
@@ -3160,6 +3269,7 @@ private slots:
     void dynamic_capacity_sweep()   { dynamic_capacity_sweep_suite(); }
     void move_swap_stress()         { move_swap_stress_suite(); }
     void state_machine_fuzz_sweep() { state_machine_fuzz_sweep_suite(); }
+    void counter_wrap_restore_adopt() { counter_wrap_view_suite(); }
     void resize_migration_order()   { resize_migration_order_suite(); }
     void snapshot_try_consume_contract() { snapshot_try_consume_contract_suite(); }
 

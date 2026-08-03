@@ -1,0 +1,157 @@
+{
+    "format_version":  1,
+    "captured_at_local":  "2026-08-02T18:10:31.2451230+02:00",
+    "evidence":  {
+                     "classification":  "diagnostic_invalid",
+                     "capture_label":  "h0_initial_short",
+                     "reasons":  [
+                                     "dirty library and harness worktree",
+                                     "2,000,000 transfers with five samples",
+                                     "sibling logical CPU affinity 0,1",
+                                     "pre-hardening retry loop with scheduler yield"
+                                 ]
+                 },
+    "git":  {
+                "commit":  "85904897cc57d8d396536e0b03af86046f0a6bb1",
+                "status_porcelain":  [
+                                         " M .gitignore",
+                                         "A  .gitmodules",
+                                         " M .qtcreator/spsc_test.pro.user",
+                                         " M CHANGELOG.md",
+                                         " M README.md",
+                                         " M SPSC_HARDENING_ROADMAP.md",
+                                         " M test_suite_registry.cpp",
+                                         " M test_suite_registry.h",
+                                         "A  third_party/rigtorp_spscqueue",
+                                         "?? benchmarks/",
+                                         "?? bin/",
+                                         "?? dbg_fifo.xml",
+                                         "?? deps_available.txt",
+                                         "?? err.txt",
+                                         "?? on_fifo.xml",
+                                         "?? out.txt",
+                                         "?? scripts/"
+                                     ],
+                "rigtorp_submodule":  [
+                                          " 565a5149d54930463d58cb0f69b978d439555e66 third_party/rigtorp_spscqueue (v1.1)"
+                                      ]
+            },
+    "compiler":  {
+                     "path":  "C:\\msys64\\ucrt64\\bin\\g++.exe",
+                     "version":  [
+                                     "g++.exe (Rev11, Built by MSYS2 project) 15.2.0",
+                                     "Copyright (C) 2025 Free Software Foundation, Inc."
+                                 ],
+                     "flags":  [
+                                   "-std=c++17",
+                                   "-O3",
+                                   "-DNDEBUG",
+                                   "-march=native",
+                                   "-pthread",
+                                   "-DSPSC_ENABLE_SHADOW_INDICES=1",
+                                   "-DSPSC_SHADOW_ALLOW_32BIT=0",
+                                   "--param=destructive-interference-size=64"
+                               ],
+                     "includes":  [
+                                      "-IC:\\Users\\admin\\Documents\\my_workspace\\Qt\\spsc_test",
+                                      "-IC:\\Users\\admin\\Documents\\my_workspace\\Qt\\spsc_test\\src",
+                                      "-IC:\\Users\\admin\\Documents\\my_workspace\\Qt\\spsc_test\\third_party\\rigtorp_spscqueue\\include"
+                                  ]
+                 },
+    "host":  {
+                 "os":  "Microsoft Windows NT 10.0.26200.0",
+                 "logical_processors":  32,
+                 "processors":  [
+                                    {
+                                        "name":  "Intel(R) Core(TM) i9-14900HX",
+                                        "manufacturer":  "GenuineIntel",
+                                        "max_clock_mhz":  2200,
+                                        "cores":  24,
+                                        "logical_processors":  32
+                                    }
+                                ],
+                 "affinity_requested":  "0,1"
+             },
+    "benchmark":  {
+                      "suite":  "all",
+                      "items":  2000000,
+                      "samples":  5,
+                      "warmup":  1,
+                      "capacity":  1024,
+                      "boundary_batch_size":  1024,
+                      "payload_layout":  {
+                                             "queue_item":  [
+                                                                8,
+                                                                8
+                                                            ],
+                                             "fifo_item":  [
+                                                               8,
+                                                               8
+                                                           ]
+                                         },
+                      "type_layout":  {
+                                          "queue_a":  [
+                                                          192,
+                                                          64
+                                                      ],
+                                          "queue_fa":  [
+                                                           192,
+                                                           64
+                                                       ],
+                                          "queue_aa":  [
+                                                           192,
+                                                           64
+                                                       ],
+                                          "queue_ca":  [
+                                                           384,
+                                                           64
+                                                       ],
+                                          "queue_cfa":  [
+                                                            384,
+                                                            64
+                                                        ],
+                                          "queue_caa":  [
+                                                            384,
+                                                            64
+                                                        ],
+                                          "fifo_a":  [
+                                                         8320,
+                                                         64
+                                                     ],
+                                          "fifo_fa":  [
+                                                          8320,
+                                                          64
+                                                      ],
+                                          "fifo_aa":  [
+                                                          8320,
+                                                          64
+                                                      ],
+                                          "fifo_ca":  [
+                                                          8448,
+                                                          64
+                                                      ],
+                                          "fifo_cfa":  [
+                                                           8448,
+                                                           64
+                                                       ],
+                                          "fifo_caa":  [
+                                                           8448,
+                                                           64
+                                                       ],
+                                          "rigtorp_queue":  [
+                                                                320,
+                                                                64
+                                                            ]
+                                      },
+                      "spsc_cacheline_bytes":  64,
+                      "shadow_indices_enabled":  1,
+                      "shadow_allow_32bit":  0
+                  },
+    "artifacts":  {
+                      "jsonl":  "C:\\Users\\admin\\Documents\\my_workspace\\Qt\\spsc_test\\benchmarks\\results\\20260802-181024-026-85904897cc57.jsonl",
+                      "jsonl_sha256":  "F62010D38180718498CE8CA164277C7C67927A89ED0663C04BD502A35DBFC45A",
+                      "assembly":  "C:\\Users\\admin\\Documents\\my_workspace\\Qt\\spsc_test\\benchmarks\\results\\20260802-181024-026-85904897cc57.hotpath.s",
+                      "assembly_sha256":  "16B49A24BD2A2334F36040C2F5C6D087777D61918031AEA43CA898DC6F086813",
+                      "rigtorp_header_sha256":  "6CC294481A523ECA0C638673002DE43707D47B00D75A30589F7CFD553CE344E9"
+                  }
+}

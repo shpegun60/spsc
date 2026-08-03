@@ -21,6 +21,9 @@ Choose `pool` when:
 spsc::pool<64> q{256}; // 64 slots, each 256 bytes
 ```
 
+The static template argument fixes the pointer-ring geometry. The configured
+raw buffers are still allocated when the pool is initialized.
+
 ### Dynamic depth
 
 ```cpp

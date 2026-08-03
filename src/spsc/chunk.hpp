@@ -6,7 +6,7 @@
  * Copyright (c) 2026 Shpegun60
  * SPDX-License-Identifier: Apache-2.0
  *
- * High-performance contiguous buffer container.
+ * Contiguous buffer container.
  *
  * Variants:
  * 1. STATIC CHUNK (ChunkCapacity > 0):

@@ -7,6 +7,7 @@ Main integration project for the `spsc` buffer library and paranoid API tests.
 Quick links:
 
 - [Changelog](CHANGELOG.md)
+- [Reproducible benchmark and validity protocol](benchmarks/README.md)
 - [Quick Start](src/spsc/README.md)
 - [Documentation Hub](src/spsc/docs/README.md)
 - [Common Concepts](src/spsc/docs/common-concepts.md)
@@ -115,6 +116,8 @@ Notes:
 
 - [`SPSC_HARDENING_ROADMAP.md`](SPSC_HARDENING_ROADMAP.md): the active,
   slice-by-slice contract, correctness, test, CI, and performance hardening plan.
+- [`benchmarks/`](benchmarks/README.md): reproducible, validity-gated measurement
+  harness with a pinned Rigtorp comparator and explicit `inconclusive` output.
 - `src/spsc/`: core SPSC library headers (`fifo`, `queue`, `typed_pool`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, etc.).
 - `src/tests/*_test.cpp`: paranoid test suites for each buffer type.
 - `spsc_test.pro`: Qt/qmake project file.
@@ -160,6 +163,53 @@ The dashboard and runner executables are built per configuration:
 .\bin\debug\spsc_test_shadow_on.exe --run-suite fifo
 .\bin\release\spsc_test_shadow_on.exe --run-suite fifo
 ```
+
+The C++20 runner enables `SPSC_HAS_SPAN=1`; it is separate from the C++17
+dashboard matrix so a missing `std::span` library cannot silently disable its
+contracts:
+
+```powershell
+.\bin\debug\spsc_test_cxx20_span.exe --run-suite fifo span_contract
+.\bin\debug\spsc_test_cxx20_span.exe --run-suite pool span_contract
+.\bin\debug\spsc_test_cxx20_span.exe --run-suite queue raw_bytes_contract
+.\bin\debug\spsc_test_cxx20_span.exe --run-suite chunk span_contract
+```
+
+H6 also has two standalone policy targets. The first succeeds only when the
+compiler rejects relaxed atomic publication. Run the second from an x86 Visual
+Studio Developer PowerShell (or another genuine 32-bit compiler environment):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test_relaxed_publication_compile_fail.ps1 -Compiler C:\msys64\ucrt64\bin\g++.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_h6_32bit_shadow_matrix.ps1 -Compiler cl
+```
+
+## Clean Verification And CI
+
+H7 runs each qmake target from a fresh, uniquely named temporary build
+directory. It never reads or removes the repository's `build/`, `bin/`, MOC,
+or object artifacts; use `-KeepBuild` only when a failed generated tree needs
+to be inspected.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_h7_matrix.ps1 `
+  -Configuration Both -Variant all -BuildLauncher
+```
+
+On Linux, the same functional matrix and the standalone sanitizer target are:
+
+```bash
+bash scripts/run_h7_matrix.sh --qmake qmake6 --configuration both --variant all
+bash scripts/run_h7_sanitizers.sh --sanitizer address,undefined
+bash scripts/run_h7_sanitizers.sh --sanitizer thread
+bash scripts/run_h6_32bit_shadow_matrix.sh --compiler g++
+```
+
+`run_h7_matrix.ps1` accepts `-Qmake`, `-Make`, and `-Compiler` paths when the
+Qt kit is not already configured on `PATH`. The GitHub Actions workflow runs
+the explicit C++17 shadow Debug/Release matrix, C++20 span Debug/Release
+targets, Linux sanitizers, genuine 32-bit execution, AArch64 header smoke, and
+Windows MinGW/MSVC header smoke.
 
 The dashboard:
 

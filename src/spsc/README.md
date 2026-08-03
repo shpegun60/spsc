@@ -24,7 +24,7 @@ The examples below are C++17-safe unless explicitly marked otherwise. Helpers th
 | Fixed-size raw byte buffers | [`pool`](docs/pool.md) | Great for packets, DMA-style buffers, raw slots |
 | External raw buffers / DMA-owned storage | [`pool_view`](docs/pool_view.md) | Non-owning raw-slot view |
 | Only the newest committed state matters | [`latest`](docs/latest.md) | Not a FIFO |
-| Stable typed object slots addressed by pointers | [`typed_pool`](docs/typed_pool.md) | Pool semantics with typed slots |
+| Stable typed object slots addressed by pointers | [`typed_pool`](docs/typed_pool.md) | Independent owning typed-slot pool |
 | Fixed-size arrays as queue elements | [`array_fifo` family](docs/array_fifo.md) | Zero-copy frame-style producer flow |
 | Variable-used blocks with per-block logical size | [`chunk_fifo` family](docs/chunk_fifo.md) | FIFO of `chunk<T,...>` objects |
 | Standalone contiguous block container | [`chunk`](docs/chunk.md) | Payload block, not itself an SPSC queue |
@@ -59,15 +59,31 @@ not a task/task or thread/thread synchronization policy.
 
 Common ready-made policies from [`base/spsc_policy.hpp`](base/spsc_policy.hpp):
 
-- `spsc::policy::P`: plain counters, fastest single-core path
+- `spsc::policy::P`: plain counters for one context or external synchronization
 - `spsc::policy::V`: volatile producer counters, good fit for ISR -> task on one core
 - `spsc::policy::VV`: everything volatile
-- `spsc::policy::A<>`: atomic counters, general threaded path
-- `spsc::policy::FA<>`: fast single-writer atomic counters
+- `spsc::policy::A<>`: atomic RMW-counter backend
+- `spsc::policy::FA<>`: single-writer atomic-counter backend
 - `spsc::policy::AA<>`: atomic counters and atomic geometry
 - `spsc::policy::CP`, `CV`, `CVV`, `CA<>`, `CFA<>`, `CAA<>`: cacheline-aligned variants
 
-`CacheAligned` policies pad and align queue metadata. For raw-slot containers such as `pool` and `latest<void>`, the default allocator path can also derive payload alignment from the policy. For typed contiguous containers such as `fifo<T,...>` or `queue<T,...>`, payload alignment still primarily comes from `T` itself.
+`CacheAligned` policies pad and align policy-owned metadata. For raw-slot
+owning containers such as `pool` and `latest<void>`, the default allocator path
+can also derive payload alignment from the policy. For typed contiguous
+containers such as `fifo<T,...>` or `queue<T,...>`, payload alignment still
+primarily comes from `T` itself. A `*_view` policy cannot realign or resize the
+caller-owned backing buffer.
+
+Shadow-index isolation is independent of `CacheAligned`. When the global
+shadow switch and counter-width gate allow it, every atomic-backed policy gets
+producer- and consumer-owned metadata blocks from the internal `SPSCbase`.
+`CacheAligned` policies additionally pad their policy counters and geometry and
+propagate allocator-alignment hints. On a 32-bit `reg` domain, shadows remain
+off by default unless `SPSC_SHADOW_ALLOW_32BIT=1` is selected explicitly.
+
+`SPSCbase` is an internal implementation base, not a supported public extension
+API. Applications should use the concrete containers and views rather than
+derive from `SPSCbase` or expose its protected endpoint helpers.
 
 ## Quick Examples
 

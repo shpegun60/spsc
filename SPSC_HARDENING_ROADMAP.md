@@ -22,18 +22,27 @@ reproducible benchmark/CI matrix.
    correctness failure. Exact offsets are compiler/ABI dependent; tests must
    verify cache-line separation properties on real objects instead of freezing
    one compiler's numeric offsets.
-2. Shadows are allowed only when the policy explicitly opts in and its counter
-   storage is structurally at least one configured cache line wide and aligned.
-   A missing opt-in on a custom policy means `false`.
-3. `CacheAligned<Base, CAlign, ...>` is not automatically shadow-safe:
-   user-supplied `CAlign` may be smaller than `SPSC_CACHELINE_BYTES`. The gate
-   must check `CAlign`, `alignof(counter_type)`, and `sizeof(counter_type)`.
+2. Shadow eligibility remains a property of the synchronization backend, not of
+   `CacheAligned`. When the global and counter-width gates allow it, every
+   atomic-backed policy uses lazy opposite-index shadows. Non-atomic `P`, `V`,
+   and `VV` families do not allocate or use shadows; their direct counter reads
+   are already the intended fast path. No per-policy shadow opt-in is added.
+3. Layout safety is the responsibility of `SPSCbase`. Replace the split
+   `rb_shadow_indices` base plus separately declared `_head`/`_tail` members
+   with one specialized index-storage object. Its shadow-enabled form places
+   producer-written metadata (`_head`, `prod_shadow_tail`) and consumer-written
+   metadata (`_tail`, `cons_shadow_head`) in separate cache-line-aligned owner
+   blocks whose sizes are multiples of `SPSC_CACHELINE_BYTES`. Same-owner fields
+   may share cache lines; writable metadata owned by opposite endpoints may not.
+   `CacheAligned<Base, CAlign, ...>` and its `CAlign` do not decide shadow
+   eligibility.
 4. The intended built-in result is:
 
    ```text
-   A<> / FA<> / AA<> shadows off
-   CA<> / CFA<>     shadows on
-   CAA<>            shadows on
+   P / V / VV / CP / CV / CVV      shadows off
+   A<> / FA<> / AA<>                shadows on when global/width gates allow
+   CA<> / CFA<> / CAA<>             shadows on when global/width gates allow
+   custom atomic-backed policy      shadows on when global/width gates allow
    ```
 
    The global shadow switch, counter-width gate, and 32-bit opt-in remain in
@@ -51,9 +60,11 @@ reproducible benchmark/CI matrix.
    and are outside that cleanup.
 9. `CFA<>` is correct under the one-producer/one-consumer contract. `CA<>` is a
    stricter RMW backend, not a more correct SPSC queue.
-10. No `fast_*` alias changes or Rigtorp-equivalence claims are accepted without
-    measurements. `queue` is the closest lifetime-model comparison to Rigtorp;
-    `fifo` is measured separately.
+10. No Rigtorp-equivalence claim is accepted without valid measurements.
+    `queue` is the closest lifetime-model comparison to Rigtorp; `fifo` is
+    measured separately. H10 may retarget a legacy `fast_*` alias only as an
+    explicit backend-selection/API decision with its concrete-type/ABI effect
+    documented; the alias name itself is not a throughput claim.
 11. `CHANGELOG.md` calls `v1.0.0` a stable API. Direct removal of the accidental
     view overloads is nevertheless authorized because there are no consumers,
     but it remains a deliberate source-breaking change and must be recorded.
@@ -66,20 +77,23 @@ reproducible benchmark/CI matrix.
 | Slice | Deliverable | Depends on | Status |
 | --- | --- | --- | --- |
 | H1 | Unsafe bulk API consistency | none | complete (2026-08-02) |
-| H0 | Reproducible baseline and benchmark harness | none | pending |
-| H2 | Shadow eligibility and layout contract | H0 | pending |
-| H3 | Role-safe public introspection | H0, H2 | pending |
-| H4 | Container, policy, and concurrency documentation | H1-H3 | pending |
-| H5 | Counter-wrap and invariant tests | H2, H3 | pending |
-| H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | pending |
-| H7 | Clean builds, CI, and sanitizers | H5, H6 | pending |
-| H8 | Fused single-item hot path | H0, H3, H5-H7 | pending |
-| H9 | Shadow-aware bulk snapshot path | H8 | pending |
-| H10 | Alias and release decision | H8, H9 | pending |
+| H0 | Reproducible baseline and benchmark harness | none | complete (2026-08-02) |
+| H2 | Atomic shadow storage and owner-line layout | H0 | complete (2026-08-02) |
+| H3 | Role-safe public introspection | H0, H2 | complete (2026-08-02) |
+| H4 | Container, policy, and concurrency documentation | H1-H3 | complete (2026-08-02) |
+| H5 | Counter-wrap and invariant tests | H2, H3 | complete (2026-08-02) |
+| H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | complete (2026-08-02) |
+| H7 | Clean builds, CI, and sanitizers | H5, H6 | complete (2026-08-02) |
+| H8 | Fused monolithic single-item operations | H0, H3, H5-H7 | complete (2026-08-02) |
+| H0R | Benchmark evidence validity repair | H0, H8 | complete (2026-08-03) |
+| H9 | Shadow-aware bulk snapshot path | H8, H0R | deferred (2026-08-03; outside the 2.0 gate) |
+| H10 | Alias and release decision | H8, H0R | complete (2026-08-03) |
 
 `H1` precedes `H0` only because deleting forwarding overloads does not change
 runtime code generation. The critical performance sequence remains
-`H0 -> H2 -> H3 -> H8 -> H9 -> H10`.
+`H0 -> H2 -> H3 -> H8 -> H0R -> H10`. H9 is now an optional optimization
+backlog item rather than a dependency of the 2.0 release decision. Resuming it
+requires fresh authorization and the zero-persistent-storage constraints below.
 
 ## H1 - Unsafe Bulk API Consistency
 
@@ -151,12 +165,18 @@ measured before/after result.
 - Measure `queue<T, ..., CFA<>>` against Rigtorp under equivalent object-lifetime
   work.
 - Measure `fifo<T, ..., CFA<>>` separately.
+- Record `sizeof`/`alignof` baselines for `A<>`, `FA<>`, `AA<>`, `CA<>`,
+  `CFA<>`, and `CAA<>`, plus like-for-like throughput samples for at least
+  `A<>`, `FA<>`, `CA<>`, and `CFA<>`. H2 changes their physical storage while
+  intentionally preserving shadow eligibility.
 - Record steady-state throughput plus boundary-heavy empty/full behavior.
 - Capture generated assembly for producer push/emplace and complete consumer
   `front + pop` paths. Bare `fifo::try_pop()` is not an end-to-end consumer
   comparison.
-- Record policy object sizes and observed metadata offsets for the supported
-  compilers without declaring those offsets portable ABI.
+- Record policy object sizes and alignments for the supported compilers without
+  declaring them portable ABI. H2's friend-only layout probe, rather than a
+  public API, will capture the private owner-line geometry and offsets after the
+  storage change.
 
 ### Acceptance Criteria
 
@@ -170,37 +190,94 @@ measured before/after result.
 
 Low. This slice adds measurement infrastructure and does not change the library.
 
-## H2 - Shadow Eligibility And Layout Contract
+### Verification Record
+
+- Added `benchmarks/spsc_bench.cpp`, the canonical Windows runner at
+  `scripts/run_spsc_baseline.ps1`, JSONL/manifest/assembly capture, and the
+  pinned `rigtorp/SPSCQueue` v1.1 gitlink
+  `565a5149d54930463d58cb0f69b978d439555e66`.
+- The initial short capture (2,000,000 transfers, five samples, CPUs `0,1`)
+  is retained only as diagnostic history. It used sibling logical CPUs and a
+  retry loop which periodically called `std::this_thread::yield()`, so its
+  throughput table is not a valid H0 performance reference.
+- That retained manifest is now explicitly classified as
+  `diagnostic_invalid`. Manifest format 3 requires every new capture to declare
+  a diagnostic or release evidence class; release mode rejects dirty library
+  or harness revisions, short sample protocols, disabled affinity, and
+  producer/consumer placement on the same logical CPU. Clean named H0, H2, and
+  H8 artifacts still need to be generated after this closeout is committed.
+- The harness was hardened during H2 validation: defaults are now 20,000,000
+  transfers, nine samples, and two warm-ups; Windows `auto` affinity chooses
+  two distinct physical cores and prefers two non-zero P-cores on a hybrid
+  host, retaining CPU 0 only as a fallback for smaller topologies;
+  queue/Rigtorp samples are paired in alternating order; raw results record
+  median, standard deviation, endpoint CPU time, and
+  the resolved affinity; the manifest records the Windows base plan and
+  performance overlay; retries use CPU-relax rather than scheduler yield;
+  and `-LibraryRoot` supports an H0/H2 build comparison using one harness.
+- The H2 -> H0 -> H2 control sequence still showed host-state movement larger
+  than a layout-only change. The active Windows Balanced power plan and
+  scheduler/thermal state are therefore recorded as an unresolved external
+  variable, not misreported as a library gain or regression. A release-quality
+  cross-version result needs a controlled performance power plan/idle host and
+  paired interleaving of the two revision executables.
+- GCC 15.2 strict benchmark and hot-path checks passed in C++17 and C++20 with
+  shadows both off and on, using `-Wall -Wextra -Werror -pedantic-errors`.
+- Existing SPSC regression executables passed: 27/27 Debug and 27/27 Release
+  suite-runs across `shadow_off`, `shadow_on`, and `shadow_heur`.
+
+## H2 - Atomic Shadow Storage And Owner-Line Layout
 
 ### Goal
 
-Enable lazy opposite-index shadows only when their metadata can be physically
-isolated from the owner counters.
+Keep lazy opposite-index shadows for every eligible atomic backend while making
+their physical layout safe by construction. Keep the non-atomic path compact
+and shadow-free.
 
 ### Scope
 
-- Add a detected policy property whose absence means `false`.
-- A `CacheAligned` policy may opt in only when its requested counter alignment
-  and resulting counter type are at least `SPSC_CACHELINE_BYTES` aligned and
-  sized.
-- Extend `rb_use_shadow_v` with the policy/layout safety property while keeping
-  the atomic-backend, global-enable, and counter-width gates.
-- Ensure the built-in results listed in the locked decisions.
-- Update `src/tests/test_build_config.hpp` so each qmake variant checks the new
-  eligibility truth table instead of expecting every atomic policy to cache.
+- Preserve the current `rb_use_shadow_v` eligibility rule: global enable,
+  atomic counter backend, and counter-width/32-bit opt-in gates only.
+- Replace the split shadow base and naked `_head`/`_tail` members with one
+  direct, specialized index-storage member.
+- Keep the shadow-disabled specialization compact: it contains only `_head`
+  and `_tail`, without shadow fields or shadow-induced cache-line padding.
+- In the shadow-enabled specialization, group producer-owned `_head` plus
+  `prod_shadow_tail` in one owner block and consumer-owned `_tail` plus
+  `cons_shadow_head` in another owner block.
+- Give each owner block an effective alignment of at least
+  `max(SPSC_CACHELINE_BYTES, alignof(counter_type), alignof(reg))` and make its
+  size a multiple of `SPSC_CACHELINE_BYTES`. Counter types smaller than, equal
+  to, or larger than the configured cache line must all remain valid.
+- Add compile-time checks for owner-block alignment, size, and standard-layout
+  properties. Do not rely on derived-class base/member placement or on one
+  compiler's incidental tail-padding behavior.
+- Ensure the built-in and custom-policy results listed in the locked decisions.
+- Update `src/tests/test_build_config.hpp` so every qmake variant explicitly
+  checks that `A<>` and `CA<>` have identical shadow eligibility.
 - Add a friend-based test layout probe. Do not add a public state/layout API and
   do not use an ODR-changing `SPSC_TESTING` class definition.
-- Test actual addresses/cache-line indices, not hard-coded GCC offsets.
-- Include a custom `CacheAligned` policy whose `CAlign` is deliberately smaller
-  than the configured cache line; shadows must remain off.
+- Test actual address ranges/cache-line ownership, not hard-coded GCC offsets.
+- Treat `SPSC_CACHELINE_BYTES` as the compile-time layout contract. The guarantee
+  assumes normally aligned C++ objects; packed or otherwise misaligned placement
+  is outside the supported object-lifetime contract.
+- Include an atomic `CacheAligned` policy whose `CAlign` is deliberately smaller
+  than the configured cache line. It must still use shadows safely because the
+  outer owner blocks, not `CAlign`, provide endpoint isolation.
+- Include an over-aligned custom atomic counter to prove that owner-block
+  alignment never weakens the counter type's natural alignment.
 
 ### Acceptance Criteria
 
-- `A<>` and `FA<>` have no shadow storage.
-- Default `CA<>`, `CFA<>`, and `CAA<>` use shadows when the global and width
-  gates allow them.
-- For every shadow-enabled policy, producer shadow, consumer shadow, `_head`,
-  and `_tail` satisfy the declared cache-line isolation properties.
+- `A<>`, `FA<>`, `AA<>`, `CA<>`, `CFA<>`, `CAA<>`, and a custom atomic-backed
+  policy use shadows whenever the global and width gates allow them.
+- `P`, `V`, `VV`, `CP`, `CV`, and `CVV` contain no shadow storage. Disabling
+  shadows also selects the compact storage for atomic policies.
+- No configured cache line contains writable metadata owned by both producer
+  and consumer. Same-owner `_head`/shadow-tail or `_tail`/shadow-head sharing is
+  allowed and should be preferred when the counter type fits.
+- Owner blocks remain isolated for counter types whose natural alignment is
+  below, equal to, or above `SPSC_CACHELINE_BYTES`.
 - `SPSC_ENABLE_SHADOW_INDICES=0` disables shadows everywhere.
 - Both static and dynamic geometry are covered in all three current qmake
   variants.
@@ -208,9 +285,64 @@ isolated from the owner counters.
 
 ### Risk And Rollback
 
-Medium. This intentionally changes `A<>`/`FA<>` layout and performance. Revert
-the eligibility predicate and trait together if a supported compiler violates
-the tested layout properties.
+Medium. This intentionally changes atomic object layout, size, and performance,
+but does not change which policies are shadow-eligible. Roll back the unified
+index-storage representation as one unit if a supported compiler violates the
+tested owner-line properties.
+
+### Verification Record
+
+- Replaced the old split shadow base plus naked index members with direct
+  `rb_index_storage<Cnt, kUseShadow>` storage. The no-shadow specialization is
+  exactly two counters; the shadow specialization stores producer-owned
+  `head`/`prod_shadow_tail` and consumer-owned `tail`/`cons_shadow_head` in
+  separate cache-line-sized owner blocks.
+- Eligibility is unchanged: all atomic built-ins (`A`, `FA`, `AA`, `CA`,
+  `CFA`, `CAA`) and custom atomic policies retain shadows when the global and
+  width gates allow them; `P`, `V`, `VV`, `CP`, `CV`, and `CVV` never allocate
+  shadow storage. `CAlign` does not participate in that decision.
+- Added a friend-only layout probe in `src/tests/test_spsc_layout.hpp`; no
+  public base-class state or test-only production macro was added. The FIFO
+  layout test covers static and dynamic capacity for the six non-atomic and six
+  built-in atomic policies, an atomic `CacheAligned` policy with sub-cacheline
+  `CAlign`, and an over-aligned custom atomic counter. It checks real field and
+  owner-block addresses, configured cache-line separation, block size, and
+  counter alignment. `test_build_config.hpp` also keeps the early qmake
+  `A<>`/`CA<>` gate invariant explicit without changing test assertion setup.
+- Final validation: all six qmake runners rebuilt; 54/54 Debug/Release suite
+  runs passed across `shadow_off`, `shadow_on`, and `shadow_heur`. The focused
+  owner-line test passed in all six configurations. GCC 15.2 strict syntax
+  checks passed 12/12: C++17/C++20 × shadows off/on × benchmark, hot-path, and
+  layout-probe translation units with `-Wall -Wextra -Werror -pedantic-errors`.
+- Object layout on the benchmark host changed as intended. `queue` with
+  `A`/`FA`/`AA` grew from 192 B to 256 B; `queue` with `CA`/`CFA`/`CAA` stayed
+  384 B. The measured `fifo` objects stayed 8320 B (`A`/`FA`/`AA`) and 8448 B
+  (`CA`/`CFA`/`CAA`), all aligned to 64 B. These are recorded compiler-specific
+  observations, not a portable ABI promise.
+- A controlled H0 -> H2 -> H0 -> H2 check used the hardened harness on the
+  i9-14900HX/GCC 15.2 host: 30,000,000 transfers, 11 measured pairs, three
+  warm-ups, capacity 1024, topology-selected CPUs `0,2`, and Windows Max
+  Performance Overlay `ded574b5-45a0-4f42-8737-46345c09c238` over the Balanced
+  base scheme. The stable adjacent H0/H2 series was:
+
+  | Workload | H0 `spsc::queue<CFA>` median | H2 median | H2 delta | Rigtorp/SPSC paired ratio H0 / H2 |
+  | --- | ---: | ---: | ---: | ---: |
+  | steady | 258.8 M/s | 261.3 M/s | +1.0% | 0.916 / 0.962 |
+  | forced empty/full boundary | 263.3 M/s | 256.9 M/s | -2.4% | 0.636 / 0.660 |
+
+  Both deltas are within the 4-10% steady and 2-5% boundary sample variation;
+  H2 therefore has no measured throughput regression or gain on this host. An
+  intervening run in which both SPSC and unchanged Rigtorp slowed by roughly
+  6x was excluded as host interference, then immediately followed by the
+  stable H0/H2 pair above. The earlier short/yield-based captures remain
+  diagnostic history only, not release evidence or a general library ranking.
+- The generated GCC 15.2 hot-path probe confirms that H2 changes index-member
+  displacements and owner-line geometry, not the producer/consumer control
+  flow: the producer still reloads its owner head and the consumer still
+  reloads its owner tail. Eliminating those redundant relaxed owner loads is
+  explicitly H8's job; it must carry one owner snapshot through availability,
+  address calculation, and release publication without weakening opposite-side
+  acquire semantics.
 
 ## H3 - Role-Safe Public Introspection
 
@@ -255,7 +387,42 @@ shadows through public `const` queries while retaining cached endpoint hot paths
 High because this changes a shared base and every hot path. Keep the direct and
 cached helpers separate so the migration can be reviewed mechanically.
 
+### Verification Record
+
+- Split the base-layer occupancy code into direct observation methods and
+  endpoint-local cached helpers. `size`, `free`, `empty`, `full`,
+  `can_write`, `can_read`, `write_size`, and `read_size` now read only the
+  published indices; they never read or write either shadow.
+- Migrated producer/consumer operation paths in `fifo`, `fifo_view`, `pool`,
+  `pool_view`, `queue`, `typed_pool`, and all `latest` variants to the
+  corresponding producer- or consumer-owned cache helper. Array/chunk FIFO
+  wrappers inherit that behavior. A source audit confirms the remaining direct
+  base-query calls in those containers are only their public observer wrappers.
+- Added a friend-only H3 test subject which establishes nonzero producer and
+  consumer shadows, calls every direct observer method, and proves both shadow
+  values are unchanged. Existing regression helpers now warm caches only via
+  endpoint operations. The new three-thread FIFO regression runs producer,
+  consumer, and observer concurrently and verifies bounded
+  `size`/`free`/contiguous-region observations.
+- Documented the observer contract in `concurrency-and-freertos.md`: atomic
+  policies allow bounded, data-race-free but approximate/non-linearizable
+  observations; plain and volatile policies still require external
+  synchronization for a third observer.
+- Final functional validation: 27/27 Debug and 27/27 Release suite-runs
+  passed across `shadow_off`, `shadow_on`, and `shadow_heur`. GCC 15.2 strict
+  hot-path compilation passed 4/4 for C++17/C++20 and shadows off/on with
+  `-Wall -Wextra -Werror -pedantic-errors`; the sole suppressed diagnostic is
+  GCC's external Rigtorp `hardware_destructive_interference_size` warning.
+- Generated GCC 15.2 C++17/O3 assembly with shadows enabled retains lazy
+  endpoint caches: FIFO producer/consumer use shadows at offsets 64/192 and
+  queue producer/consumer at 128/256 only on refresh paths. The H3 observer
+  probes access only their direct head/tail offsets (FIFO 0/128; queue 64/192)
+  and never either shadow. The Linux TSan execution of this regression remains
+  the explicitly deferred H7 infrastructure check.
+
 ## H4 - Container, Policy, And Concurrency Documentation
+
+Status: complete
 
 ### Goal
 
@@ -296,7 +463,32 @@ Make the documented contract match the implementation exactly.
 
 Low code risk. Documentation must land with the behavior it describes.
 
+### Verification Record
+
+- Added the role-ownership and same-side transaction contract to the common
+  documentation: producer `claim -> fill/construct -> publish`, consumer
+  `front -> process -> pop`, the atomic-only observer surface, and the stopped
+  management boundary.
+- Documented `CA<>` as the cache-aligned RMW backend and `CFA<>` as the
+  cache-aligned single-writer backend, without ranking either as more correct.
+  Public observer reads are now explicitly described as approximate and as
+  possible cross-core cache traffic.
+- Reconciled container guides with their actual allocation/lifetime behavior:
+  static capacity is not universally allocation-free; `fifo` uses live
+  assignment slots; `queue` manages lifetime and allocates even at static
+  capacity; `pool` and `typed_pool` allocate their slots; and `latest` remains
+  bounded even when coalescing.
+- Documented the external-storage boundary: `CacheAligned` affects queue
+  metadata and owning allocator hints, but views cannot realign caller memory;
+  DMA cache maintenance remains platform code. Marked the older paranoid audit
+  as historical where it conflicts with H1-H3 findings.
+- `git diff --check` passed, and a local-link scan over every changed Markdown
+  document resolved all relative links. Header changes are comments only; no
+  runtime code or generated hot path changed in this slice.
+
 ## H5 - Counter-Wrap And Invariant Tests
+
+Status: complete
 
 ### Goal
 
@@ -326,7 +518,30 @@ Exercise monotonic counter overflow rather than only physical ring wrapping.
 Medium. Test access must not expand the production API or alter production
 object layout.
 
+### Verification Record
+
+- Added a test-only derived `SPSCbase` subject; it exposes protected state only
+  to tests, without a production test macro, raw-index API, or layout change.
+- Started static and dynamic-capacity `P` and `CFA<>` subjects at
+  `SIZE_MAX - 3`, then crossed both `head` and `tail` through `max -> 0`.
+  The checks cover logical occupancy, full/empty, `can_read/can_write`,
+  physical indices and contiguous regions, plus producer/consumer shadow-cache
+  refresh whenever shadows are enabled.
+- Added real static and dynamic `fifo_view::adopt()` coverage across the same
+  boundary. It verifies exact FIFO delivery through physical ring reuse and
+  rejects a restored state whose logical distance is `capacity + 1`.
+- Atomic direct observation queries fail closed on a stable impossible raw
+  state; normal `init`/`adopt` rejects that state and returns to a valid empty
+  state. Cached endpoint observations are deliberately not asserted after an
+  artificially injected state because their lazy snapshots may legitimately be
+  stale.
+- Built Debug and Release test runners for `shadow_off`, `shadow_on`, and
+  `shadow_heur`; the complete `fifo` and `fifo_view` suites passed in all six
+  configurations. `git diff --check` also passed.
+
 ## H6 - Policy, 32-bit, And C++20 Matrix
+
+Status: complete
 
 ### Goal
 
@@ -356,7 +571,37 @@ Cover the configurations currently inferred rather than executed.
 
 Medium. Keep expected-failure targets isolated from the normal successful build.
 
+### Verification Record
+
+- Added direct `VV` execution to the extended non-threaded policy pack. Its
+  smoke test passed for `buffer_pool`, `fifo`, `fifo_view`, `pool`,
+  `pool_view`, `latest`, `queue`, and `typed_pool` in the Debug
+  `shadow_on` runner.
+- Added named acquire/release and `seq_cst` custom-order palettes. Static and
+  dynamic `fifo` coverage passed for all eight resulting atomic policies, with
+  threaded coverage for the `FA` and `CFA` variants, in each Debug
+  `shadow_off`, `shadow_on`, and `shadow_heur` runner. The three C++17
+  runners were rebuilt from the changed sources first.
+- `scripts/test_relaxed_publication_compile_fail.ps1` passed with the local
+  UCRT64 GCC: it succeeds only when the intended
+  `AtomicCounter: SPSC payload publication requires acquire/seq_cst loads`
+  static assertion rejects the relaxed-order policy.
+- `scripts/run_h6_32bit_shadow_matrix.ps1` passed from the Visual Studio x86
+  developer environment with `cl` for both
+  `SPSC_SHADOW_ALLOW_32BIT=0` and `=1`. Its source asserts `sizeof(reg) == 4`
+  and verifies that the shadow gate follows the selected value before running
+  FIFO wrap/order checks.
+- Added a separate C++20 qmake runner that sets `SPSC_HAS_SPAN=1`. Its Debug
+  and Release builds passed the `fifo::span`, `pool::span`,
+  `queue::raw_bytes`, and `chunk::{used_span,cap_span}` contract cases,
+  including the applicable const/non-const, empty/full, wrapped-storage, and
+  alignment checks. The ordinary C++17 runners continue to set
+  `SPSC_HAS_SPAN=0` by default.
+- `git diff --check` passed for the completed H6 change set.
+
 ## H7 - Clean Builds, CI, And Sanitizers
+
+Status: complete
 
 ### Goal
 
@@ -386,7 +631,38 @@ artifacts from affecting results.
 Medium infrastructure risk. Keep toolchain-specific exclusions documented and
 do not silently treat a skipped sanitizer or runtime job as a pass.
 
-## H8 - Fused Single-Item Hot Path
+### Verification
+
+- A fresh temporary qmake build passed for C++17 Debug `shadow_on` and Release
+  `shadow_heur`, each running the `fifo` suite. A separate fresh C++20 span
+  Debug runner passed `fifo`, and the clean dashboard launcher built from the
+  same isolated tree. This exposed and fixed a real qmake MOC dependency bug:
+  absolute generated paths could cause a fresh source-MOC dependency to be
+  skipped.
+- Strict standalone public-header smoke passed locally with GCC in C++17 and
+  C++20 (`SPSC_HAS_SPAN=1`) and with MSVC in C++17/C++20 under `/W4 /WX`.
+  The MSVC check also exposed and fixed a width-discarded shift warning in the
+  capacity helper; the shift is now template-dependent and only instantiated
+  when valid for `reg`.
+- The standalone producer/consumer/observer stress passed locally, and the
+  existing genuine MSVC x86 shadow-gate execution passed again for
+  `SPSC_SHADOW_ALLOW_32BIT=0` and `=1`.
+- GitHub Actions run `30766194472` passed the clean GCC/Clang qmake matrix,
+  C++20 span targets, ASan/UBSan, TSan, genuine 32-bit shadow gates, AArch64
+  public-header smoke, Windows MinGW/MSVC header smoke, and the clean
+  out-of-source dashboard build. The run also caught and validated fixes for
+  Qt 6.4 source-MOC discovery in the large `fifo_view` test unit, dynamic FIFO
+  storage alignment on Clang, and padding-sensitive `pool` stress comparison.
+- Local STM32 GNU Tools 14.3.1 strict C++17 public-header/API smoke passes for
+  Cortex-M4 and Cortex-M7 with `-mthumb -fno-exceptions -fno-rtti` and a forced
+  32-byte cache line. Cortex-M0 is rejected by the default lock-free atomic gate
+  and passes when `SPSC_REQUIRE_LOCK_FREE=0`; that is a pre-existing toolchain/
+  policy limitation, not an H8 regression. CI still automates AArch64 rather
+  than `arm-none-eabi`, so Cortex-M automation remains an explicit follow-up.
+
+## H8 - Fused Monolithic Single-Item Operations
+
+Status: complete
 
 ### Goal
 
@@ -395,25 +671,191 @@ Remove redundant owner-index loads without weakening publication semantics.
 ### Scope
 
 - Carry one owner snapshot through availability, index calculation, payload
-  access, and commit.
+  access, and commit in one public operation.
 - Split owner-side relaxed loads from opposite-side acquire loads where the
   counter interface requires it.
 - Preserve release publication and SPSC single-writer rules.
 - Optimize producer and complete consumer paths across the core containers.
+- Keep split-phase calls such as `claim -> publish` and `front -> pop` as
+  separate transactions; carrying a snapshot between them would require a new
+  persistent reservation/token contract.
 
 ### Acceptance Criteria
 
 - Compiler-specific assembly checks confirm the intended owner-load count for
-  GCC, Clang, and MSVC where supported.
+  the canonical FIFO and lifetime-managed queue probes on GCC, Clang, and MSVC
+  where supported.
 - No correctness, sanitizer, or wrap test regresses.
-- Benchmarks show no regression across payload sizes and boundary-heavy cases.
+- The canonical 8-byte trivial FIFO and lifetime-managed queue workloads show
+  no boundary-heavy regression. A literal multi-size sweep is deferred to
+  H9/H10 and is required before broader payload-size claims.
 
 ### Risk And Rollback
 
 High. Review memory-order changes independently from mechanical call-site
 fusion, even if they land in the same release phase.
 
+### Implementation And Verification Record
+
+- `SPSCbase` now has immediate-use checked snapshots for `try_*` endpoints and
+  owner-only snapshots for contract-precondition endpoints.  The checked form
+  carries one owner value through availability, slot index, payload access, and
+  publication/retirement; the owner-only form deliberately avoids a redundant
+  opposite-endpoint validation in Release where the public contract already
+  requires a readable/writable slot.
+- Built-in counters expose an optional `load_relaxed()` for the endpoint-owned
+  index.  The opposite endpoint continues to use its configured acquire or
+  `seq_cst` load. `FastAtomicCounter`, plain, and volatile counters publish
+  from the captured owner value; strict `AtomicCounter` remains a RMW backend
+  and deliberately continues to use `inc()`/`add()` for commit.
+- `fifo`, `fifo_view`, `queue`, `pool`, and `typed_pool` use the owner-only
+  path for precondition operations and the checked path for `try_*` operations.
+  `latest` retains its fresh-producer-head path because it selects the newest
+  element rather than FIFO's oldest. No persistent index metadata was added;
+  H2 owner-line and shadow layout therefore remains unchanged.
+- The public consumer probe is intentionally `try_front()` followed by
+  `pop()`. It now has two consumer-tail read/commit accesses - one for each
+  public operation. Clang may fold the final access into an in-place increment;
+  collapsing the two public-operation accesses further would require a new
+  reservation/token contract and is intentionally out of scope.
+- Added compiler-specific H8 assembly gates. The closeout gate covers both
+  `fifo` and lifetime-managed `queue`: local GCC 15.2 (UCRT64) and MSVC 19.50
+  report one producer owner load and two consumer read/commit accesses for each
+  probe. GitHub Actions runs the same script for GCC, Clang, and MSVC.
+- `queue` and `typed_pool` now inherit their allocation-state implementation
+  bases privately. Cross-toolchain public-header smoke uses access-detection and
+  pointer-conversion assertions to prevent allocation state, implementation
+  bases, H8 snapshots, or cached endpoint helpers from leaking into object APIs.
+- Closeout verification passed all nine suites in the four Debug variants
+  (`shadow_off`, `shadow_on`, `shadow_heur`, and C++20 `cxx20_span`): 36 suite
+  executions. Strict public-header/API smoke passed in C++17/C++20 with GCC and
+  MSVC and on Cortex-M4/M7 with STM32 GNU Tools 14.3.1. The genuine MSVC x86
+  shadow gate passed for both 32-bit opt-in states; local GCC/MSVC FIFO and queue
+  assembly gates and the intended relaxed-publication compile-fail check passed.
+- Local final verification passed all 9 suites in Debug and Release for
+  `shadow_on`, `shadow_off`, and C++20 `cxx20_span` (54 executions). Strict
+  C++17/C++20 public-header smoke passed with GCC and MSVC. Both 32-bit shadow
+  gate states passed strict `-m32 -fsyntax-only`; the local host lacks the
+  32-bit runtime needed for execution, which remains covered by CI.
+- Controlled `c5079c4 -> f074fd5` boundary captures used GCC 15.2, `CFA`,
+  capacity 1024, CPUs `0,2`, 100,000,000 transfers, and four alternating
+  before/after pairs under high process priority. All samples verified. Median
+  boundary throughput was `+5.7%` for trivial 8-byte `fifo` and `-0.2%` for
+  non-trivial-lifetime 8-byte `queue`, i.e. no measurable boundary regression.
+  Steady-state samples were strongly multi-modal on this host even with
+  affinity and priority, so they are retained as diagnostic evidence only and
+  are not presented as a library-wide throughput claim. The canonical H0
+  harness currently has these two payload models but not a literal multi-size
+  sweep; H9/H10 must extend that before any general alias or performance claim.
+- The earlier practical-parity position is withdrawn as ranking evidence.
+  Repeated format-version-1 runs of the same `386b691` binary, workload,
+  capacity, affinity pair, and sample count reversed the winner by far more
+  than the within-capture variation. `High performance` did not remove the
+  reversal. Those captures remain correctness/regression diagnostics, but they
+  cannot support an SPSC-versus-Rigtorp winner claim. H0R defines the repaired
+  evidence protocol below.
+
+## H0R - Benchmark Evidence Validity Repair
+
+Status: complete (2026-08-03)
+
+### Goal
+
+Make unstable host behavior an explicit `inconclusive` result instead of
+allowing a machine-specific capture to force a queue ranking.
+
+### Scope
+
+- Reuse one pinned producer/consumer worker pair across warm-up and measured
+  runs for each workload and endpoint assignment.
+- Pre-touch each queue before the timed region.
+- Measure both endpoint assignments (`P -> C` and `C -> P`) and alternate both
+  direction order and implementation order.
+- Record per-endpoint CPU time, Windows thread cycles, retry rate, affinity
+  success, and direction-specific paired statistics.
+- Emit a final `comparison_summary` with `spsc_faster`, `rigtorp_faster`,
+  `parity`, or `inconclusive`; never manufacture a winner when a gate fails.
+- Record power scheme/overlay before and after the canonical runner.
+- Keep legacy format-version-1 captures as diagnostic data only.
+
+### Acceptance Criteria
+
+- Every measured sample retains sequence, checksum, count, and lifetime
+  verification.
+- Release evidence uses at least nine pairs in both affinity directions on
+  distinct pinned CPUs.
+- A host-wide winner claim requires agreement from additional same-class
+  physical-core pairs; a passing single-pair classification remains local to
+  that pair.
+- A direction fails ranking eligibility when paired-ratio CV exceeds 10%,
+  minimum endpoint CPU occupancy is below 80%, affinity is not applied, or the
+  sample count is insufficient.
+- The final ranking is `inconclusive` when direction spread exceeds 15% or the
+  two directions disagree; `0.95..1.05` is the explicit parity band.
+- GCC and Clang CI compile the harness and validate version-2 JSON semantics.
+
+### Risk And Rollback
+
+Low for library behavior: H0R changes only benchmark execution and evidence
+classification. Legacy JSONL readers must continue treating format version 1
+as a separate diagnostic format.
+
+### Local Implementation And Validation
+
+- JSONL format version 2 now uses persistent pinned workers, queue pre-touch,
+  alternating implementation/direction order, forward and reverse affinity,
+  per-endpoint CPU-time/cycle telemetry, retry rates, per-direction paired
+  gates, and a final comparison classification. The canonical manifest is
+  format version 4 and records affinity and power state before/after capture.
+- Strict GCC 15.2 C++17 and C++20 builds passed with
+  `-Wall -Wextra -Werror -pedantic-errors`; MSVC C++17 passed `/W4 /WX`, and its
+  runtime smoke recorded non-zero `QueryThreadCycleTime` values in every sample.
+- Queue, policy, forward-only, bidirectional, and 100-sample persistent-worker
+  smokes completed without an unverified sample. The PowerShell runner emitted
+  two resolved directions, unchanged pre/post power state, two comparison
+  summaries, and a valid format-version-4 manifest.
+- The default-scale local validation used GCC 15.2, `queue<CFA>`, Rigtorp v1.1,
+  capacity 1024, 20,000,000 transfers, nine measured pairs plus two warm-ups,
+  and CPUs `0,2` in both endpoint assignments. All 72 measured samples were
+  verified. Steady paired medians were `Rigtorp / SPSC = 0.713` forward and
+  `1.307` reverse; both direction sample gates passed, but their `83.4%` spread
+  produced `inconclusive: direction_sensitive_result` (geometric mean `0.965`).
+  Boundary medians were `0.975` and `0.976`; their minimum CPU occupancy was
+  below the conservative 80% gate, so boundary was also `inconclusive` rather
+  than an unsupported parity claim.
+- A follow-up non-zero-core diagnostic repeated the same default-scale protocol
+  on P-core pairs `2,4`, `4,6`, and `6,8` under one unchanged Balanced power
+  plan. All 216 measured samples were verified. Steady forward/reverse ratios
+  were `0.734/1.261`, `1.077/1.131`, and `0.888/0.572`, respectively. Only
+  `4,6` passed both direction gates (`Rigtorp / SPSC` geometric ratio `1.104`);
+  the reverse runs on `2,4` and `6,8` failed the paired-variation gate. Avoiding
+  CPU 0 therefore removes a housekeeping concern but does not create a
+  core-pair-independent ranking. `auto` now prefers the first two non-zero
+  P/SMT physical cores, while any host-wide claim must remain inconclusive
+  unless additional same-class pairs agree.
+- GitHub Actions run
+  [`30845720015`](https://github.com/shpegun60/spsc/actions/runs/30845720015)
+  passed all 20 jobs on committed revision `df5fa4f`, including GCC/Clang H0R
+  JSON protocol and relaxed-publication rejection, MSVC H0R protocol, the
+  Debug/Release shadow matrix, sanitizers, genuine 32-bit execution, AArch64,
+  MinGW, and MSVC header smokes.
+
 ## H9 - Shadow-Aware Bulk Snapshot Path
+
+Status: deferred (2026-08-03); not part of the planned 2.0.0 release
+
+### Deferral Decision
+
+The current bulk path remains unchanged. The project is not willing to add
+per-container fields or increase persistent queue metadata merely to optimize
+bulk operations. No H9 runtime or `SPSCbase` change has landed.
+
+Any future H9 proposal must keep snapshots as temporary local values, reuse
+only shadows already present for the selected policy, and preserve `sizeof`
+and `alignof` for every public container/policy combination. Shadow-disabled
+and non-atomic configurations must remain the compact two-counter
+representation. If those constraints prevent a measurable improvement, H9 is
+rejected rather than paid for with additional state.
 
 ### Goal
 
@@ -425,6 +867,7 @@ calculation while preserving the explicit unsafe raw API.
 - Add internal producer and consumer bulk snapshot helpers using the correct
   endpoint-owned shadow.
 - Reuse them in `claim_write/read` and existing RAII bulk guards.
+- Add no persistent fields and make no container layout or alignment change.
 - Do not expose a new public token in the first implementation.
 - If a public token is proposed later, require it to be move-only, queue-bound,
   one-shot, origin/count preserving, prefix-commit-only, and release-safe without
@@ -433,6 +876,8 @@ calculation while preserving the explicit unsafe raw API.
 
 ### Acceptance Criteria
 
+- `sizeof` and `alignof` remain unchanged across shadow on/off, atomic,
+  non-atomic, static-capacity, and dynamic-capacity configurations.
 - Region totals and split boundaries match the model across wrap and counter
   overflow.
 - The opposite atomic index is refreshed only at the appropriate boundary.
@@ -441,10 +886,13 @@ calculation while preserving the explicit unsafe raw API.
 
 ### Risk And Rollback
 
-High. Land the internal snapshot representation before any optional public RAII
-surface.
+High. H9 stays deferred until a zero-persistent-storage design and a measurable
+bulk benefit are demonstrated independently. Do not prototype it in
+`SPSCbase` as part of unrelated work.
 
 ## H10 - Alias And Release Decision
+
+Status: complete (2026-08-03)
 
 ### Goal
 
@@ -452,10 +900,12 @@ Make names, release versioning, and performance claims follow measured behavior.
 
 ### Scope
 
-- Re-run the `H0` benchmark suite after `H8` and `H9`.
-- Decide whether to change `fast_fifo`/`fast_queue`, add explicit
-  `single_writer_fast_*` and `strict_atomic_*` aliases, or retain existing aliases
-  with corrected documentation.
+- Use the repaired `H0R` evidence directly; H9 is deferred and therefore does
+  not require a post-H9 benchmark rerun for this release.
+- Retarget `fast_fifo` and `fast_queue` from `CA<>` to the SPSC-specialized
+  single-writer `CFA<>` backend. Do not add a second strict/single-writer alias
+  family in this release; callers that require strict RMW spell `CA<>`
+  explicitly.
 - Treat an alias target change as a concrete type/layout and source/ABI change.
 - Plan the next SemVer release as `2.0.0` for the authorized breaking cleanup,
   unless the project explicitly and publicly resets the pre-adoption versioning
@@ -463,25 +913,100 @@ Make names, release versioning, and performance claims follow measured behavior.
 
 ### Acceptance Criteria
 
-- Alias names and recommendations are backed by retained benchmark data.
+- The `fast_*` concrete mapping is locked by compile-time tests and matches the
+  exact single-writer SPSC ownership contract; it is not presented as a
+  cross-platform throughput recommendation.
 - `CA<>` is not advertised as making an SPSC queue more correct.
 - Rigtorp comparisons state workload, toolchain, hardware, and uncertainty.
-- Changelog, migration note, and release version agree about breaking changes.
+- Changelog and planned release version agree about breaking changes. No
+  migration guide is required before external adoption.
 
 ### Risk And Rollback
 
-Medium. Adding explicit aliases is the compatibility-friendly fallback if the
-measured winner varies by platform.
+Medium. Retargeting an alias changes concrete type identity and may change code
+generation even where the observed layout is identical. It is therefore part
+of the planned 2.0 source/ABI break, not a silent 1.x update. Policy defaults
+and direct `CA<>`/`CFA<>` spellings remain unchanged. The actual release tag is
+created only after the final CI gate; the changelog remains `Unreleased` until
+then.
+
+### Decision
+
+- `fast_fifo<T, Capacity>` becomes
+  `fifo<T, Capacity, spsc::policy::CFA<>, ...>` in 2.0.
+- `fast_queue<T, Capacity>` becomes
+  `queue<T, Capacity, spsc::policy::CFA<>, ...>` in 2.0.
+- The `fast_*` prefix now selects the single-writer atomic backend that matches
+  the library's exact SPSC ownership rule. It is still not a cross-platform or
+  Rigtorp throughput ranking. Code that depends on a concrete counter backend
+  should name `CA<>` or `CFA<>` explicitly.
+- `CA<>` and `CFA<>` remain equally correct under the exact SPSC contract;
+  neither receives a correctness or general performance ranking.
+- H0R supports no host-wide winner or parity claim against Rigtorp: direction
+  and physical-core-pair changes reversed the observed classification.
+- The next release is planned as `2.0.0` because the Unreleased line contains
+  intentional source, alias-type, and layout/ABI breaks relative to `v1.0.0`.
+  No `v2.0.0` tag is claimed before release.
+- No migration guide is added because the library has no external consumers;
+  the changelog and explicit policy documentation are the source of truth.
+
+### Local Implementation And Validation
+
+- Retargeted both `fast_*` aliases and their policy-derived default allocators
+  from `CA<>` to `CFA<>`. Compile-time assertions in the FIFO/queue suites and
+  the standalone cross-toolchain header smoke lock the complete alias type, not
+  just its exposed `policy_type`.
+- The decision follows the exact SPSC ownership model verified by H8:
+  single-writer counters publish the captured owner value with a release store,
+  while strict `CA<>` deliberately retains atomic RMW publication. This is not
+  presented as a numeric or cross-platform throughput guarantee.
+- The reproducible `benchmarks/stm32_fast_alias_probe.cpp` was compiled with
+  GNU Tools for STM32 14.3.1, C++17, `-O3 -DNDEBUG`, strict warnings,
+  `-mthumb -mfloat-abi=soft`, and a forced 32-byte cache line. Cortex-M4 and
+  Cortex-M7 produced the same conclusion. The 32-bit shadow-width gate remained
+  at its default off state, and compile-time checks confirmed equal `sizeof`
+  and `alignof` for the probed `CA<>`/`CFA<>` containers.
+
+  | STM32 static assembly | `main` fast (`CA<>`) | H10 fast (`CFA<>`) | Reduction |
+  | --- | ---: | ---: | ---: |
+  | M4, four functions, code bytes | 366 | 248 | 32.2% |
+  | M4, decoded instructions | 137 | 105 | 23.4% |
+  | M7, four functions, code bytes | 374 | 256 | 31.6% |
+  | M7, decoded instructions | 140 | 108 | 22.9% |
+  | M4/M7, `dmb` instructions | 24 | 10 | 58.3% |
+  | M4/M7, exclusive instructions | 8 | 0 | 100% |
+
+  The four main-branch `LDREX`/`STREX` publication loops are absent from H10.
+  Per-function code-size reductions range from 24.6% to 37.5%; decoded
+  instruction reductions range from 17.3% to 26.5%. An isolated current-code
+  `CA<> -> CFA<>` comparison attributes about 24.3-24.8% code-size and
+  18.2-18.6% decoded-instruction reduction to the alias backend change itself.
+  Actual cycle improvement remains hardware-, memory-, and interrupt-dependent.
+- GCC 15.2 strict C++17 Release header-smoke syntax passed with shadows both on
+  and off using `-Wall -Wextra -Werror -pedantic-errors`.
+- A clean Qt 6.10.1 / MinGW GCC 13.1 C++17 Release `shadow_on` build passed all
+  nine suites: `buffer_pool`, `chunk`, `fifo`, `fifo_view`, `latest`, `pool`,
+  `pool_view`, `queue`, and `typed_pool`.
+- `git diff --check` passed. H9 and `SPSCbase` runtime code remain untouched.
+- GitHub Actions run
+  [30848583169](https://github.com/shpegun60/spsc/actions/runs/30848583169)
+  passed all 20 jobs on committed revision
+  `0e4027b27f104b7cb0ea8b77181be37df7725dbb`, including the complete Qt
+  Debug/Release shadow matrix, GCC/Clang/MSVC H8 assembly gates, sanitizers,
+  genuine 32-bit shadow gates, AArch64, MSVC, and MinGW header smoke tests.
 
 ## Final Production Gate
 
-The hardening program is complete only when:
+The release-blocking hardening program is complete only when:
 
-- all slices above are complete or explicitly rejected with evidence;
+- all release-blocking slices above are complete; optional optimizations may be
+  explicitly deferred outside the release gate;
 - the clean Debug/Release functional matrix is green;
 - C++17/C++20, GCC/Clang, sanitizers, real 32-bit, and ARM smoke results are
   recorded;
 - public observer, endpoint ownership, memory-order, allocation, lifetime, and
   DMA contracts are documented;
 - layout and counter-overflow regressions are executable tests;
-- every performance claim and alias decision points to a reproducible benchmark.
+- every comparative or numeric performance claim points to a reproducible
+  benchmark, and every alias decision records whether its basis is measurement
+  or explicit backend semantics.

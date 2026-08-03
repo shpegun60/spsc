@@ -523,7 +523,7 @@ public:
         // Validate that the snapshot range is still available to read.
         // can_read() is allowed to be conservative on transient/invalid observations;
         // do one extra refresh attempt via a direct head reload to reduce spurious failures.
-        if (RB_UNLIKELY(!Base::can_read(snap_used))) {
+        if (RB_UNLIKELY(!consumer_can_read_cached_(snap_used))) {
             const size_type h2  = static_cast<size_type>(Base::head());
             const size_type av2 = static_cast<size_type>(h2 - cur_tail);
             if (RB_UNLIKELY(av2 < snap_used) || RB_UNLIKELY(av2 > cap)) {
@@ -669,20 +669,26 @@ public:
              typename = std::enable_if_t<std::is_assignable_v<reference, U &&>>>
     RB_FORCEINLINE void
     push(U &&v) noexcept(std::is_nothrow_assignable_v<reference, U &&>) {
-        SPSC_ASSERT(!full());
-        storage_[Base::write_index()] = std::forward<U>(v);
-        Base::increment_head();
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!producer_full_cached_());
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        storage_[snapshot.index] = std::forward<U>(v);
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     template <class U,
              typename = std::enable_if_t<std::is_assignable_v<reference, U &&>>>
     [[nodiscard]] RB_FORCEINLINE bool
     try_push(U &&v) noexcept(std::is_nothrow_assignable_v<reference, U &&>) {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        storage_[Base::write_index()] = std::forward<U>(v);
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        storage_[snapshot.index] = std::forward<U>(v);
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -693,11 +699,12 @@ public:
     RB_FORCEINLINE reference emplace(Args &&...args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args &&...> &&
         std::is_nothrow_assignable_v<reference, value_type>) {
-        SPSC_ASSERT(!full());
-        const size_type wi = Base::write_index();
-        reference slot = storage_[wi];
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!producer_full_cached_());
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        reference slot = storage_[snapshot.index];
         slot = value_type(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_owner(snapshot.owner);
         return slot;
     }
 
@@ -708,48 +715,60 @@ public:
     [[nodiscard]] pointer try_emplace(Args &&...args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args &&...> &&
         std::is_nothrow_assignable_v<reference, value_type>) {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        const size_type wi = Base::write_index();
-        reference slot = storage_[wi];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return nullptr;
+        }
+        reference slot = storage_[snapshot.index];
         slot = value_type(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return &slot;
     }
 
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
-        SPSC_ASSERT(!full());
-        return storage_[Base::write_index()];
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!producer_full_cached_());
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        return storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return &storage_[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        return snapshot.available ? &storage_[snapshot.index] : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
-        SPSC_ASSERT(!full());
-        Base::increment_head();
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!producer_full_cached_());
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        SPSC_ASSERT(can_write(n));
+        SPSC_ASSERT(producer_can_write_cached_(n));
         Base::advance_head(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        if (RB_UNLIKELY(!can_write(n))) {
+        if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
         Base::advance_head(n);
@@ -762,49 +781,61 @@ public:
     // Consumer Operations
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] RB_FORCEINLINE reference front() noexcept {
-        SPSC_ASSERT(!empty());
-        return storage_[Base::read_index()];
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!consumer_empty_cached_());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE const_reference front() const noexcept {
-        SPSC_ASSERT(!empty());
-        return storage_[Base::read_index()];
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!consumer_empty_cached_());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return storage_[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return &storage_[Base::read_index()];
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? &storage_[snapshot.index] : nullptr;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return &storage_[Base::read_index()];
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? &storage_[snapshot.index] : nullptr;
     }
 
     RB_FORCEINLINE void pop() noexcept {
-        SPSC_ASSERT(!empty());
-        Base::increment_tail();
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!consumer_empty_cached_());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        Base::consumer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        Base::increment_tail();
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        Base::consumer_commit_single(snapshot);
         return true;
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
-        SPSC_ASSERT(can_read(n));
+        SPSC_ASSERT(consumer_can_read_cached_(n));
         Base::advance_tail(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
-        if (RB_UNLIKELY(!can_read(n))) {
+        if (RB_UNLIKELY(!consumer_can_read_cached_(n))) {
             return false;
         }
         Base::advance_tail(n);
@@ -1371,6 +1402,24 @@ public:
     }
 
 private:
+    [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
+        return !is_valid() || Base::producer_full_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool
+    producer_can_write_cached_(const size_type n = 1u) const noexcept {
+        return is_valid() && Base::producer_can_write_cached(n);
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool consumer_empty_cached_() const noexcept {
+        return !is_valid() || Base::consumer_empty_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool
+    consumer_can_read_cached_(const size_type n = 1u) const noexcept {
+        return is_valid() && Base::consumer_can_read_cached(n);
+    }
+
     void copy_from(const fifo &other) {
         if constexpr (kDynamic) {
             static_assert(std::is_copy_assignable_v<value_type>,
@@ -1537,7 +1586,10 @@ private:
     }
 
 private:
-    alignas(::spsc::alloc::policy_storage_alignment_v<policy_type, value_type>)
+    // storage_type is a pointer for a dynamic fifo. Its natural alignment can
+    // exceed value_type's (for example, uint32_t on 64-bit targets), so the
+    // policy alignment must describe the member being aligned, not its value.
+    alignas(::spsc::alloc::policy_storage_alignment_v<policy_type, storage_type>)
         storage_type storage_{};
 };
 
@@ -1547,14 +1599,14 @@ private:
 
 /**
  * fast_fifo<T, Capacity>:
- * A pre-configured fifo using Atomic counters and Cache-line padding
- * to avoid false sharing. This is the recommended default for
- * high-performance concurrent queues.
+ * Convenience alias selecting CFA<>: cache-aligned metadata with the
+ * single-writer atomic backend matching the SPSC ownership contract. The name
+ * is not a cross-platform throughput claim.
  */
 template <class T, reg Capacity = 0,
          typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
-             ::spsc::policy::CA<>, T, ::spsc::alloc::default_alloc>>
-using fast_fifo = fifo<T, Capacity, ::spsc::policy::CA<>, Alloc>;
+             ::spsc::policy::CFA<>, T, ::spsc::alloc::default_alloc>>
+using fast_fifo = fifo<T, Capacity, ::spsc::policy::CFA<>, Alloc>;
 
 } // namespace spsc
 

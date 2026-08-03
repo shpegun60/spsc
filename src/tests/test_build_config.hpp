@@ -26,6 +26,10 @@
 #  define SPSC_SHADOW_REFRESH_HEURISTIC 0
 #endif
 
+#ifndef SPSC_HAS_SPAN
+#  define SPSC_HAS_SPAN 0
+#endif
+
 #ifndef SPSC_TEST_EXPECTED_VARIANT_NAME
 #  define SPSC_TEST_EXPECTED_VARIANT_NAME "unspecified"
 #endif
@@ -46,15 +50,21 @@
 #  define SPSC_TEST_EXPECTED_SHADOW_REFRESH_HEURISTIC SPSC_SHADOW_REFRESH_HEURISTIC
 #endif
 
+#ifndef SPSC_TEST_EXPECTED_HAS_SPAN
+#  define SPSC_TEST_EXPECTED_HAS_SPAN SPSC_HAS_SPAN
+#endif
+
 namespace spsc_test {
 
 inline constexpr int kActualEnableShadowIndices = SPSC_ENABLE_SHADOW_INDICES;
 inline constexpr int kActualShadowAllow32Bit = SPSC_SHADOW_ALLOW_32BIT;
 inline constexpr int kActualShadowRefreshHeuristic = SPSC_SHADOW_REFRESH_HEURISTIC;
+inline constexpr int kActualHasSpan = SPSC_HAS_SPAN;
 
 inline constexpr int kExpectedEnableShadowIndices = SPSC_TEST_EXPECTED_ENABLE_SHADOW_INDICES;
 inline constexpr int kExpectedShadowAllow32Bit = SPSC_TEST_EXPECTED_SHADOW_ALLOW_32BIT;
 inline constexpr int kExpectedShadowRefreshHeuristic = SPSC_TEST_EXPECTED_SHADOW_REFRESH_HEURISTIC;
+inline constexpr int kExpectedHasSpan = SPSC_TEST_EXPECTED_HAS_SPAN;
 
 inline constexpr int kRegBits = std::numeric_limits<reg>::digits;
 
@@ -70,6 +80,12 @@ inline constexpr bool kActualAtomicShadow =
 
 inline constexpr bool kActualCachedShadow =
     shadow_enabled_for_atomic_backend(kActualEnableShadowIndices, kActualShadowAllow32Bit);
+
+// This early header must not include SPSCbase: test TUs establish SPSC_ASSERT
+// before including library headers. test_spsc_layout.hpp verifies the actual
+// policy traits after that setup; this retains the qmake macro-gate invariant.
+static_assert(kActualAtomicShadow == kActualCachedShadow,
+              "A<> and CA<> must have identical shadow eligibility in every test variant");
 
 inline constexpr bool kExpectedAtomicShadow =
     shadow_enabled_for_atomic_backend(kExpectedEnableShadowIndices, kExpectedShadowAllow32Bit);
@@ -94,17 +110,19 @@ inline QString format_build_config_summary(QStringView suite_name,
                                           int enable_shadow_indices,
                                           int shadow_allow_32bit,
                                           int shadow_refresh_heuristic,
+                                          int has_span,
                                           bool atomic_shadow,
                                           bool cached_shadow)
 {
     QString summary = QStringLiteral(
-        "suite=%1 variant=%2 macros{enable_shadow=%3 allow_32bit=%4 refresh_heuristic=%5} "
-        "effective{reg_bits=%6 atomic_A_shadow=%7 cached_CA_shadow=%8}");
+        "suite=%1 variant=%2 macros{enable_shadow=%3 allow_32bit=%4 refresh_heuristic=%5 has_span=%6} "
+        "effective{reg_bits=%7 atomic_A_shadow=%8 cached_CA_shadow=%9}");
     summary = summary.arg(suite_name.toString());
     summary = summary.arg(variant_name.toString());
     summary = summary.arg(enable_shadow_indices);
     summary = summary.arg(shadow_allow_32bit);
     summary = summary.arg(shadow_refresh_heuristic);
+    summary = summary.arg(has_span);
     summary = summary.arg(kRegBits);
     summary = summary.arg(atomic_shadow ? 1 : 0);
     summary = summary.arg(cached_shadow ? 1 : 0);
@@ -118,6 +136,7 @@ inline QString actual_build_config_summary(QStringView suite_name)
                                        kActualEnableShadowIndices,
                                        kActualShadowAllow32Bit,
                                        kActualShadowRefreshHeuristic,
+                                       kActualHasSpan,
                                        kActualAtomicShadow,
                                        kActualCachedShadow);
 }
@@ -129,6 +148,7 @@ inline QString expected_build_config_summary(QStringView suite_name)
                                        kExpectedEnableShadowIndices,
                                        kExpectedShadowAllow32Bit,
                                        kExpectedShadowRefreshHeuristic,
+                                       kExpectedHasSpan,
                                        kExpectedAtomicShadow,
                                        kExpectedCachedShadow);
 }

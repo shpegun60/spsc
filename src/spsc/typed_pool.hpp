@@ -76,7 +76,7 @@ template <class T, reg Capacity = 0,
          typename Policy = ::spsc::policy::default_policy,
          typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
              Policy, T, ::spsc::alloc::default_alloc>>
-class typed_pool : public detail::typed_pool_base<Capacity>,
+class typed_pool : private detail::typed_pool_base<Capacity>,
                    private ::spsc::SPSCbase<Capacity, Policy> {
     static constexpr bool kDynamic = (Capacity == 0);
     using Base = ::spsc::SPSCbase<Capacity, Policy>;
@@ -535,7 +535,7 @@ public:
         // Validate that the snapshot range is still available to read.
         // can_read() is allowed to be conservative on transient/invalid observations;
         // do one extra refresh attempt via a direct head reload to reduce spurious failures.
-        if (RB_UNLIKELY(!Base::can_read(snap_used))) {
+        if (RB_UNLIKELY(!consumer_can_read_cached_(snap_used))) {
             const size_type h2  = static_cast<size_type>(Base::head());
             const size_type av2 = static_cast<size_type>(h2 - cur_tail);
             if (RB_UNLIKELY(av2 < snap_used) || RB_UNLIKELY(av2 > cap)) {
@@ -552,7 +552,7 @@ public:
         }
 
         if constexpr (!std::is_trivially_destructible_v<object_type>) {
-            while (!empty()) {
+            while (!consumer_empty_cached_()) {
                 pop();
             }
         } else {
@@ -688,24 +688,30 @@ public:
     template <class... Args> void emplace(Args &&...args) {
         static_assert(std::is_constructible_v<T, Args &&...>,
                       "[typed_pool]: T must be constructible from Args...");
-        SPSC_ASSERT(!full());
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!producer_full_cached_());
 
         // Get raw storage pointer (no launder needed for raw storage)
-        pointer dst = data()[Base::write_index()];
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        pointer dst = data()[snapshot.index];
         ::new (static_cast<void *>(dst)) T(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     template <class... Args> [[nodiscard]] bool try_emplace(Args &&...args) {
         static_assert(std::is_constructible_v<T, Args &&...>,
                       "[typed_pool]: T must be constructible from Args...");
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
 
-        pointer dst = data()[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        pointer dst = data()[snapshot.index];
         ::new (static_cast<void *>(dst)) T(std::forward<Args>(args)...);
-        Base::increment_head();
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
@@ -717,37 +723,46 @@ public:
 
     // Manual population: claim returns raw storage pointer (uninitialized).
     [[nodiscard]] RB_FORCEINLINE pointer claim() noexcept {
-        SPSC_ASSERT(!full());
-        return data()[Base::write_index()];
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!producer_full_cached_());
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        return data()[snapshot.index];
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return data()[Base::write_index()];
+        const auto snapshot = Base::producer_single_snapshot();
+        return snapshot.available ? data()[snapshot.index] : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
-        SPSC_ASSERT(!full());
-        Base::increment_head();
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!producer_full_cached_());
+        const auto snapshot = Base::producer_single_owner_snapshot();
+        Base::producer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish() noexcept {
-        if (RB_UNLIKELY(full())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        Base::increment_head();
+        const auto snapshot = Base::producer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        Base::producer_commit_single(snapshot);
         return true;
     }
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        SPSC_ASSERT(can_write(n));
+        SPSC_ASSERT(producer_can_write_cached_(n));
         Base::advance_head(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
-        if (RB_UNLIKELY(!can_write(n))) {
+        if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
         Base::advance_head(n);
@@ -761,50 +776,62 @@ public:
     // ------------------------------------------------------------------------------------------
 
     [[nodiscard]] RB_FORCEINLINE pointer front() noexcept {
-        SPSC_ASSERT(!empty());
-        return object_ptr(Base::read_index());
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!consumer_empty_cached_());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return object_ptr(snapshot.index);
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer front() const noexcept {
-        SPSC_ASSERT(!empty());
-        return object_ptr(Base::read_index());
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!consumer_empty_cached_());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
+        return object_ptr(snapshot.index);
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return object_ptr(Base::read_index());
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? object_ptr(snapshot.index) : nullptr;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return nullptr;
         }
-        return object_ptr(Base::read_index());
+        const auto snapshot = Base::consumer_single_snapshot();
+        return snapshot.available ? object_ptr(snapshot.index) : nullptr;
     }
 
     RB_FORCEINLINE void pop() noexcept {
-        SPSC_ASSERT(!empty());
+        SPSC_ASSERT(is_valid());
+        SPSC_ASSERT(!consumer_empty_cached_());
+        const auto snapshot = Base::consumer_single_owner_snapshot();
 
-        pointer p = object_ptr(Base::read_index());
+        pointer p = object_ptr(snapshot.index);
         detail::destroy_at(p);
-        Base::increment_tail();
+        Base::consumer_commit_owner(snapshot.owner);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop() noexcept {
-        if (RB_UNLIKELY(empty())) {
+        if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
 
-        pointer p = object_ptr(Base::read_index());
+        const auto snapshot = Base::consumer_single_snapshot();
+        if (RB_UNLIKELY(!snapshot.available)) {
+            return false;
+        }
+        pointer p = object_ptr(snapshot.index);
         detail::destroy_at(p);
-        Base::increment_tail();
+        Base::consumer_commit_single(snapshot);
         return true;
     }
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
-        SPSC_ASSERT(can_read(n));
+        SPSC_ASSERT(consumer_can_read_cached_(n));
 
         for (size_type k = 0; k < n; ++k) {
             pointer p = object_ptr((Base::tail() + k) & Base::mask());
@@ -822,7 +849,7 @@ public:
     void pop(U&) noexcept = delete;
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
-        if (RB_UNLIKELY(!can_read(n))) {
+        if (RB_UNLIKELY(!consumer_can_read_cached_(n))) {
             return false;
         }
 
@@ -1416,6 +1443,24 @@ public:
     }
 
 private:
+    [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
+        return !is_valid() || Base::producer_full_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool
+    producer_can_write_cached_(const size_type n = 1u) const noexcept {
+        return is_valid() && Base::producer_can_write_cached(n);
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool consumer_empty_cached_() const noexcept {
+        return !is_valid() || Base::consumer_empty_cached();
+    }
+
+    [[nodiscard]] RB_FORCEINLINE bool
+    consumer_can_read_cached_(const size_type n = 1u) const noexcept {
+        return is_valid() && Base::consumer_can_read_cached(n);
+    }
+
     // ------------------------------------------------------------------------------------------
     // Allocation helpers
     // ------------------------------------------------------------------------------------------

@@ -29,6 +29,9 @@ Choose `queue` instead when lifetime and explicit construction/destruction matte
 spsc::fifo<int, 1024> q;
 ```
 
+Static `fifo` keeps its default-constructed `T` slots inside the queue object.
+Its fixed capacity therefore does not use a separate payload allocation.
+
 ### Dynamic
 
 ```cpp
@@ -80,6 +83,9 @@ if (slot != nullptr) {
     q.publish();
 }
 ```
+
+Complete `claim -> fill -> publish` as one producer transaction. Do not start
+another producer operation while that claim remains outstanding.
 
 Bulk publish is also available when you claim or write several elements via region APIs.
 
@@ -191,7 +197,7 @@ Typical fit:
 Examples:
 
 ```cpp
-using Fast = spsc::fifo<int, 1024, spsc::policy::CA<>>;
+using AtomicAligned = spsc::fifo<int, 1024, spsc::policy::CA<>>;
 using Plain = spsc::fifo<int, 1024, spsc::policy::P>;
 ```
 

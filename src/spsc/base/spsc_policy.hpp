@@ -29,7 +29,7 @@
  *        - No alignment numbers, no logic.
  *
  *   2) Ready-made aliases:
- *        - P   : fastest single-core (plain counters and geometry)
+ *        - P   : plain counters and geometry; single context or external sync
  *        - V   : volatile counters (ISR <-> task), plain geometry
  *        - VV  : everything volatile (strict volatile propagation)
  *        - A<O>: atomic counters with configurable orders, plain geometry
@@ -49,7 +49,7 @@
  *
  * Usage examples:
  *
- *   using PPolicy   = spsc::policy::P;            // plain, fast, single-core
+ *   using PPolicy   = spsc::policy::P;            // plain, single-context
  *   using APolicy   = spsc::policy::A<>;          // atomic counters
  *   using CAPolicy  = spsc::policy::CacheAligned<APolicy>; // atomic +
  * cacheline-padded
@@ -140,11 +140,11 @@ struct Policy {
 };
 
 /* --------------------------- Ready-made aliases ---------------------------
- * P   : fastest single-core (plain counters and geometry)
+ * P   : plain counters and geometry; single context or external sync
  * V   : ISR <-> task, single-core (volatile counters; plain geometry)
  * VV  : everything volatile (rare; mainly for strict volatile propagation)
  * A<O>: RTOS/tasks (strict atomic counters with RMW add/inc; plain geometry)
- * FA<O>: fast single-writer atomic counters (load+store add/inc; plain geometry)
+ * FA<O>: single-writer atomic counters (load+store add/inc; plain geometry)
  * AA<O>: strict atomic counters and geometry atomic (shared memory / SMP)
  * ------------------------------------------------------------------------- */
 using P = Policy<>;
