@@ -83,7 +83,7 @@ reproducible benchmark/CI matrix.
 | H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | complete (2026-08-02) |
 | H7 | Clean builds, CI, and sanitizers | H5, H6 | complete (2026-08-02) |
 | H8 | Fused monolithic single-item operations | H0, H3, H5-H7 | complete (2026-08-02) |
-| H0R | Benchmark evidence validity repair | H0, H8 | implemented locally; CI pending |
+| H0R | Benchmark evidence validity repair | H0, H8 | complete (2026-08-03) |
 | H9 | Shadow-aware bulk snapshot path | H8, H0R | pending |
 | H10 | Alias and release decision | H8, H9 | pending |
 
@@ -753,7 +753,7 @@ fusion, even if they land in the same release phase.
 
 ## H0R - Benchmark Evidence Validity Repair
 
-Status: implemented locally; CI pending
+Status: complete (2026-08-03)
 
 ### Goal
 
@@ -829,8 +829,12 @@ as a separate diagnostic format.
   core-pair-independent ranking. `auto` now prefers the first two non-zero
   P/SMT physical cores, while any host-wide claim must remain inconclusive
   unless additional same-class pairs agree.
-- GCC/Clang and MSVC protocol smoke steps are present in GitHub Actions. H0R
-  remains CI-pending until those checks run on the committed revision.
+- GitHub Actions run
+  [`30845720015`](https://github.com/shpegun60/spsc/actions/runs/30845720015)
+  passed all 20 jobs on committed revision `df5fa4f`, including GCC/Clang H0R
+  JSON protocol and relaxed-publication rejection, MSVC H0R protocol, the
+  Debug/Release shadow matrix, sanitizers, genuine 32-bit execution, AArch64,
+  MinGW, and MSVC header smokes.
 
 ## H9 - Shadow-Aware Bulk Snapshot Path
 
