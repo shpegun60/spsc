@@ -25,7 +25,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   public-header and atomic-observer sanitizer targets, and GitHub Actions jobs
   for Linux GCC/Clang, sanitizers, genuine 32-bit execution, ARM smoke, and
   Windows MinGW/MSVC header smoke.
-- Compiler-specific H8 hot-path assembly checks for GCC, Clang, and MSVC.
+- Compiler-specific H8 hot-path assembly checks for FIFO and lifetime-managed
+  queue probes on GCC, Clang, and MSVC.
+- Cross-toolchain public-header assertions that keep allocation-state bases,
+  H8 snapshots, and cached endpoint helpers out of container object APIs.
 
 ### Changed
 
@@ -38,6 +41,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   longer paired alternating samples, median/standard-deviation summaries,
   CPU-relax retries rather than scheduler yields, endpoint CPU-time telemetry,
   and optional cross-revision header selection for controlled comparisons.
+- Benchmark manifests now distinguish release evidence from diagnostic history;
+  release captures require clean library/harness revisions, a minimum sample
+  protocol, and distinct producer/consumer affinity.
 - qmake dashboard/test runner builds now target C++17 and keep Debug/Release binaries in separate `bin/debug` and `bin/release` directories.
 - qmake C++17 test runners force `SPSC_HAS_SPAN=0`; `std::span` helpers remain available only for C++20-capable builds that enable span support.
 - qmake test runners can now select their language standard and span setting;
@@ -69,6 +75,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   pointer alignment on 64-bit Clang targets.
 - The threaded `pool` stress test now compares semantic `Blob` contents rather
   than unspecified tail padding.
+- `queue` and `typed_pool` now inherit their allocation-state implementation
+  bases privately, so `isAllocated_` and base conversions do not leak through
+  the public container API.
+- GitHub Actions now verifies that relaxed atomic publication policies fail for
+  the intended memory-order assertion.
 
 ### Removed
 

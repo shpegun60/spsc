@@ -259,6 +259,12 @@ inline constexpr bool rb_use_shadow_v =
 
 } // namespace detail
 
+/* Internal implementation base for the owning containers and views.
+ *
+ * This type remains in namespace spsc for source compatibility, but deriving
+ * from it or reopening its protected endpoint helpers is not a supported
+ * extension API. Public containers inherit it privately.
+ */
 template<reg C, typename PolicyT = ::spsc::policy::default_policy>
 class SPSCbase
     : private ::spsc::cap::CapacityCtrl<C, PolicyT>

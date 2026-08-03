@@ -110,8 +110,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y ${{ matrix.package }}
-      - name: Verify owner-load count in the single-item FIFO probe
+      - name: Verify owner-load counts in the single-item FIFO and queue probes
         run: bash scripts/check_h8_hotpath_asm.sh --compiler '${{ matrix.compiler }}'
+      - name: Verify relaxed publication is rejected
+        shell: pwsh
+        run: ./scripts/test_relaxed_publication_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
 
   linux-clean-dashboard:
     name: Linux clean qmake dashboard build
@@ -213,7 +216,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Verify owner-load count in the single-item FIFO probe
+      - name: Verify owner-load counts and relaxed-publication rejection
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -222,6 +225,6 @@ jobs:
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl"
+          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

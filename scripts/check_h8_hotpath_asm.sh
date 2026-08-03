@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# H8 assembly regression check for the public single-item FIFO probe.
+# H8 assembly regression check for the public single-item FIFO and queue probes.
 #
 # `try_push()` can carry one producer-owned head snapshot to its release
 # publication, so the generated function must load head exactly once. The
@@ -72,8 +72,11 @@ require_count() {
 
 producer_body="$(function_body spsc_fifo_producer)"
 consumer_body="$(function_body spsc_fifo_consumer)"
+queue_producer_body="$(function_body spsc_queue_producer)"
+queue_consumer_body="$(function_body spsc_queue_consumer)"
 
-if [[ -z "$producer_body" || -z "$consumer_body" ]]; then
+if [[ -z "$producer_body" || -z "$consumer_body" ||
+      -z "$queue_producer_body" || -z "$queue_consumer_body" ]]; then
     echo "H8 assembly check failed: expected probe symbols were not emitted" >&2
     exit 1
 fi
@@ -92,7 +95,19 @@ producer_head_loads="$(printf '%s\n' "$producer_body" | grep -Eic \
 consumer_tail_reads="$(printf '%s\n' "$consumer_body" | grep -Eic \
     '^[[:space:]]*((mov[a-z]*[[:space:]]+[[:alnum:]]+,[[:space:]]+(qword ptr)[[:space:]]*(128\[[[:alnum:]]+\]|\[[[:alnum:]]+[[:space:]]*\+[[:space:]]*128\]))|((inc|add)[a-z]*[[:space:]]+(qword ptr)[[:space:]]*(128\[[[:alnum:]]+\]|\[[[:alnum:]]+[[:space:]]*\+[[:space:]]*128\])))' || true)"
 
+# queue_base contributes the allocation-state byte before the cache-line-aligned
+# SPSCbase. In this probe queue's head is therefore at offset 64 and its tail at
+# offset 192. As with FIFO, count only owner reads/read-commits, never the final
+# producer publication store.
+queue_producer_head_loads="$(printf '%s\n' "$queue_producer_body" | grep -Eic \
+    '^[[:space:]]*mov[a-z]*[[:space:]]+[[:alnum:]]+,[[:space:]]+(qword ptr)[[:space:]]*(64\[[[:alnum:]]+\]|\[[[:alnum:]]+[[:space:]]*\+[[:space:]]*64\])' || true)"
+
+queue_consumer_tail_reads="$(printf '%s\n' "$queue_consumer_body" | grep -Eic \
+    '^[[:space:]]*((mov[a-z]*[[:space:]]+[[:alnum:]]+,[[:space:]]+(qword ptr)[[:space:]]*(192\[[[:alnum:]]+\]|\[[[:alnum:]]+[[:space:]]*\+[[:space:]]*192\]))|((inc|add)[a-z]*[[:space:]]+(qword ptr)[[:space:]]*(192\[[[:alnum:]]+\]|\[[[:alnum:]]+[[:space:]]*\+[[:space:]]*192\])))' || true)"
+
 require_count 1 "$producer_head_loads" "producer head load" "$producer_body"
 require_count 2 "$consumer_tail_reads" "consumer tail read/commit accesses" "$consumer_body"
+require_count 1 "$queue_producer_head_loads" "queue producer head load" "$queue_producer_body"
+require_count 2 "$queue_consumer_tail_reads" "queue consumer tail read/commit accesses" "$queue_consumer_body"
 
-echo "PASS: H8 hot-path assembly ($compiler): producer-head=1 consumer-tail=2"
+echo "PASS: H8 hot-path assembly ($compiler): fifo=1/2 queue=1/2 owner accesses"

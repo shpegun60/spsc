@@ -24,11 +24,31 @@ param(
     [int]$ProducerCpu = -1,
     [int]$ConsumerCpu = -1,
     [switch]$NoAffinity,
-    [switch]$RequireClean
+    [switch]$RequireClean,
+
+    [ValidateSet('diagnostic', 'release')]
+    [string]$EvidenceClass = 'diagnostic',
+
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
+    [string]$CaptureLabel = 'diagnostic'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$releaseEvidence = ($EvidenceClass -eq 'release')
+$requireCleanCapture = $RequireClean -or $releaseEvidence
+if ($releaseEvidence) {
+    if ($CaptureLabel -eq 'diagnostic') {
+        throw 'Release evidence requires an explicit capture label such as h0, h2, or h8'
+    }
+    if ($NoAffinity) {
+        throw 'Release evidence requires explicit or automatically resolved CPU affinity'
+    }
+    if ($Items -lt 20000000 -or $Samples -lt 9 -or $Warmup -lt 2) {
+        throw 'Release evidence requires at least 20,000,000 items, 9 samples, and 2 warm-ups'
+    }
+}
 
 function Invoke-Checked {
     param(
@@ -85,7 +105,7 @@ $gitStatus = @(& git -C $libraryRoot status --porcelain)
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to capture git worktree state'
 }
-if ($RequireClean -and $gitStatus.Count -ne 0) {
+if ($requireCleanCapture -and $gitStatus.Count -ne 0) {
     throw 'A clean worktree is required for this baseline capture'
 }
 $harnessCommit = (& git -C $harnessRoot rev-parse HEAD).Trim()
@@ -95,6 +115,9 @@ if ($LASTEXITCODE -ne 0) {
 $harnessStatus = @(& git -C $harnessRoot status --porcelain)
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to capture benchmark harness worktree state'
+}
+if ($requireCleanCapture -and $harnessStatus.Count -ne 0) {
+    throw 'A clean benchmark harness worktree is required for this baseline capture'
 }
 $rigtorpState = @(& git -C $libraryRoot submodule status -- third_party/rigtorp_spscqueue)
 if ($LASTEXITCODE -ne 0) {
@@ -193,6 +216,10 @@ if ($null -eq $firstSampleRecord) {
     throw 'Benchmark result did not contain a sample record'
 }
 $resolvedAffinity = "$($firstSampleRecord.affinity.producer_cpu),$($firstSampleRecord.affinity.consumer_cpu)"
+if ($releaseEvidence -and
+    $firstSampleRecord.affinity.producer_cpu -eq $firstSampleRecord.affinity.consumer_cpu) {
+    throw 'Release evidence requires producer and consumer to run on distinct logical CPUs'
+}
 
 $compilerVersion = @(& $compilerPath '--version') | Select-Object -First 2
 $cpuInfo = @()
@@ -233,8 +260,19 @@ if ($env:OS -eq 'Windows_NT' -and (Get-Command powercfg.exe -ErrorAction Silentl
 }
 
 $manifest = [ordered]@{
-    format_version = 2
+    format_version = 3
     captured_at_local = (Get-Date).ToString('o')
+    evidence = [ordered]@{
+        classification = $EvidenceClass
+        capture_label = $CaptureLabel
+        clean_library_required = $requireCleanCapture
+        clean_harness_required = $requireCleanCapture
+        minimum_release_protocol = if ($releaseEvidence) {
+            'items>=20000000;samples>=9;warmup>=2;distinct-affinity'
+        } else {
+            $null
+        }
+    }
     git = [ordered]@{
         commit = $commit
         status_porcelain = $gitStatus

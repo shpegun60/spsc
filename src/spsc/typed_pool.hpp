@@ -76,7 +76,7 @@ template <class T, reg Capacity = 0,
          typename Policy = ::spsc::policy::default_policy,
          typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
              Policy, T, ::spsc::alloc::default_alloc>>
-class typed_pool : public detail::typed_pool_base<Capacity>,
+class typed_pool : private detail::typed_pool_base<Capacity>,
                    private ::spsc::SPSCbase<Capacity, Policy> {
     static constexpr bool kDynamic = (Capacity == 0);
     using Base = ::spsc::SPSCbase<Capacity, Policy>;

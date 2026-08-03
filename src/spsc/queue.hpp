@@ -78,7 +78,7 @@ template <class T, reg Capacity = 0,
          typename Policy = ::spsc::policy::default_policy,
          typename Alloc = ::spsc::alloc::policy_default_alloc_t<
              Policy, alignof(T), ::spsc::alloc::align_alloc<alignof(T)>>>
-class queue : public detail::queue_base<Capacity>,
+class queue : private detail::queue_base<Capacity>,
               private ::spsc::SPSCbase<Capacity, Policy> {
     static constexpr bool kDynamic = (Capacity == 0);
 

@@ -1,6 +1,16 @@
 {
     "format_version":  1,
     "captured_at_local":  "2026-08-02T18:10:31.2451230+02:00",
+    "evidence":  {
+                     "classification":  "diagnostic_invalid",
+                     "capture_label":  "h0_initial_short",
+                     "reasons":  [
+                                     "dirty library and harness worktree",
+                                     "2,000,000 transfers with five samples",
+                                     "sibling logical CPU affinity 0,1",
+                                     "pre-hardening retry loop with scheduler yield"
+                                 ]
+                 },
     "git":  {
                 "commit":  "85904897cc57d8d396536e0b03af86046f0a6bb1",
                 "status_porcelain":  [

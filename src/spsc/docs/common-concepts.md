@@ -185,12 +185,23 @@ For task/ISR guidance and policy selection under RTOS-style concurrency, read [C
 
 ## 7. Alignment and Cache-Line Notes
 
+When shadows are enabled for an eligible atomic-backed policy, `SPSCbase`
+places producer-owned (`head` plus cached `tail`) and consumer-owned (`tail`
+plus cached `head`) metadata in separate owner blocks. This endpoint isolation
+does not depend on `CacheAligned`. The global shadow switch, counter-width gate,
+and explicit 32-bit opt-in still decide whether those shadow-enabled blocks are
+present.
+
 `CacheAligned` policies influence policy-owned metadata and owning allocator
 paths:
 
 - metadata counters and geometry are cache-line padded
 - default allocators derived from the policy can pick aligned allocation automatically
 - raw-slot containers such as `pool` and `latest<void>` can round slot size upward when the policy requires it
+
+Thus `A<>`/`FA<>` and `CA<>`/`CFA<>` have the same shadow eligibility. The
+cache-aligned variants additionally pad their policy counters and geometry and
+propagate allocator-alignment hints.
 
 They cannot change an external buffer's address, alignment, or size. A
 `fifo_view` or `pool_view` caller must align and size its own backing storage

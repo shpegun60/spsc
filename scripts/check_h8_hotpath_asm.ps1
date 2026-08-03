@@ -81,6 +81,8 @@ try {
     $lines = @(Get-Content -LiteralPath $assembly | Where-Object { $_.Length -ne 0 })
     $producerBody = Get-FunctionBody -Lines $lines -Name 'spsc_fifo_producer'
     $consumerBody = Get-FunctionBody -Lines $lines -Name 'spsc_fifo_consumer'
+    $queueProducerBody = Get-FunctionBody -Lines $lines -Name 'spsc_queue_producer'
+    $queueConsumerBody = Get-FunctionBody -Lines $lines -Name 'spsc_queue_consumer'
 
     # FIFO head is at offset 0. Count only a register destination and memory
     # source so the final publication store is intentionally excluded.
@@ -94,12 +96,26 @@ try {
         $_ -match '^\s*mov\s+\w+,\s+QWORD PTR \[\w+\s*\+\s*(?:128|80H)\]\s*(?:;.*)?$'
     }).Count
 
+    # queue_base's allocation-state byte precedes the cache-line-aligned
+    # SPSCbase, so queue head/tail are at offsets 64/192 in this probe.
+    $queueProducerHeadLoads = @($queueProducerBody | Where-Object {
+        $_ -match '^\s*mov\s+\w+,\s+QWORD PTR \[\w+\s*\+\s*(?:64|40H)\]\s*(?:;.*)?$'
+    }).Count
+
+    $queueConsumerTailLoads = @($queueConsumerBody | Where-Object {
+        $_ -match '^\s*mov\s+\w+,\s+QWORD PTR \[\w+\s*\+\s*(?:192|0?C0H)\]\s*(?:;.*)?$'
+    }).Count
+
     Require-Count -Expected 1 -Actual $producerHeadLoads `
         -Description 'producer head load' -Body $producerBody
     Require-Count -Expected 2 -Actual $consumerTailLoads `
         -Description 'consumer tail loads' -Body $consumerBody
+    Require-Count -Expected 1 -Actual $queueProducerHeadLoads `
+        -Description 'queue producer head load' -Body $queueProducerBody
+    Require-Count -Expected 2 -Actual $queueConsumerTailLoads `
+        -Description 'queue consumer tail loads' -Body $queueConsumerBody
 
-    Write-Output "PASS: H8 hot-path assembly (MSVC): producer-head=1 consumer-tail=2"
+    Write-Output 'PASS: H8 hot-path assembly (MSVC): fifo=1/2 queue=1/2 owner loads'
 } finally {
     if (Test-Path -LiteralPath $workDir) {
         Remove-Item -LiteralPath $workDir -Recurse -Force

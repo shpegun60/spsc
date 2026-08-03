@@ -74,6 +74,17 @@ containers such as `fifo<T,...>` or `queue<T,...>`, payload alignment still
 primarily comes from `T` itself. A `*_view` policy cannot realign or resize the
 caller-owned backing buffer.
 
+Shadow-index isolation is independent of `CacheAligned`. When the global
+shadow switch and counter-width gate allow it, every atomic-backed policy gets
+producer- and consumer-owned metadata blocks from the internal `SPSCbase`.
+`CacheAligned` policies additionally pad their policy counters and geometry and
+propagate allocator-alignment hints. On a 32-bit `reg` domain, shadows remain
+off by default unless `SPSC_SHADOW_ALLOW_32BIT=1` is selected explicitly.
+
+`SPSCbase` is an internal implementation base, not a supported public extension
+API. Applications should use the concrete containers and views rather than
+derive from `SPSCbase` or expose its protected endpoint helpers.
+
 ## Quick Examples
 
 The examples below use the current pointer-based `try_*` API style used by the library.

@@ -40,9 +40,9 @@ reproducible benchmark/CI matrix.
 
    ```text
    P / V / VV / CP / CV / CVV      shadows off
-   A<> / FA<> / AA<>                shadows on
-   CA<> / CFA<> / CAA<>             shadows on
-   custom atomic-backed policy      shadows on
+   A<> / FA<> / AA<>                shadows on when global/width gates allow
+   CA<> / CFA<> / CAA<>             shadows on when global/width gates allow
+   custom atomic-backed policy      shadows on when global/width gates allow
    ```
 
    The global shadow switch, counter-width gate, and 32-bit opt-in remain in
@@ -82,7 +82,7 @@ reproducible benchmark/CI matrix.
 | H5 | Counter-wrap and invariant tests | H2, H3 | complete (2026-08-02) |
 | H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | complete (2026-08-02) |
 | H7 | Clean builds, CI, and sanitizers | H5, H6 | complete (2026-08-02) |
-| H8 | Fused single-item hot path | H0, H3, H5-H7 | complete (2026-08-02) |
+| H8 | Fused monolithic single-item operations | H0, H3, H5-H7 | complete (2026-08-02) |
 | H9 | Shadow-aware bulk snapshot path | H8 | pending |
 | H10 | Alias and release decision | H8, H9 | pending |
 
@@ -195,6 +195,12 @@ Low. This slice adds measurement infrastructure and does not change the library.
   is retained only as diagnostic history. It used sibling logical CPUs and a
   retry loop which periodically called `std::this_thread::yield()`, so its
   throughput table is not a valid H0 performance reference.
+- That retained manifest is now explicitly classified as
+  `diagnostic_invalid`. Manifest format 3 requires every new capture to declare
+  a diagnostic or release evidence class; release mode rejects dirty library
+  or harness revisions, short sample protocols, disabled affinity, and
+  producer/consumer placement on the same logical CPU. Clean named H0, H2, and
+  H8 artifacts still need to be generated after this closeout is committed.
 - The harness was hardened during H2 validation: defaults are now 20,000,000
   transfers, nine samples, and two warm-ups; Windows `auto` affinity chooses
   two distinct physical cores and prefers P-cores on a hybrid host; queue/Rigtorp samples are paired in alternating
@@ -640,8 +646,14 @@ do not silently treat a skipped sanitizer or runtime job as a pass.
   out-of-source dashboard build. The run also caught and validated fixes for
   Qt 6.4 source-MOC discovery in the large `fifo_view` test unit, dynamic FIFO
   storage alignment on Clang, and padding-sensitive `pool` stress comparison.
+- Local STM32 GNU Tools 14.3.1 strict C++17 public-header/API smoke passes for
+  Cortex-M4 and Cortex-M7 with `-mthumb -fno-exceptions -fno-rtti` and a forced
+  32-byte cache line. Cortex-M0 is rejected by the default lock-free atomic gate
+  and passes when `SPSC_REQUIRE_LOCK_FREE=0`; that is a pre-existing toolchain/
+  policy limitation, not an H8 regression. CI still automates AArch64 rather
+  than `arm-none-eabi`, so Cortex-M automation remains an explicit follow-up.
 
-## H8 - Fused Single-Item Hot Path
+## H8 - Fused Monolithic Single-Item Operations
 
 Status: complete
 
@@ -652,18 +664,24 @@ Remove redundant owner-index loads without weakening publication semantics.
 ### Scope
 
 - Carry one owner snapshot through availability, index calculation, payload
-  access, and commit.
+  access, and commit in one public operation.
 - Split owner-side relaxed loads from opposite-side acquire loads where the
   counter interface requires it.
 - Preserve release publication and SPSC single-writer rules.
 - Optimize producer and complete consumer paths across the core containers.
+- Keep split-phase calls such as `claim -> publish` and `front -> pop` as
+  separate transactions; carrying a snapshot between them would require a new
+  persistent reservation/token contract.
 
 ### Acceptance Criteria
 
 - Compiler-specific assembly checks confirm the intended owner-load count for
-  GCC, Clang, and MSVC where supported.
+  the canonical FIFO and lifetime-managed queue probes on GCC, Clang, and MSVC
+  where supported.
 - No correctness, sanitizer, or wrap test regresses.
-- Benchmarks show no regression across payload sizes and boundary-heavy cases.
+- The canonical 8-byte trivial FIFO and lifetime-managed queue workloads show
+  no boundary-heavy regression. A literal multi-size sweep is deferred to
+  H9/H10 and is required before broader payload-size claims.
 
 ### Risk And Rollback
 
@@ -689,13 +707,24 @@ fusion, even if they land in the same release phase.
   element rather than FIFO's oldest. No persistent index metadata was added;
   H2 owner-line and shadow layout therefore remains unchanged.
 - The public consumer probe is intentionally `try_front()` followed by
-  `pop()`. It now has two consumer-tail read/commit accesses—one for each
+  `pop()`. It now has two consumer-tail read/commit accesses - one for each
   public operation. Clang may fold the final access into an in-place increment;
   collapsing the two public-operation accesses further would require a new
   reservation/token contract and is intentionally out of scope.
-- Added compiler-specific H8 assembly gates. Local GCC 15.2 (UCRT64) and MSVC
-  19.50 both report `producer-head=1` and `consumer-tail=2`; GitHub Actions
-  runs the same check for GCC, Clang, and MSVC.
+- Added compiler-specific H8 assembly gates. The closeout gate covers both
+  `fifo` and lifetime-managed `queue`: local GCC 15.2 (UCRT64) and MSVC 19.50
+  report one producer owner load and two consumer read/commit accesses for each
+  probe. GitHub Actions runs the same script for GCC, Clang, and MSVC.
+- `queue` and `typed_pool` now inherit their allocation-state implementation
+  bases privately. Cross-toolchain public-header smoke uses access-detection and
+  pointer-conversion assertions to prevent allocation state, implementation
+  bases, H8 snapshots, or cached endpoint helpers from leaking into object APIs.
+- Closeout verification passed all nine suites in the four Debug variants
+  (`shadow_off`, `shadow_on`, `shadow_heur`, and C++20 `cxx20_span`): 36 suite
+  executions. Strict public-header/API smoke passed in C++17/C++20 with GCC and
+  MSVC and on Cortex-M4/M7 with STM32 GNU Tools 14.3.1. The genuine MSVC x86
+  shadow gate passed for both 32-bit opt-in states; local GCC/MSVC FIFO and queue
+  assembly gates and the intended relaxed-publication compile-fail check passed.
 - Local final verification passed all 9 suites in Debug and Release for
   `shadow_on`, `shadow_off`, and C++20 `cxx20_span` (54 executions). Strict
   C++17/C++20 public-header smoke passed with GCC and MSVC. Both 32-bit shadow
