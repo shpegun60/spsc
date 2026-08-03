@@ -83,12 +83,13 @@ reproducible benchmark/CI matrix.
 | H6 | Policy, 32-bit, and C++20 matrix | H3, H5 | complete (2026-08-02) |
 | H7 | Clean builds, CI, and sanitizers | H5, H6 | complete (2026-08-02) |
 | H8 | Fused monolithic single-item operations | H0, H3, H5-H7 | complete (2026-08-02) |
-| H9 | Shadow-aware bulk snapshot path | H8 | pending |
+| H0R | Benchmark evidence validity repair | H0, H8 | implemented locally; CI pending |
+| H9 | Shadow-aware bulk snapshot path | H8, H0R | pending |
 | H10 | Alias and release decision | H8, H9 | pending |
 
 `H1` precedes `H0` only because deleting forwarding overloads does not change
 runtime code generation. The critical performance sequence remains
-`H0 -> H2 -> H3 -> H8 -> H9 -> H10`.
+`H0 -> H2 -> H3 -> H8 -> H0R -> H9 -> H10`.
 
 ## H1 - Unsafe Bulk API Consistency
 
@@ -740,16 +741,81 @@ fusion, even if they land in the same release phase.
   are not presented as a library-wide throughput claim. The canonical H0
   harness currently has these two payload models but not a literal multi-size
   sweep; H9/H10 must extend that before any general alias or performance claim.
-- The accepted performance position for the comparable canonical
-  `queue<CFA>` workload is practical parity with Rigtorp. The stable paired
-  capture records `Rigtorp / spsc = 0.962` in steady state: `spsc::queue` was
-  about 4% ahead, which is inside that host's 4-10% steady-state variation and
-  is therefore recorded as parity rather than a ranking claim. Its forced
-  empty/full boundary ratio was `0.660`, where `spsc::queue` was about 52%
-  ahead. H8's controlled queue boundary delta was `-0.2%`, so it introduced no
-  measured regression against that position. This conclusion applies only to
-  the recorded GCC 15.2, 8-byte lifetime-payload, capacity-1024 paired setup;
-  H9/H10 must still broaden it before any cross-platform or all-payload claim.
+- The earlier practical-parity position is withdrawn as ranking evidence.
+  Repeated format-version-1 runs of the same `386b691` binary, workload,
+  capacity, affinity pair, and sample count reversed the winner by far more
+  than the within-capture variation. `High performance` did not remove the
+  reversal. Those captures remain correctness/regression diagnostics, but they
+  cannot support an SPSC-versus-Rigtorp winner claim. H0R defines the repaired
+  evidence protocol below.
+
+## H0R - Benchmark Evidence Validity Repair
+
+Status: implemented locally; CI pending
+
+### Goal
+
+Make unstable host behavior an explicit `inconclusive` result instead of
+allowing a machine-specific capture to force a queue ranking.
+
+### Scope
+
+- Reuse one pinned producer/consumer worker pair across warm-up and measured
+  runs for each workload and endpoint assignment.
+- Pre-touch each queue before the timed region.
+- Measure both endpoint assignments (`P -> C` and `C -> P`) and alternate both
+  direction order and implementation order.
+- Record per-endpoint CPU time, Windows thread cycles, retry rate, affinity
+  success, and direction-specific paired statistics.
+- Emit a final `comparison_summary` with `spsc_faster`, `rigtorp_faster`,
+  `parity`, or `inconclusive`; never manufacture a winner when a gate fails.
+- Record power scheme/overlay before and after the canonical runner.
+- Keep legacy format-version-1 captures as diagnostic data only.
+
+### Acceptance Criteria
+
+- Every measured sample retains sequence, checksum, count, and lifetime
+  verification.
+- Release evidence uses at least nine pairs in both affinity directions on
+  distinct pinned CPUs.
+- A direction fails ranking eligibility when paired-ratio CV exceeds 10%,
+  minimum endpoint CPU occupancy is below 80%, affinity is not applied, or the
+  sample count is insufficient.
+- The final ranking is `inconclusive` when direction spread exceeds 15% or the
+  two directions disagree; `0.95..1.05` is the explicit parity band.
+- GCC and Clang CI compile the harness and validate version-2 JSON semantics.
+
+### Risk And Rollback
+
+Low for library behavior: H0R changes only benchmark execution and evidence
+classification. Legacy JSONL readers must continue treating format version 1
+as a separate diagnostic format.
+
+### Local Implementation And Validation
+
+- JSONL format version 2 now uses persistent pinned workers, queue pre-touch,
+  alternating implementation/direction order, forward and reverse affinity,
+  per-endpoint CPU-time/cycle telemetry, retry rates, per-direction paired
+  gates, and a final comparison classification. The canonical manifest is
+  format version 4 and records affinity and power state before/after capture.
+- Strict GCC 15.2 C++17 and C++20 builds passed with
+  `-Wall -Wextra -Werror -pedantic-errors`; MSVC C++17 passed `/W4 /WX`, and its
+  runtime smoke recorded non-zero `QueryThreadCycleTime` values in every sample.
+- Queue, policy, forward-only, bidirectional, and 100-sample persistent-worker
+  smokes completed without an unverified sample. The PowerShell runner emitted
+  two resolved directions, unchanged pre/post power state, two comparison
+  summaries, and a valid format-version-4 manifest.
+- The default-scale local validation used GCC 15.2, `queue<CFA>`, Rigtorp v1.1,
+  capacity 1024, 20,000,000 transfers, nine measured pairs plus two warm-ups,
+  and CPUs `0,2` in both endpoint assignments. All 72 measured samples were
+  verified. Steady paired medians were `Rigtorp / SPSC = 0.713` forward and
+  `1.307` reverse; both direction sample gates passed, but their `83.4%` spread
+  produced `inconclusive: direction_sensitive_result` (geometric mean `0.965`).
+  Boundary medians were `0.975` and `0.976`; their minimum CPU occupancy was
+  below the conservative 80% gate, so boundary was also `inconclusive` rather
+  than an unsupported parity claim.
+- GCC/Clang and MSVC protocol smoke steps are present in GitHub Actions. H0R
+  remains CI-pending until those checks run on the committed revision.
 
 ## H9 - Shadow-Aware Bulk Snapshot Path
 
@@ -790,7 +856,7 @@ Make names, release versioning, and performance claims follow measured behavior.
 
 ### Scope
 
-- Re-run the `H0` benchmark suite after `H8` and `H9`.
+- Re-run the repaired `H0R` benchmark suite after `H9`.
 - Decide whether to change `fast_fifo`/`fast_queue`, add explicit
   `single_writer_fast_*` and `strict_atomic_*` aliases, or retain existing aliases
   with corrected documentation.

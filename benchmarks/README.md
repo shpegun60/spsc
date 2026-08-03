@@ -1,8 +1,9 @@
-# SPSC Reproducible Baseline Harness
+# SPSC Reproducible Measurement Harness
 
-This directory implements H0 from the hardening roadmap. It captures a
-machine-specific baseline; it does **not** claim that one queue is generally
-faster than another.
+This directory implements H0 and the H0R validity repair from the hardening
+roadmap. It captures machine-specific measurements and can explicitly report
+`inconclusive`; it does **not** force a winner or claim that one queue is
+generally faster than another.
 
 ## Pinned Comparator
 
@@ -37,9 +38,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_spsc_baseline.
 The runner uses the selected `g++` compiler and emits a release-oriented
 binary. On Windows it asks the benchmark to choose two distinct physical cores,
 preferring P-cores on a hybrid host (rather than sibling logical CPUs); an
-explicit `-ProducerCpu/-ConsumerCpu` pair remains available. The manifest
-records the requested and resolved pair plus the active base power scheme and
-Windows performance overlay. The default capture
+explicit `-ProducerCpu/-ConsumerCpu` pair remains available. By default each
+case is measured in both endpoint assignments (`P -> C` and `C -> P`) on
+persistent pinned worker threads. The manifest records both assignments and
+the base power scheme/Windows performance overlay before and after execution.
+The default capture
 uses 20,000,000 transfers, nine measured samples, and two warm-ups per case.
 It writes:
 
@@ -55,6 +58,7 @@ Useful overrides:
 ```powershell
 .\scripts\run_spsc_baseline.ps1 -Items 50000000 -Samples 9 -Warmup 3 -Capacity 1024
 .\scripts\run_spsc_baseline.ps1 -Suite queue -ProducerCpu 2 -ConsumerCpu 3
+.\scripts\run_spsc_baseline.ps1 -Suite queue -Directions forward
 .\scripts\run_spsc_baseline.ps1 -NoAffinity
 .\scripts\run_spsc_baseline.ps1 -RequireClean
 .\scripts\run_spsc_baseline.ps1 -Suite queue -LibraryRoot C:\tmp\spsc-h0
@@ -91,7 +95,8 @@ atomic policy families in the metadata record.
 ## Workloads
 
 - `steady`: producer and consumer transfer a continuous sequence while failed
-  full/empty attempts are counted.
+  full/empty attempts are counted. This is a contention-sensitive system
+  measurement: retry rate and endpoint/core balance are part of the result.
 - `boundary`: an out-of-band phase variable holds the consumer until the
   producer has filled the queue, performs one failed full probe, drains the
   complete batch, and performs one empty probe. It measures boundary behavior,
@@ -106,25 +111,49 @@ counts; periodically yielding would turn that difference into an uncontrolled
 Windows scheduler measurement rather than a queue measurement.
 
 For the direct `queue<CFA>` versus Rigtorp comparison, each measured pair is
-run in alternating order. The JSONL samples carry `pair_index` and
-`order_in_pair`, followed by a `paired_summary` whose rate ratio is
-`Rigtorp / spsc::queue<CFA>`. This prevents the first implementation from
-always inheriting a different thermal or scheduler state.
+run in alternating implementation order. Direction order also alternates, and
+the same persistent OS threads execute both implementations on a given
+endpoint assignment. The JSONL samples carry `pair_index`, `order_in_pair`, and
+`direction`. A `paired_summary` is emitted for each direction; its rate ratio
+is `Rigtorp / spsc::queue<CFA>`.
+
+The final `comparison_summary` is one of:
+
+- `spsc_faster` or `rigtorp_faster`: both directions pass the sample gate and
+  agree outside the parity band;
+- `parity`: both directions pass and remain inside the configured parity band;
+- `inconclusive`: insufficient samples, excessive paired variation, low
+  endpoint CPU occupancy, failed affinity, direction sensitivity, or a
+  classification disagreement.
+
+The default ranking gate requires at least nine measured pairs per direction,
+paired-ratio CV no greater than 10%, minimum endpoint CPU occupancy of 80%,
+direction-ratio spread no greater than 15%, and a parity band of `0.95..1.05`.
+These thresholds make unstable evidence explicit; they do not transform one
+capture into a platform-independent claim.
 
 ## Result Format
 
-The JSONL file contains one `metadata` record, one `sample` record per measured
-run, a `summary` record for each implementation/policy/workload tuple, and a
-`paired_summary` for queue/Rigtorp cases. Summaries include median, mean,
-sample standard deviation, minimum, and maximum; use the median and paired
-ratio for comparison, not a short-run arithmetic mean. Throughput is named
+Format version 2 contains one `metadata` record, one `sample` record per
+measured run/direction, a `summary` record for each
+implementation/policy/workload/direction tuple, per-direction `paired_summary`
+records, and a final `comparison_summary` for queue/Rigtorp cases. Summaries
+include median, mean, sample standard deviation, minimum, maximum, retry rate,
+and CPU-occupancy telemetry; use the classification rather than selecting a
+convenient raw median. Throughput is named
 `transfers_per_second`: one successfully delivered item is one transfer, not
 two endpoint operations.
 
-Windows samples also record endpoint CPU time. It is diagnostic telemetry (its
-clock is quantized on some Windows installations), useful for detecting a run
-that became a scheduling experiment rather than proof of an exact CPU-time
-ratio.
+Windows samples also record endpoint CPU time and `QueryThreadCycleTime`
+cycles. CPU time is quantized on some Windows installations; both fields are
+diagnostic telemetry, not a replacement throughput metric.
+
+Legacy format-version-1 captures created a fresh thread pair for every
+measurement and tested only one endpoint assignment. Repeated identical runs
+on the canonical Windows host reversed the queue/Rigtorp ranking, so those
+captures remain regression diagnostics only and must not support a winner
+claim. Even a ranking-eligible version-2 capture should be reproduced in a
+second process before it is retained as release evidence.
 
 The manifest deliberately records dirty-worktree state. A retained baseline
 should normally be generated after committing the relevant source changes; a

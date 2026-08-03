@@ -24,6 +24,10 @@ param(
     [int]$ProducerCpu = -1,
     [int]$ConsumerCpu = -1,
     [switch]$NoAffinity,
+
+    [ValidateSet('forward', 'both')]
+    [string]$Directions = 'both',
+
     [switch]$RequireClean,
 
     [ValidateSet('diagnostic', 'release')]
@@ -45,6 +49,9 @@ if ($releaseEvidence) {
     if ($NoAffinity) {
         throw 'Release evidence requires explicit or automatically resolved CPU affinity'
     }
+    if ($Directions -ne 'both') {
+        throw 'Release evidence requires both producer/consumer affinity directions'
+    }
     if ($Items -lt 20000000 -or $Samples -lt 9 -or $Warmup -lt 2) {
         throw 'Release evidence requires at least 20,000,000 items, 9 samples, and 2 warm-ups'
     }
@@ -61,6 +68,35 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) {
         throw "$FailureMessage (exit $LASTEXITCODE)"
     }
+}
+
+function Get-PowerState {
+    $state = [ordered]@{
+        scheme = $null
+        overlay_ac = $null
+        overlay_dc = $null
+    }
+    if ($env:OS -ne 'Windows_NT' -or
+        -not (Get-Command powercfg.exe -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]$state
+    }
+
+    $state.scheme = ((& powercfg.exe /GETACTIVESCHEME) | Out-String).Trim()
+    $overlayPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes'
+    if (Test-Path -LiteralPath $overlayPath) {
+        $overlayState = Get-ItemProperty -LiteralPath $overlayPath -ErrorAction SilentlyContinue
+        if ($null -ne $overlayState) {
+            $acProperty = $overlayState.PSObject.Properties['ActiveOverlayAcPowerScheme']
+            $dcProperty = $overlayState.PSObject.Properties['ActiveOverlayDcPowerScheme']
+            if ($null -ne $acProperty) {
+                $state.overlay_ac = $acProperty.Value
+            }
+            if ($null -ne $dcProperty) {
+                $state.overlay_dc = $dcProperty.Value
+            }
+        }
+    }
+    return [pscustomobject]$state
 }
 
 $harnessRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -199,26 +235,63 @@ $runArgs = @(
     '--capacity', [string]$Capacity,
     '--suite', $Suite,
     '--affinity', $affinity,
+    '--directions', $Directions,
     '--output', $resultPath,
     '--commit', $commit
 )
+$powerBefore = Get-PowerState
+$processPriority = (Get-Process -Id $PID).PriorityClass.ToString()
 Invoke-Checked -File $binaryPath -Arguments $runArgs -FailureMessage 'Benchmark execution failed'
+$powerAfter = Get-PowerState
+if ($releaseEvidence -and
+    (($powerBefore | ConvertTo-Json -Compress) -ne
+     ($powerAfter | ConvertTo-Json -Compress))) {
+    throw 'Release evidence requires an unchanged power scheme and overlay during capture'
+}
 
 $metadataRecord = Get-Content -LiteralPath $resultPath -TotalCount 1 | ConvertFrom-Json
 if ($metadataRecord.kind -ne 'metadata') {
     throw 'Benchmark result did not begin with a metadata record'
 }
-$firstSampleRecord = Get-Content -LiteralPath $resultPath |
-    ForEach-Object { $_ | ConvertFrom-Json } |
-    Where-Object { $_.kind -eq 'sample' } |
-    Select-Object -First 1
+$resultRecords = @(Get-Content -LiteralPath $resultPath | ForEach-Object { $_ | ConvertFrom-Json })
+$sampleRecords = @($resultRecords | Where-Object { $_.kind -eq 'sample' })
+$firstSampleRecord = $sampleRecords | Select-Object -First 1
 if ($null -eq $firstSampleRecord) {
     throw 'Benchmark result did not contain a sample record'
 }
-$resolvedAffinity = "$($firstSampleRecord.affinity.producer_cpu),$($firstSampleRecord.affinity.consumer_cpu)"
-if ($releaseEvidence -and
-    $firstSampleRecord.affinity.producer_cpu -eq $firstSampleRecord.affinity.consumer_cpu) {
-    throw 'Release evidence requires producer and consumer to run on distinct logical CPUs'
+$resolvedAffinities = @($sampleRecords |
+    Group-Object direction |
+    ForEach-Object {
+        $sample = $_.Group | Select-Object -First 1
+        [ordered]@{
+            direction = $_.Name
+            producer_cpu = $sample.affinity.producer_cpu
+            consumer_cpu = $sample.affinity.consumer_cpu
+        }
+    })
+$actualDirections = @($resolvedAffinities | ForEach-Object { $_.direction } | Sort-Object -Unique)
+if ($Directions -eq 'both' -and $affinity -ne 'none') {
+    if ($actualDirections.Count -ne 2 -or
+        $actualDirections -notcontains 'forward' -or
+        $actualDirections -notcontains 'reverse') {
+        throw 'Bidirectional benchmark output did not contain forward and reverse affinity samples'
+    }
+}
+if ($releaseEvidence) {
+    foreach ($sample in $sampleRecords) {
+        if ($sample.affinity.producer_cpu -eq $sample.affinity.consumer_cpu -or
+            -not $sample.affinity.producer_applied -or
+            -not $sample.affinity.consumer_applied) {
+            throw 'Release evidence requires applied affinity on two distinct logical CPUs'
+        }
+    }
+}
+if (@($sampleRecords | Where-Object { -not $_.verified }).Count -ne 0) {
+    throw 'Benchmark result contains an unverified sample'
+}
+$comparisonRecords = @($resultRecords | Where-Object { $_.kind -eq 'comparison_summary' })
+if (($Suite -eq 'all' -or $Suite -eq 'queue') -and $comparisonRecords.Count -ne 2) {
+    throw 'Queue benchmark must emit one comparison summary per workload'
 }
 
 $compilerVersion = @(& $compilerPath '--version') | Select-Object -First 2
@@ -234,33 +307,8 @@ if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
         }
     })
 }
-$powerScheme = $null
-$powerOverlayAc = $null
-$powerOverlayDc = $null
-if ($env:OS -eq 'Windows_NT' -and (Get-Command powercfg.exe -ErrorAction SilentlyContinue)) {
-    $powerScheme = ((& powercfg.exe /GETACTIVESCHEME) | Out-String).Trim()
-
-    # Windows 10/11 can retain the Balanced base scheme while applying a
-    # performance overlay through the Power mode slider. Record both states:
-    # the base scheme alone would otherwise mislabel a Best performance run.
-    $overlayPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes'
-    if (Test-Path -LiteralPath $overlayPath) {
-        $overlayState = Get-ItemProperty -LiteralPath $overlayPath -ErrorAction SilentlyContinue
-        if ($null -ne $overlayState) {
-            $acProperty = $overlayState.PSObject.Properties['ActiveOverlayAcPowerScheme']
-            $dcProperty = $overlayState.PSObject.Properties['ActiveOverlayDcPowerScheme']
-            if ($null -ne $acProperty) {
-                $powerOverlayAc = $acProperty.Value
-            }
-            if ($null -ne $dcProperty) {
-                $powerOverlayDc = $dcProperty.Value
-            }
-        }
-    }
-}
-
 $manifest = [ordered]@{
-    format_version = 3
+    format_version = 4
     captured_at_local = (Get-Date).ToString('o')
     evidence = [ordered]@{
         classification = $EvidenceClass
@@ -268,7 +316,7 @@ $manifest = [ordered]@{
         clean_library_required = $requireCleanCapture
         clean_harness_required = $requireCleanCapture
         minimum_release_protocol = if ($releaseEvidence) {
-            'items>=20000000;samples>=9;warmup>=2;distinct-affinity'
+            'items>=20000000;samples>=9;warmup>=2;distinct-bidirectional-affinity'
         } else {
             $null
         }
@@ -296,10 +344,11 @@ $manifest = [ordered]@{
         processors = $cpuInfo
         affinity_requested = $affinity
         affinity_selection = $metadataRecord.affinity_selection
-        affinity_resolved = $resolvedAffinity
-        power_scheme = $powerScheme
-        power_overlay_ac = $powerOverlayAc
-        power_overlay_dc = $powerOverlayDc
+        affinity_directions_requested = $Directions
+        affinity_resolved = $resolvedAffinities
+        power_before = $powerBefore
+        power_after = $powerAfter
+        inherited_process_priority = $processPriority
     }
     benchmark = [ordered]@{
         suite = $Suite
@@ -312,9 +361,13 @@ $manifest = [ordered]@{
         type_layout = $metadataRecord.type_layout
         spsc_cacheline_bytes = $metadataRecord.spsc_cacheline_bytes
         retry_backoff = $metadataRecord.retry_backoff
+        worker_lifecycle = $metadataRecord.worker_lifecycle
+        thread_cycle_counter = $metadataRecord.thread_cycle_counter
+        ranking_gate = $metadataRecord.ranking_gate
+        comparison_summaries = $comparisonRecords
         shadow_indices_enabled = 1
         shadow_allow_32bit = 0
-        queue_comparison_protocol = 'paired-alternating-order'
+        queue_comparison_protocol = 'persistent-workers;paired-alternating-order;bidirectional-affinity'
     }
     artifacts = [ordered]@{
         jsonl = $resultPath
@@ -328,6 +381,10 @@ $manifest = [ordered]@{
 $encoding = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8), $encoding)
 
-Write-Host "Baseline results: $resultPath"
+Write-Host "Benchmark results: $resultPath"
 Write-Host "Manifest:         $manifestPath"
 Write-Host "Assembly:         $assemblyPath"
+foreach ($comparison in $comparisonRecords) {
+    Write-Host ("Comparison {0}: {1} ({2})" -f
+        $comparison.workload, $comparison.status, $comparison.reason)
+}

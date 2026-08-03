@@ -12,13 +12,17 @@
 #include <chrono>
 #include <cmath>
 #include <climits>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -42,6 +46,7 @@
 #elif defined(__linux__)
 #  include <pthread.h>
 #  include <sched.h>
+#  include <time.h>
 #endif
 
 #include "basic_types.h"
@@ -58,10 +63,23 @@ enum class workload {
     boundary
 };
 
+inline constexpr unsigned benchmark_format_version = 2u;
+inline constexpr std::size_t minimum_ranking_samples = 9u;
+inline constexpr double maximum_paired_ratio_cv = 0.10;
+inline constexpr double minimum_endpoint_cpu_occupancy = 0.80;
+inline constexpr double maximum_direction_ratio_spread = 0.15;
+inline constexpr double parity_ratio_lower = 0.95;
+inline constexpr double parity_ratio_upper = 1.05;
+
 struct affinity_pair {
     int producer_cpu{-1};
     int consumer_cpu{-1};
     bool topology_auto{false};
+};
+
+struct affinity_run {
+    const char *name{"forward"};
+    affinity_pair affinity{};
 };
 
 struct options {
@@ -70,6 +88,7 @@ struct options {
     unsigned warmup{2u};
     std::size_t capacity{1024u};
     affinity_pair affinity{};
+    bool bidirectional_affinity{true};
     std::string suite{"all"};
     std::string output{};
     std::string commit{"unknown"};
@@ -82,6 +101,7 @@ struct endpoint_metrics {
     std::uint64_t checksum{0u};
     std::uint64_t lifetime_sink{0u};
     std::uint64_t cpu_time_ns{0u};
+    std::uint64_t cpu_cycles{0u};
     bool affinity_applied{false};
     bool sequence_ok{true};
 };
@@ -95,6 +115,8 @@ struct sample_result {
     std::uint64_t lifetime_sink{0u};
     std::uint64_t producer_cpu_time_ns{0u};
     std::uint64_t consumer_cpu_time_ns{0u};
+    std::uint64_t producer_cpu_cycles{0u};
+    std::uint64_t consumer_cpu_cycles{0u};
     bool producer_affinity_applied{false};
     bool consumer_affinity_applied{false};
     bool verified{false};
@@ -105,6 +127,24 @@ struct sample_result {
         }
         return static_cast<double>(items) * 1'000'000'000.0 /
                static_cast<double>(duration_ns);
+    }
+
+    [[nodiscard]] double minimum_cpu_occupancy() const noexcept {
+        if (duration_ns == 0u) {
+            return 0.0;
+        }
+        const double duration = static_cast<double>(duration_ns);
+        const double producer = static_cast<double>(producer_cpu_time_ns) / duration;
+        const double consumer = static_cast<double>(consumer_cpu_time_ns) / duration;
+        return std::min(producer, consumer);
+    }
+
+    [[nodiscard]] double retries_per_transfer() const noexcept {
+        if (items == 0u) {
+            return 0.0;
+        }
+        return static_cast<double>(producer_full_events + consumer_empty_events) /
+               static_cast<double>(items);
     }
 };
 
@@ -119,6 +159,7 @@ struct sample_result {
         << "  --warmup N                discarded warm-up samples per case (default 2)\n"
         << "  --capacity N              one of 64, 256, 1024, 4096 (default 1024)\n"
         << "  --affinity auto|P,C|none  producer/consumer logical CPU selection\n"
+        << "  --directions forward|both affinity directions (default both)\n"
         << "  --suite all|queue|fifo|policy\n"
         << "  --output PATH             JSONL output path (stdout when omitted)\n"
         << "  --commit SHA              source revision recorded in each result\n";
@@ -214,6 +255,12 @@ struct sample_result {
             result.capacity = static_cast<std::size_t>(parse_u64(next_value(), "--capacity"));
         } else if (option == "--affinity") {
             result.affinity = parse_affinity(next_value());
+        } else if (option == "--directions") {
+            const std::string directions = next_value();
+            if (directions != "forward" && directions != "both") {
+                usage("--directions must be forward or both");
+            }
+            result.bidirectional_affinity = directions == "both";
         } else if (option == "--suite") {
             result.suite = next_value();
         } else if (option == "--output") {
@@ -266,8 +313,20 @@ struct sample_result {
 
 [[nodiscard]] static std::string environment_or(const char *name,
                                                   const char *fallback = "unknown") {
+#if defined(_MSC_VER)
+    char *value = nullptr;
+    std::size_t size = 0u;
+    if (::_dupenv_s(&value, &size, name) != 0 || value == nullptr || *value == '\0') {
+        std::free(value);
+        return fallback;
+    }
+    const std::string result(value);
+    std::free(value);
+    return result;
+#else
     const char *value = std::getenv(name);
     return (value != nullptr && *value != '\0') ? value : fallback;
+#endif
 }
 
 [[nodiscard]] static std::string compiler_description() {
@@ -436,6 +495,25 @@ struct sample_result {
     return requested.topology_auto ? select_topology_affinity() : requested;
 }
 
+[[nodiscard]] static const char *affinity_direction_protocol_name(
+    const options &input) noexcept {
+    return input.bidirectional_affinity ? "both" : "forward";
+}
+
+[[nodiscard]] static std::vector<affinity_run> make_affinity_runs(
+    const options &input) {
+    std::vector<affinity_run> runs;
+    runs.push_back({"forward", input.affinity});
+    if (input.bidirectional_affinity && input.affinity.producer_cpu >= 0 &&
+        input.affinity.consumer_cpu >= 0 &&
+        input.affinity.producer_cpu != input.affinity.consumer_cpu) {
+        affinity_pair reversed = input.affinity;
+        std::swap(reversed.producer_cpu, reversed.consumer_cpu);
+        runs.push_back({"reverse", reversed});
+    }
+    return runs;
+}
+
 [[nodiscard]] static std::uint64_t current_thread_cpu_time_ns() noexcept {
 #if defined(_WIN32)
     FILETIME created{};
@@ -453,91 +531,248 @@ struct sample_result {
     user_ticks.HighPart = user.dwHighDateTime;
     // FILETIME ticks are 100 ns.
     return (kernel_ticks.QuadPart + user_ticks.QuadPart) * 100u;
+#elif defined(__linux__)
+    timespec value{};
+    if (::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value) != 0) {
+        return 0u;
+    }
+    return static_cast<std::uint64_t>(value.tv_sec) * 1'000'000'000u +
+           static_cast<std::uint64_t>(value.tv_nsec);
 #else
     return 0u;
 #endif
 }
 
-static void backoff(const std::uint64_t iteration) noexcept {
-    (void)iteration;
+[[nodiscard]] static std::uint64_t current_thread_cpu_cycles() noexcept {
+#if defined(_WIN32)
+    ULONG64 cycles = 0u;
+    return ::QueryThreadCycleTime(::GetCurrentThread(), &cycles) != FALSE
+               ? static_cast<std::uint64_t>(cycles)
+               : 0u;
+#else
+    // A portable per-thread cycle counter is not available in C++17. CPU time
+    // remains present on Linux; the JSON metadata identifies cycles as absent.
+    return 0u;
+#endif
+}
+
+[[nodiscard]] static const char *thread_cycle_counter_name() noexcept {
+#if defined(_WIN32)
+    return "QueryThreadCycleTime";
+#else
+    return "unavailable";
+#endif
+}
+
+static void cpu_relax() noexcept {
 #if SPSC_BENCH_HAS_X86_PAUSE
-    // A retry must not periodically become a scheduler yield. Different
-    // queues naturally observe different counts of transient full/empty
-    // probes; yielding after a fixed count turns that implementation detail
-    // into a large and non-repeatable Windows scheduling effect.
     _mm_pause();
 #else
-    // Keep a non-x86 retry observable to the compiler without transferring
-    // control to the operating-system scheduler.
     std::atomic_signal_fence(std::memory_order_seq_cst);
 #endif
 }
 
-struct start_gate {
-    std::atomic<unsigned> ready{0u};
-    std::atomic<bool> go{false};
-
-    void arrive_and_wait() noexcept {
-        ready.fetch_add(1u, std::memory_order_release);
-        while (!go.load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-        }
-    }
-
-    void wait_for_both() noexcept {
-        while (ready.load(std::memory_order_acquire) != 2u) {
-            std::this_thread::yield();
-        }
-    }
-};
-
-template <class ProducerFn, class ConsumerFn>
-[[nodiscard]] static sample_result run_parallel(const affinity_pair affinity,
-                                                 ProducerFn &&producer_fn,
-                                                 ConsumerFn &&consumer_fn) {
-    start_gate gate{};
-    endpoint_metrics producer{};
-    endpoint_metrics consumer{};
-
-    std::thread producer_thread([&] {
-        producer.affinity_applied = pin_current_thread(affinity.producer_cpu);
-        gate.arrive_and_wait();
-        const std::uint64_t started_cpu = current_thread_cpu_time_ns();
-        producer_fn(producer);
-        const std::uint64_t ended_cpu = current_thread_cpu_time_ns();
-        producer.cpu_time_ns = ended_cpu >= started_cpu ? ended_cpu - started_cpu : 0u;
-    });
-    std::thread consumer_thread([&] {
-        consumer.affinity_applied = pin_current_thread(affinity.consumer_cpu);
-        gate.arrive_and_wait();
-        const std::uint64_t started_cpu = current_thread_cpu_time_ns();
-        consumer_fn(consumer);
-        const std::uint64_t ended_cpu = current_thread_cpu_time_ns();
-        consumer.cpu_time_ns = ended_cpu >= started_cpu ? ended_cpu - started_cpu : 0u;
-    });
-
-    gate.wait_for_both();
-    const auto started = clock_type::now();
-    gate.go.store(true, std::memory_order_release);
-    producer_thread.join();
-    consumer_thread.join();
-    const auto ended = clock_type::now();
-
-    sample_result result{};
-    result.duration_ns = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(ended - started).count());
-    result.producer_full_events = producer.full_events;
-    result.consumer_empty_events = consumer.empty_events;
-    result.checksum = consumer.checksum;
-    result.lifetime_sink = consumer.lifetime_sink;
-    result.producer_cpu_time_ns = producer.cpu_time_ns;
-    result.consumer_cpu_time_ns = consumer.cpu_time_ns;
-    result.producer_affinity_applied = producer.affinity_applied;
-    result.consumer_affinity_applied = consumer.affinity_applied;
-    result.verified = producer.sequence_ok && consumer.sequence_ok &&
-                      producer.completed == consumer.completed;
-    return result;
+static void backoff(const std::uint64_t iteration) noexcept {
+    (void)iteration;
+    // A retry must not periodically become a scheduler yield. Different
+    // queues naturally observe different counts of transient full/empty
+    // probes; yielding after a fixed count turns that implementation detail
+    // into a large and non-repeatable Windows scheduling effect.
+    cpu_relax();
 }
+
+class persistent_parallel_executor {
+public:
+    using task_type = std::function<void(endpoint_metrics &)>;
+
+    explicit persistent_parallel_executor(const affinity_pair affinity)
+        : affinity_(affinity) {
+        try {
+            producer_thread_ = std::thread([this] { worker(true); });
+            consumer_thread_ = std::thread([this] { worker(false); });
+        } catch (...) {
+            {
+                const std::lock_guard<std::mutex> lock(mutex_);
+                stop_ = true;
+            }
+            state_changed_.notify_all();
+            if (producer_thread_.joinable()) {
+                producer_thread_.join();
+            }
+            if (consumer_thread_.joinable()) {
+                consumer_thread_.join();
+            }
+            throw;
+        }
+        std::unique_lock<std::mutex> lock(mutex_);
+        state_changed_.wait(lock, [this] { return initialized_workers_ == 2u; });
+    }
+
+    persistent_parallel_executor(const persistent_parallel_executor &) = delete;
+    persistent_parallel_executor &operator=(const persistent_parallel_executor &) = delete;
+
+    ~persistent_parallel_executor() {
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            stop_ = true;
+        }
+        state_changed_.notify_all();
+        if (producer_thread_.joinable()) {
+            producer_thread_.join();
+        }
+        if (consumer_thread_.joinable()) {
+            consumer_thread_.join();
+        }
+    }
+
+    [[nodiscard]] sample_result run(task_type producer_task,
+                                    task_type consumer_task) {
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            producer_metrics_ = {};
+            consumer_metrics_ = {};
+            producer_metrics_.affinity_applied = producer_affinity_applied_;
+            consumer_metrics_.affinity_applied = consumer_affinity_applied_;
+            producer_error_ = nullptr;
+            consumer_error_ = nullptr;
+            producer_task_ = std::move(producer_task);
+            consumer_task_ = std::move(consumer_task);
+            ready_workers_ = 0u;
+            completed_workers_ = 0u;
+            go_.store(false, std::memory_order_relaxed);
+            ++generation_;
+        }
+        state_changed_.notify_all();
+
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            state_changed_.wait(lock, [this] { return ready_workers_ == 2u; });
+        }
+
+        const auto started = clock_type::now();
+        go_.store(true, std::memory_order_release);
+
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            state_changed_.wait(lock, [this] { return completed_workers_ == 2u; });
+        }
+        const auto ended = std::max(producer_ended_, consumer_ended_);
+
+        if (producer_error_ != nullptr) {
+            std::rethrow_exception(producer_error_);
+        }
+        if (consumer_error_ != nullptr) {
+            std::rethrow_exception(consumer_error_);
+        }
+
+        sample_result result{};
+        result.duration_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(ended - started).count());
+        result.producer_full_events = producer_metrics_.full_events;
+        result.consumer_empty_events = consumer_metrics_.empty_events;
+        result.checksum = consumer_metrics_.checksum;
+        result.lifetime_sink = consumer_metrics_.lifetime_sink;
+        result.producer_cpu_time_ns = producer_metrics_.cpu_time_ns;
+        result.consumer_cpu_time_ns = consumer_metrics_.cpu_time_ns;
+        result.producer_cpu_cycles = producer_metrics_.cpu_cycles;
+        result.consumer_cpu_cycles = consumer_metrics_.cpu_cycles;
+        result.producer_affinity_applied = producer_metrics_.affinity_applied;
+        result.consumer_affinity_applied = consumer_metrics_.affinity_applied;
+        result.verified = producer_metrics_.sequence_ok && consumer_metrics_.sequence_ok &&
+                          producer_metrics_.completed == consumer_metrics_.completed;
+        return result;
+    }
+
+private:
+    void worker(const bool producer_side) noexcept {
+        endpoint_metrics &metrics = producer_side ? producer_metrics_ : consumer_metrics_;
+        const int cpu = producer_side ? affinity_.producer_cpu : affinity_.consumer_cpu;
+        const bool affinity_applied = pin_current_thread(cpu);
+        unsigned observed_generation = 0u;
+
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            if (producer_side) {
+                producer_affinity_applied_ = affinity_applied;
+            } else {
+                consumer_affinity_applied_ = affinity_applied;
+            }
+            ++initialized_workers_;
+        }
+        state_changed_.notify_all();
+
+        for (;;) {
+            task_type *task = nullptr;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                state_changed_.wait(lock, [this, observed_generation] {
+                    return stop_ || generation_ != observed_generation;
+                });
+                if (stop_) {
+                    return;
+                }
+                observed_generation = generation_;
+                task = producer_side ? &producer_task_ : &consumer_task_;
+                ++ready_workers_;
+            }
+            state_changed_.notify_all();
+
+            while (!go_.load(std::memory_order_acquire)) {
+                cpu_relax();
+            }
+
+            const std::uint64_t started_cpu = current_thread_cpu_time_ns();
+            const std::uint64_t started_cycles = current_thread_cpu_cycles();
+            try {
+                (*task)(metrics);
+            } catch (...) {
+                if (producer_side) {
+                    producer_error_ = std::current_exception();
+                } else {
+                    consumer_error_ = std::current_exception();
+                }
+            }
+            const std::uint64_t ended_cycles = current_thread_cpu_cycles();
+            const std::uint64_t ended_cpu = current_thread_cpu_time_ns();
+            const auto ended_wall = clock_type::now();
+            metrics.cpu_time_ns = ended_cpu >= started_cpu ? ended_cpu - started_cpu : 0u;
+            metrics.cpu_cycles = ended_cycles >= started_cycles ? ended_cycles - started_cycles : 0u;
+
+            {
+                const std::lock_guard<std::mutex> lock(mutex_);
+                if (producer_side) {
+                    producer_ended_ = ended_wall;
+                } else {
+                    consumer_ended_ = ended_wall;
+                }
+                ++completed_workers_;
+            }
+            state_changed_.notify_all();
+        }
+    }
+
+    affinity_pair affinity_{};
+    std::mutex mutex_{};
+    std::condition_variable state_changed_{};
+    std::atomic<bool> go_{false};
+    bool stop_{false};
+    unsigned initialized_workers_{0u};
+    unsigned generation_{0u};
+    unsigned ready_workers_{0u};
+    unsigned completed_workers_{0u};
+    bool producer_affinity_applied_{false};
+    bool consumer_affinity_applied_{false};
+    endpoint_metrics producer_metrics_{};
+    endpoint_metrics consumer_metrics_{};
+    task_type producer_task_{};
+    task_type consumer_task_{};
+    std::exception_ptr producer_error_{};
+    std::exception_ptr consumer_error_{};
+    clock_type::time_point producer_ended_{};
+    clock_type::time_point consumer_ended_{};
+    std::thread producer_thread_;
+    std::thread consumer_thread_;
+};
 
 thread_local volatile std::uint64_t lifetime_sink = 0u;
 
@@ -621,6 +856,24 @@ struct rigtorp_queue_adapter {
     [[nodiscard]] static std::uint64_t end_consumer() noexcept { return lifetime_sink; }
 };
 
+template <class Adapter>
+static void pretouch_queue(Adapter &queue) {
+    const std::size_t capacity = queue.capacity();
+    Adapter::begin_consumer();
+    for (std::size_t index = 0u; index < capacity; ++index) {
+        if (!queue.try_push(static_cast<std::uint64_t>(index + 1u))) {
+            throw std::runtime_error("benchmark pre-touch could not fill the queue");
+        }
+    }
+    for (std::size_t index = 0u; index < capacity; ++index) {
+        if (queue.try_front() == nullptr) {
+            throw std::runtime_error("benchmark pre-touch could not drain the queue");
+        }
+        queue.pop();
+    }
+    (void)Adapter::end_consumer();
+}
+
 [[nodiscard]] static std::uint64_t expected_checksum(const std::uint64_t count) noexcept {
     return (count & 1u) == 0u ? (count / 2u) * (count + 1u)
                               : count * ((count + 1u) / 2u);
@@ -644,15 +897,17 @@ struct rigtorp_queue_adapter {
 }
 
 template <class Adapter>
-[[nodiscard]] static sample_result measure_steady(const options &input) {
+[[nodiscard]] static sample_result measure_steady(
+    const options &input,
+    persistent_parallel_executor &executor) {
     Adapter queue(input.capacity);
     if (queue.capacity() != input.capacity) {
         throw std::runtime_error("benchmark queue did not expose the requested usable capacity");
     }
+    pretouch_queue(queue);
 
     const std::uint64_t item_count = input.items;
-    sample_result result = run_parallel(
-        input.affinity,
+    sample_result result = executor.run(
         [&](endpoint_metrics &metrics) {
             for (std::uint64_t sequence = 1u; sequence <= item_count; ++sequence) {
                 while (!queue.try_push(sequence)) {
@@ -692,11 +947,14 @@ template <class Adapter>
 }
 
 template <class Adapter>
-[[nodiscard]] static sample_result measure_boundary(const options &input) {
+[[nodiscard]] static sample_result measure_boundary(
+    const options &input,
+    persistent_parallel_executor &executor) {
     Adapter queue(input.capacity);
     if (queue.capacity() != input.capacity) {
         throw std::runtime_error("benchmark queue did not expose the requested usable capacity");
     }
+    pretouch_queue(queue);
 
     const std::uint64_t item_count =
         (input.items / static_cast<std::uint64_t>(input.capacity)) *
@@ -709,8 +967,7 @@ template <class Adapter>
     std::atomic<std::uint64_t> consumer_round{0u};
     std::atomic<std::size_t> ready_items{0u};
 
-    sample_result result = run_parallel(
-        input.affinity,
+    sample_result result = executor.run(
         [&](endpoint_metrics &metrics) {
             std::uint64_t sequence = 1u;
             for (std::uint64_t round = 0u; round < rounds; ++round) {
@@ -800,6 +1057,27 @@ struct rate_statistics {
     double sample_standard_deviation{0.0};
 };
 
+[[nodiscard]] static double coefficient_of_variation(
+    const rate_statistics &statistics) noexcept {
+    return statistics.mean != 0.0
+               ? statistics.sample_standard_deviation / std::abs(statistics.mean)
+               : std::numeric_limits<double>::infinity();
+}
+
+struct paired_direction_result {
+    std::string direction{};
+    std::string gate_reason{};
+    rate_statistics ratio_statistics{};
+    double ratio_cv{0.0};
+    double minimum_cpu_occupancy{0.0};
+    double spsc_median_retries_per_transfer{0.0};
+    double rigtorp_median_retries_per_transfer{0.0};
+    std::size_t samples{0u};
+    bool verified{false};
+    bool affinity_verified{false};
+    bool stable{false};
+};
+
 [[nodiscard]] static rate_statistics summarize_rates(const std::vector<double> &rates) {
     if (rates.empty()) {
         throw std::runtime_error("cannot summarize an empty benchmark sample set");
@@ -856,7 +1134,7 @@ public:
         using fifo_caa = spsc::fifo<std::uint64_t, Capacity, spsc::policy::CAA<>>;
 
         auto &out = *output_;
-        out << "{\"kind\":\"metadata\",\"format_version\":1"
+        out << "{\"kind\":\"metadata\",\"format_version\":" << benchmark_format_version
             << ",\"commit\":" << json_quote(input.commit)
             << ",\"platform\":" << json_quote(platform_description())
             << ",\"compiler\":" << json_quote(compiler_description())
@@ -870,7 +1148,20 @@ public:
             << ",\"affinity_selection\":" << json_quote(affinity_selection_name(input.affinity))
             << ",\"affinity_resolved\":[" << input.affinity.producer_cpu << ','
             << input.affinity.consumer_cpu << ']'
+            << ",\"affinity_directions\":"
+            << json_quote(affinity_direction_protocol_name(input))
+            << ",\"worker_lifecycle\":\"persistent_per_workload_case\""
             << ",\"retry_backoff\":\"cpu_relax\""
+            << ",\"thread_cycle_counter\":" << json_quote(thread_cycle_counter_name())
+            << ",\"ranking_gate\":{"
+            << "\"minimum_samples\":" << minimum_ranking_samples
+            << ",\"maximum_paired_ratio_cv\":" << maximum_paired_ratio_cv
+            << ",\"minimum_endpoint_cpu_occupancy\":"
+            << minimum_endpoint_cpu_occupancy
+            << ",\"maximum_direction_ratio_spread\":"
+            << maximum_direction_ratio_spread
+            << ",\"parity_ratio\":[" << parity_ratio_lower << ','
+            << parity_ratio_upper << "]}"
             << ",\"boundary_batch_size\":" << Capacity
             << ",\"spsc_cacheline_bytes\":" << SPSC_CACHELINE_BYTES
             << ",\"shadow_indices_enabled\":" << SPSC_ENABLE_SHADOW_INDICES
@@ -902,17 +1193,19 @@ public:
                       const char *implementation,
                       const char *policy,
                       const workload mode,
+                      const affinity_run &affinity,
                       const unsigned sample_index,
                       const sample_result &sample,
                       const int pair_index = -1,
                       const int order_in_pair = -1) {
         auto &out = *output_;
         out << std::setprecision(17)
-            << "{\"kind\":\"sample\",\"format_version\":1"
+            << "{\"kind\":\"sample\",\"format_version\":" << benchmark_format_version
             << ",\"commit\":" << json_quote(input.commit)
             << ",\"implementation\":" << json_quote(implementation)
             << ",\"policy\":" << json_quote(policy)
             << ",\"workload\":" << json_quote(workload_name(mode))
+            << ",\"direction\":" << json_quote(affinity.name)
             << ",\"sample\":" << sample_index
             << ",\"items\":" << sample.items
             << ",\"duration_ns\":" << sample.duration_ns
@@ -923,11 +1216,15 @@ public:
             << ",\"lifetime_sink\":" << sample.lifetime_sink
             << ",\"producer_cpu_time_ns\":" << sample.producer_cpu_time_ns
             << ",\"consumer_cpu_time_ns\":" << sample.consumer_cpu_time_ns
+            << ",\"producer_cpu_cycles\":" << sample.producer_cpu_cycles
+            << ",\"consumer_cpu_cycles\":" << sample.consumer_cpu_cycles
+            << ",\"minimum_cpu_occupancy\":" << sample.minimum_cpu_occupancy()
+            << ",\"retries_per_transfer\":" << sample.retries_per_transfer()
             << ",\"verified\":" << (sample.verified ? "true" : "false")
             << (pair_index >= 0 ? ",\"pair_index\":" + std::to_string(pair_index) : "")
             << (order_in_pair >= 0 ? ",\"order_in_pair\":" + std::to_string(order_in_pair) : "")
-            << ",\"affinity\":{\"producer_cpu\":" << input.affinity.producer_cpu
-            << ",\"consumer_cpu\":" << input.affinity.consumer_cpu
+            << ",\"affinity\":{\"producer_cpu\":" << affinity.affinity.producer_cpu
+            << ",\"consumer_cpu\":" << affinity.affinity.consumer_cpu
             << ",\"producer_applied\":" << (sample.producer_affinity_applied ? "true" : "false")
             << ",\"consumer_applied\":" << (sample.consumer_affinity_applied ? "true" : "false")
             << "}}\n";
@@ -938,33 +1235,46 @@ public:
                        const char *implementation,
                        const char *policy,
                        const workload mode,
+                       const affinity_run &affinity,
                        const std::vector<sample_result> &samples) {
         std::vector<double> rates;
+        std::vector<double> retries;
         rates.reserve(samples.size());
+        retries.reserve(samples.size());
         bool verified = true;
+        double minimum_cpu_occupancy = std::numeric_limits<double>::infinity();
         std::uint64_t full_events = 0u;
         std::uint64_t empty_events = 0u;
         for (const sample_result &sample : samples) {
             rates.push_back(sample.transfers_per_second());
+            retries.push_back(sample.retries_per_transfer());
+            minimum_cpu_occupancy =
+                std::min(minimum_cpu_occupancy, sample.minimum_cpu_occupancy());
             verified = verified && sample.verified;
             full_events += sample.producer_full_events;
             empty_events += sample.consumer_empty_events;
         }
         const rate_statistics statistics = summarize_rates(rates);
+        const rate_statistics retry_statistics = summarize_rates(retries);
 
         auto &out = *output_;
         out << std::setprecision(17)
-            << "{\"kind\":\"summary\",\"format_version\":1"
+            << "{\"kind\":\"summary\",\"format_version\":" << benchmark_format_version
             << ",\"commit\":" << json_quote(input.commit)
             << ",\"implementation\":" << json_quote(implementation)
             << ",\"policy\":" << json_quote(policy)
             << ",\"workload\":" << json_quote(workload_name(mode))
+            << ",\"direction\":" << json_quote(affinity.name)
             << ",\"samples\":" << samples.size()
             << ",\"min_transfers_per_second\":" << statistics.minimum
             << ",\"median_transfers_per_second\":" << statistics.median
             << ",\"mean_transfers_per_second\":" << statistics.mean
             << ",\"max_transfers_per_second\":" << statistics.maximum
             << ",\"sample_standard_deviation\":" << statistics.sample_standard_deviation
+            << ",\"rate_coefficient_of_variation\":"
+            << coefficient_of_variation(statistics)
+            << ",\"median_retries_per_transfer\":" << retry_statistics.median
+            << ",\"minimum_cpu_occupancy\":" << minimum_cpu_occupancy
             << ",\"producer_full_events_total\":" << full_events
             << ",\"consumer_empty_events_total\":" << empty_events
             << ",\"verified\":" << (verified ? "true" : "false")
@@ -972,32 +1282,74 @@ public:
         out.flush();
     }
 
-    void write_paired_summary(const options &input,
-                              const workload mode,
-                              const std::vector<sample_result> &spsc_samples,
-                              const std::vector<sample_result> &rigtorp_samples) {
+    [[nodiscard]] paired_direction_result write_paired_summary(
+        const options &input,
+        const workload mode,
+        const affinity_run &affinity,
+        const std::vector<sample_result> &spsc_samples,
+        const std::vector<sample_result> &rigtorp_samples) {
         if (spsc_samples.size() != rigtorp_samples.size() || spsc_samples.empty()) {
             throw std::runtime_error("paired benchmark samples are inconsistent");
         }
 
         std::vector<double> ratios;
+        std::vector<double> spsc_retries;
+        std::vector<double> rigtorp_retries;
         ratios.reserve(spsc_samples.size());
+        spsc_retries.reserve(spsc_samples.size());
+        rigtorp_retries.reserve(rigtorp_samples.size());
         bool verified = true;
+        bool affinity_verified = affinity.affinity.producer_cpu >= 0 &&
+                                 affinity.affinity.consumer_cpu >= 0 &&
+                                 affinity.affinity.producer_cpu !=
+                                     affinity.affinity.consumer_cpu;
+        double minimum_cpu_occupancy = std::numeric_limits<double>::infinity();
         for (std::size_t index = 0u; index < spsc_samples.size(); ++index) {
             const double spsc_rate = spsc_samples[index].transfers_per_second();
             if (spsc_rate == 0.0) {
                 throw std::runtime_error("paired benchmark produced a zero SPSC rate");
             }
             ratios.push_back(rigtorp_samples[index].transfers_per_second() / spsc_rate);
+            spsc_retries.push_back(spsc_samples[index].retries_per_transfer());
+            rigtorp_retries.push_back(rigtorp_samples[index].retries_per_transfer());
+            minimum_cpu_occupancy = std::min(
+                minimum_cpu_occupancy,
+                std::min(spsc_samples[index].minimum_cpu_occupancy(),
+                         rigtorp_samples[index].minimum_cpu_occupancy()));
             verified = verified && spsc_samples[index].verified && rigtorp_samples[index].verified;
+            affinity_verified = affinity_verified &&
+                                spsc_samples[index].producer_affinity_applied &&
+                                spsc_samples[index].consumer_affinity_applied &&
+                                rigtorp_samples[index].producer_affinity_applied &&
+                                rigtorp_samples[index].consumer_affinity_applied;
         }
         const rate_statistics statistics = summarize_rates(ratios);
+        const double ratio_cv = coefficient_of_variation(statistics);
+        const double spsc_median_retries = summarize_rates(spsc_retries).median;
+        const double rigtorp_median_retries = summarize_rates(rigtorp_retries).median;
+        std::string gate_reason = "passed";
+        if (ratios.size() < minimum_ranking_samples) {
+            gate_reason = "insufficient_samples";
+        } else if (!verified) {
+            gate_reason = "unverified_sample";
+        } else if (!affinity_verified) {
+            gate_reason = "affinity_not_applied";
+        } else if (ratio_cv > maximum_paired_ratio_cv) {
+            gate_reason = "paired_ratio_variation";
+        } else if (minimum_cpu_occupancy < minimum_endpoint_cpu_occupancy) {
+            gate_reason = "low_cpu_occupancy";
+        }
+        const bool stable = gate_reason == "passed";
 
         auto &out = *output_;
         out << std::setprecision(17)
-            << "{\"kind\":\"paired_summary\",\"format_version\":1"
+            << "{\"kind\":\"paired_summary\",\"format_version\":"
+            << benchmark_format_version
             << ",\"commit\":" << json_quote(input.commit)
             << ",\"workload\":" << json_quote(workload_name(mode))
+            << ",\"direction\":" << json_quote(affinity.name)
+            << ",\"affinity\":[" << affinity.affinity.producer_cpu << ','
+            << affinity.affinity.consumer_cpu << ']'
             << ",\"numerator\":\"rigtorp::SPSCQueue\""
             << ",\"denominator\":\"spsc::queue<CFA>\""
             << ",\"samples\":" << ratios.size()
@@ -1006,7 +1358,107 @@ public:
             << ",\"mean_rate_ratio\":" << statistics.mean
             << ",\"max_rate_ratio\":" << statistics.maximum
             << ",\"sample_standard_deviation\":" << statistics.sample_standard_deviation
+            << ",\"ratio_coefficient_of_variation\":" << ratio_cv
+            << ",\"minimum_cpu_occupancy\":" << minimum_cpu_occupancy
+            << ",\"spsc_median_retries_per_transfer\":" << spsc_median_retries
+            << ",\"rigtorp_median_retries_per_transfer\":" << rigtorp_median_retries
+            << ",\"affinity_verified\":" << (affinity_verified ? "true" : "false")
+            << ",\"gate_reason\":" << json_quote(gate_reason)
+            << ",\"ranking_eligible\":" << (stable ? "true" : "false")
             << ",\"verified\":" << (verified ? "true" : "false")
+            << "}\n";
+        out.flush();
+
+        return {affinity.name,
+                gate_reason,
+                statistics,
+                ratio_cv,
+                minimum_cpu_occupancy,
+                spsc_median_retries,
+                rigtorp_median_retries,
+                ratios.size(),
+                verified,
+                affinity_verified,
+                stable};
+    }
+
+    void write_comparison_summary(
+        const options &input,
+        const workload mode,
+        const std::vector<paired_direction_result> &directions) {
+        std::string status = "inconclusive";
+        std::string reason = "bidirectional_affinity_required";
+        bool ranking_eligible = false;
+        double geometric_mean_ratio = 0.0;
+        double direction_ratio_spread = 0.0;
+        std::string forward_gate_reason = "missing";
+        std::string reverse_gate_reason = "missing";
+
+        if (!directions.empty()) {
+            forward_gate_reason = directions.front().gate_reason;
+        }
+        if (directions.size() == 2u) {
+            const paired_direction_result &forward = directions[0];
+            const paired_direction_result &reverse = directions[1];
+            reverse_gate_reason = reverse.gate_reason;
+            const double first_ratio = forward.ratio_statistics.median;
+            const double second_ratio = reverse.ratio_statistics.median;
+            geometric_mean_ratio = std::sqrt(first_ratio * second_ratio);
+            const double lower = std::min(first_ratio, second_ratio);
+            const double upper = std::max(first_ratio, second_ratio);
+            direction_ratio_spread = lower != 0.0 ? (upper / lower) - 1.0
+                                                  : std::numeric_limits<double>::infinity();
+
+            if (!forward.stable && !reverse.stable) {
+                reason = "both_direction_sample_gates_failed";
+            } else if (!forward.stable) {
+                reason = "forward_" + forward.gate_reason;
+            } else if (!reverse.stable) {
+                reason = "reverse_" + reverse.gate_reason;
+            } else if (direction_ratio_spread > maximum_direction_ratio_spread) {
+                reason = "direction_sensitive_result";
+            } else {
+                const bool both_spsc = first_ratio < parity_ratio_lower &&
+                                       second_ratio < parity_ratio_lower;
+                const bool both_rigtorp = first_ratio > parity_ratio_upper &&
+                                          second_ratio > parity_ratio_upper;
+                const bool both_parity = first_ratio >= parity_ratio_lower &&
+                                         first_ratio <= parity_ratio_upper &&
+                                         second_ratio >= parity_ratio_lower &&
+                                         second_ratio <= parity_ratio_upper;
+                if (both_spsc) {
+                    status = "spsc_faster";
+                    reason = "both_directions_agree";
+                    ranking_eligible = true;
+                } else if (both_rigtorp) {
+                    status = "rigtorp_faster";
+                    reason = "both_directions_agree";
+                    ranking_eligible = true;
+                } else if (both_parity) {
+                    status = "parity";
+                    reason = "both_directions_within_parity_band";
+                    ranking_eligible = true;
+                } else {
+                    reason = "direction_classification_disagrees";
+                }
+            }
+        }
+
+        auto &out = *output_;
+        out << std::setprecision(17)
+            << "{\"kind\":\"comparison_summary\",\"format_version\":"
+            << benchmark_format_version
+            << ",\"commit\":" << json_quote(input.commit)
+            << ",\"workload\":" << json_quote(workload_name(mode))
+            << ",\"status\":" << json_quote(status)
+            << ",\"reason\":" << json_quote(reason)
+            << ",\"ranking_eligible\":" << (ranking_eligible ? "true" : "false")
+            << ",\"geometric_mean_rate_ratio\":" << geometric_mean_ratio
+            << ",\"direction_ratio_spread\":" << direction_ratio_spread
+            << ",\"directions\":" << directions.size()
+            << ",\"forward_gate_reason\":" << json_quote(forward_gate_reason)
+            << ",\"reverse_gate_reason\":" << json_quote(reverse_gate_reason)
+            << ",\"ratio_semantics\":\"rigtorp_over_spsc\""
             << "}\n";
         out.flush();
     }
@@ -1018,31 +1470,71 @@ private:
 
 template <class Adapter>
 [[nodiscard]] static sample_result run_measurement(const options &input,
-                                                    const workload mode) {
-    return mode == workload::steady ? measure_steady<Adapter>(input)
-                                     : measure_boundary<Adapter>(input);
+                                                     const workload mode,
+                                                     persistent_parallel_executor &executor) {
+    return mode == workload::steady ? measure_steady<Adapter>(input, executor)
+                                     : measure_boundary<Adapter>(input, executor);
+}
+
+struct execution_context {
+    affinity_run affinity{};
+    std::unique_ptr<persistent_parallel_executor> executor{};
+};
+
+[[nodiscard]] static std::vector<execution_context> make_execution_contexts(
+    const options &input) {
+    std::vector<execution_context> contexts;
+    for (const affinity_run &affinity : make_affinity_runs(input)) {
+        contexts.push_back(
+            {affinity, std::make_unique<persistent_parallel_executor>(affinity.affinity)});
+    }
+    return contexts;
+}
+
+template <class Fn>
+static void for_each_direction(const std::size_t count,
+                               const unsigned iteration,
+                               Fn &&function) {
+    for (std::size_t offset = 0u; offset < count; ++offset) {
+        const std::size_t index = (iteration & 1u) == 0u
+                                      ? offset
+                                      : static_cast<std::size_t>(count - offset - 1u);
+        function(index);
+    }
 }
 
 template <class Adapter>
 static void run_case(jsonl_writer &writer,
                      const options &input,
-                     const char *implementation,
-                     const char *policy,
-                     const workload mode) {
+                      const char *implementation,
+                      const char *policy,
+                      const workload mode) {
+    std::vector<execution_context> contexts = make_execution_contexts(input);
     for (unsigned warmup = 0u; warmup < input.warmup; ++warmup) {
-        (void)run_measurement<Adapter>(input, mode);
+        for_each_direction(contexts.size(), warmup, [&](const std::size_t direction) {
+            (void)run_measurement<Adapter>(input, mode, *contexts[direction].executor);
+        });
     }
 
-    std::vector<sample_result> samples;
-    samples.reserve(input.samples);
+    std::vector<std::vector<sample_result>> samples(contexts.size());
+    for (std::vector<sample_result> &direction_samples : samples) {
+        direction_samples.reserve(input.samples);
+    }
     bool all_verified = true;
     for (unsigned sample = 0u; sample < input.samples; ++sample) {
-        sample_result result = run_measurement<Adapter>(input, mode);
-        writer.write_sample(input, implementation, policy, mode, sample, result);
-        all_verified = all_verified && result.verified;
-        samples.push_back(result);
+        for_each_direction(contexts.size(), sample, [&](const std::size_t direction) {
+            sample_result result = run_measurement<Adapter>(
+                input, mode, *contexts[direction].executor);
+            writer.write_sample(input, implementation, policy, mode,
+                                contexts[direction].affinity, sample, result);
+            all_verified = all_verified && result.verified;
+            samples[direction].push_back(result);
+        });
     }
-    writer.write_summary(input, implementation, policy, mode, samples);
+    for (std::size_t direction = 0u; direction < contexts.size(); ++direction) {
+        writer.write_summary(input, implementation, policy, mode,
+                             contexts[direction].affinity, samples[direction]);
+    }
     if (!all_verified) {
         throw std::runtime_error("benchmark correctness check failed");
     }
@@ -1055,74 +1547,109 @@ static void run_paired_queue_case(jsonl_writer &writer,
     using spsc_adapter = spsc_queue_adapter<Capacity, spsc::policy::CFA<>>;
     using rigtorp_adapter = rigtorp_queue_adapter<Capacity>;
 
-    const auto spsc_first_for = [mode](const unsigned pair_index) noexcept {
-        // Alternate execution order. Starting the boundary phase in the
-        // opposite direction makes the total default capture exactly balanced.
-        const unsigned phase_bias = mode == workload::boundary ? 1u : 0u;
-        return ((pair_index + phase_bias) & 1u) == 0u;
+    struct paired_context {
+        execution_context execution{};
+        std::vector<sample_result> spsc_samples{};
+        std::vector<sample_result> rigtorp_samples{};
     };
-    const auto run_pair = [&](const unsigned pair_index,
-                              const bool record,
-                              std::vector<sample_result> *spsc_samples,
-                              std::vector<sample_result> *rigtorp_samples) {
+
+    std::vector<execution_context> executions = make_execution_contexts(input);
+    std::vector<paired_context> contexts;
+    contexts.reserve(executions.size());
+    for (execution_context &execution : executions) {
+        paired_context context{};
+        context.execution = std::move(execution);
+        context.spsc_samples.reserve(input.samples);
+        context.rigtorp_samples.reserve(input.samples);
+        contexts.push_back(std::move(context));
+    }
+
+    const auto spsc_first_for = [mode](const unsigned pair_index,
+                                       const std::size_t direction) noexcept {
+        // Alternate execution order. Starting the boundary phase in the
+        // opposite direction, and offsetting the reverse-affinity case, keeps
+        // implementation order balanced across both endpoint assignments.
+        const unsigned phase_bias = mode == workload::boundary ? 1u : 0u;
+        return ((pair_index + phase_bias + static_cast<unsigned>(direction)) & 1u) == 0u;
+    };
+    const auto run_pair = [&](paired_context &context,
+                              const std::size_t direction,
+                              const unsigned pair_index,
+                              const bool record) {
         sample_result spsc_result{};
         sample_result rigtorp_result{};
-        const bool spsc_first = spsc_first_for(pair_index);
+        const bool spsc_first = spsc_first_for(pair_index, direction);
         if (spsc_first) {
-            spsc_result = run_measurement<spsc_adapter>(input, mode);
+            spsc_result = run_measurement<spsc_adapter>(
+                input, mode, *context.execution.executor);
             if (record) {
-                writer.write_sample(input, "spsc::queue", "CFA", mode, pair_index,
+                writer.write_sample(input, "spsc::queue", "CFA", mode,
+                                    context.execution.affinity, pair_index,
                                     spsc_result, static_cast<int>(pair_index), 0);
             }
-            rigtorp_result = run_measurement<rigtorp_adapter>(input, mode);
+            rigtorp_result = run_measurement<rigtorp_adapter>(
+                input, mode, *context.execution.executor);
             if (record) {
                 writer.write_sample(input, "rigtorp::SPSCQueue", "rigtorp-v1.1", mode,
-                                    pair_index, rigtorp_result,
+                                    context.execution.affinity, pair_index, rigtorp_result,
                                     static_cast<int>(pair_index), 1);
             }
         } else {
-            rigtorp_result = run_measurement<rigtorp_adapter>(input, mode);
+            rigtorp_result = run_measurement<rigtorp_adapter>(
+                input, mode, *context.execution.executor);
             if (record) {
                 writer.write_sample(input, "rigtorp::SPSCQueue", "rigtorp-v1.1", mode,
-                                    pair_index, rigtorp_result,
+                                    context.execution.affinity, pair_index, rigtorp_result,
                                     static_cast<int>(pair_index), 0);
             }
-            spsc_result = run_measurement<spsc_adapter>(input, mode);
+            spsc_result = run_measurement<spsc_adapter>(
+                input, mode, *context.execution.executor);
             if (record) {
-                writer.write_sample(input, "spsc::queue", "CFA", mode, pair_index,
+                writer.write_sample(input, "spsc::queue", "CFA", mode,
+                                    context.execution.affinity, pair_index,
                                     spsc_result, static_cast<int>(pair_index), 1);
             }
         }
         if (record) {
-            spsc_samples->push_back(spsc_result);
-            rigtorp_samples->push_back(rigtorp_result);
+            context.spsc_samples.push_back(spsc_result);
+            context.rigtorp_samples.push_back(rigtorp_result);
         }
     };
 
     for (unsigned warmup = 0u; warmup < input.warmup; ++warmup) {
-        run_pair(warmup, false, nullptr, nullptr);
+        for_each_direction(contexts.size(), warmup, [&](const std::size_t direction) {
+            run_pair(contexts[direction], direction, warmup, false);
+        });
     }
 
-    std::vector<sample_result> spsc_samples;
-    std::vector<sample_result> rigtorp_samples;
-    spsc_samples.reserve(input.samples);
-    rigtorp_samples.reserve(input.samples);
     for (unsigned sample = 0u; sample < input.samples; ++sample) {
-        run_pair(sample, true, &spsc_samples, &rigtorp_samples);
+        for_each_direction(contexts.size(), sample, [&](const std::size_t direction) {
+            run_pair(contexts[direction], direction, sample, true);
+        });
     }
-
-    writer.write_summary(input, "spsc::queue", "CFA", mode, spsc_samples);
-    writer.write_summary(input, "rigtorp::SPSCQueue", "rigtorp-v1.1", mode,
-                         rigtorp_samples);
-    writer.write_paired_summary(input, mode, spsc_samples, rigtorp_samples);
 
     const auto has_unverified = [](const std::vector<sample_result> &samples) {
         return std::any_of(samples.begin(), samples.end(),
                            [](const sample_result &sample) { return !sample.verified; });
     };
-    if (has_unverified(spsc_samples) || has_unverified(rigtorp_samples)) {
-        throw std::runtime_error("paired queue benchmark correctness check failed");
+
+    std::vector<paired_direction_result> direction_summaries;
+    direction_summaries.reserve(contexts.size());
+    for (paired_context &context : contexts) {
+        writer.write_summary(input, "spsc::queue", "CFA", mode,
+                             context.execution.affinity, context.spsc_samples);
+        writer.write_summary(input, "rigtorp::SPSCQueue", "rigtorp-v1.1", mode,
+                             context.execution.affinity, context.rigtorp_samples);
+        direction_summaries.push_back(writer.write_paired_summary(
+            input, mode, context.execution.affinity,
+            context.spsc_samples, context.rigtorp_samples));
+
+        if (has_unverified(context.spsc_samples) ||
+            has_unverified(context.rigtorp_samples)) {
+            throw std::runtime_error("paired queue benchmark correctness check failed");
+        }
     }
+    writer.write_comparison_summary(input, mode, direction_summaries);
 }
 
 template <reg Capacity>

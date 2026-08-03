@@ -38,12 +38,17 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   views cannot realign caller-owned storage. `fast_*` names are now explicitly
   documented as legacy aliases rather than throughput claims.
 - The SPSC benchmark now uses topology-aware physical-core affinity,
-  longer paired alternating samples, median/standard-deviation summaries,
-  CPU-relax retries rather than scheduler yields, endpoint CPU-time telemetry,
-  and optional cross-revision header selection for controlled comparisons.
+  persistent pinned workers, both producer/consumer CPU assignments, paired
+  alternating samples, pre-touched queues, CPU-relax retries, endpoint CPU-time
+  and thread-cycle telemetry, and optional cross-revision header selection.
+- Benchmark format version 2 emits per-direction paired summaries and a gated
+  `spsc_faster`/`rigtorp_faster`/`parity`/`inconclusive` comparison result.
+  Legacy single-direction captures are diagnostic-only after identical Windows
+  runs were observed to reverse the apparent winner.
 - Benchmark manifests now distinguish release evidence from diagnostic history;
   release captures require clean library/harness revisions, a minimum sample
-  protocol, and distinct producer/consumer affinity.
+  protocol, unchanged pre/post power state, and distinct bidirectional
+  producer/consumer affinity.
 - qmake dashboard/test runner builds now target C++17 and keep Debug/Release binaries in separate `bin/debug` and `bin/release` directories.
 - qmake C++17 test runners force `SPSC_HAS_SPAN=0`; `std::span` helpers remain available only for C++20-capable builds that enable span support.
 - qmake test runners can now select their language standard and span setting;

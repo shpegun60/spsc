@@ -7,7 +7,7 @@ Main integration project for the `spsc` buffer library and paranoid API tests.
 Quick links:
 
 - [Changelog](CHANGELOG.md)
-- [Reproducible benchmark baseline](benchmarks/README.md)
+- [Reproducible benchmark and validity protocol](benchmarks/README.md)
 - [Quick Start](src/spsc/README.md)
 - [Documentation Hub](src/spsc/docs/README.md)
 - [Common Concepts](src/spsc/docs/common-concepts.md)
@@ -116,8 +116,8 @@ Notes:
 
 - [`SPSC_HARDENING_ROADMAP.md`](SPSC_HARDENING_ROADMAP.md): the active,
   slice-by-slice contract, correctness, test, CI, and performance hardening plan.
-- [`benchmarks/`](benchmarks/README.md): reproducible before/after baseline
-  harness with a pinned Rigtorp comparator.
+- [`benchmarks/`](benchmarks/README.md): reproducible, validity-gated measurement
+  harness with a pinned Rigtorp comparator and explicit `inconclusive` output.
 - `src/spsc/`: core SPSC library headers (`fifo`, `queue`, `typed_pool`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, etc.).
 - `src/tests/*_test.cpp`: paranoid test suites for each buffer type.
 - `spsc_test.pro`: Qt/qmake project file.

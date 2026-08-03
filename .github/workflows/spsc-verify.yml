@@ -112,6 +112,34 @@ jobs:
           sudo apt-get install --no-install-recommends -y ${{ matrix.package }}
       - name: Verify owner-load counts in the single-item FIFO and queue probes
         run: bash scripts/check_h8_hotpath_asm.sh --compiler '${{ matrix.compiler }}'
+      - name: Verify H0R benchmark protocol and JSON classification
+        run: |
+          extra_flags=()
+          if [[ '${{ matrix.compiler }}' == 'g++' ]]; then
+            extra_flags+=(--param=destructive-interference-size=64)
+          fi
+          '${{ matrix.compiler }}' \
+            -std=c++17 -O2 -DNDEBUG -pthread -Wall -Wextra -Werror -pedantic-errors \
+            "${extra_flags[@]}" \
+            -I. -Isrc -Ithird_party/rigtorp_spscqueue/include \
+            -o /tmp/spsc_bench benchmarks/spsc_bench.cpp
+          /tmp/spsc_bench \
+            --items 65536 --samples 3 --warmup 1 --capacity 64 \
+            --suite queue --affinity auto --directions both \
+            --output /tmp/spsc-benchmark-smoke.jsonl --commit ci-smoke
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          records = [json.loads(line) for line in Path('/tmp/spsc-benchmark-smoke.jsonl').read_text().splitlines()]
+          samples = [record for record in records if record['kind'] == 'sample']
+          comparisons = [record for record in records if record['kind'] == 'comparison_summary']
+          assert samples and all(record['verified'] for record in samples)
+          assert {record['direction'] for record in samples} == {'forward', 'reverse'}
+          assert {record['workload'] for record in comparisons} == {'steady', 'boundary'}
+          assert all(record['status'] == 'inconclusive' for record in comparisons)
+          assert all(not record['ranking_eligible'] for record in comparisons)
+          PY
       - name: Verify relaxed publication is rejected
         shell: pwsh
         run: ./scripts/test_relaxed_publication_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
@@ -228,3 +256,34 @@ jobs:
           $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify MSVC H0R benchmark protocol
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
+          $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
+          $binary = Join-Path $env:RUNNER_TEMP 'spsc_bench.exe'
+          $output = Join-Path $env:RUNNER_TEMP 'spsc-benchmark-smoke.jsonl'
+          $command = "call `"$vcvars`" && cl /nologo /std:c++17 /O2 /DNDEBUG /EHsc /W4 /WX /I. /Isrc /external:Ithird_party\rigtorp_spscqueue\include /external:W0 benchmarks\spsc_bench.cpp /Fe:`"$binary`""
+          cmd.exe /d /s /c $command
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $binary --items 65536 --samples 3 --warmup 1 --capacity 64 `
+            --suite queue --affinity auto --directions both `
+            --output $output --commit ci-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $records = @(Get-Content -LiteralPath $output | ForEach-Object { $_ | ConvertFrom-Json })
+          $samples = @($records | Where-Object kind -eq sample)
+          $comparisons = @($records | Where-Object kind -eq comparison_summary)
+          if (@($samples | Where-Object { -not $_.verified }).Count -ne 0) {
+            throw 'MSVC benchmark smoke produced an unverified sample.'
+          }
+          if (@($samples.direction | Sort-Object -Unique).Count -ne 2) {
+            throw 'MSVC benchmark smoke did not exercise both affinity directions.'
+          }
+          if ($comparisons.Count -ne 2 -or
+              @($comparisons | Where-Object ranking_eligible).Count -ne 0) {
+            throw 'MSVC benchmark smoke classification contract failed.'
+          }
