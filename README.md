@@ -114,8 +114,8 @@ Notes:
 
 ## What Is Here
 
-- [`SPSC_HARDENING_ROADMAP.md`](SPSC_HARDENING_ROADMAP.md): the active,
-  slice-by-slice contract, correctness, test, CI, and performance hardening plan.
+- [`SPSC_HARDENING_ROADMAP.md`](SPSC_HARDENING_ROADMAP.md): the completed 2.0
+  contract, correctness, test, CI, and performance hardening record.
 - [`benchmarks/`](benchmarks/README.md): reproducible, validity-gated measurement
   harness with a pinned Rigtorp comparator and explicit `inconclusive` output.
 - `src/spsc/`: core SPSC library headers (`fifo`, `queue`, `typed_pool`, `fifo_view`, `pool`, `pool_view`, `latest`, `chunk`, etc.).
