@@ -87,7 +87,7 @@ reproducible benchmark/CI matrix.
 | H8 | Fused monolithic single-item operations | H0, H3, H5-H7 | complete (2026-08-02) |
 | H0R | Benchmark evidence validity repair | H0, H8 | complete (2026-08-03) |
 | H9 | Shadow-aware bulk snapshot path | H8, H0R | deferred (2026-08-03; outside the 2.0 gate) |
-| H10 | Alias and release decision | H8, H0R | implementation complete; final CI pending |
+| H10 | Alias and release decision | H8, H0R | complete (2026-08-03) |
 
 `H1` precedes `H0` only because deleting forwarding overloads does not change
 runtime code generation. The critical performance sequence remains
@@ -892,7 +892,7 @@ bulk benefit are demonstrated independently. Do not prototype it in
 
 ## H10 - Alias And Release Decision
 
-Status: implementation complete; final CI pending
+Status: complete (2026-08-03)
 
 ### Goal
 
@@ -988,8 +988,12 @@ then.
   nine suites: `buffer_pool`, `chunk`, `fifo`, `fifo_view`, `latest`, `pool`,
   `pool_view`, `queue`, and `typed_pool`.
 - `git diff --check` passed. H9 and `SPSCbase` runtime code remain untouched.
-  Full cross-toolchain CI on the committed revision remains the H10 closeout
-  gate.
+- GitHub Actions run
+  [30848583169](https://github.com/shpegun60/spsc/actions/runs/30848583169)
+  passed all 20 jobs on committed revision
+  `0e4027b27f104b7cb0ea8b77181be37df7725dbb`, including the complete Qt
+  Debug/Release shadow matrix, GCC/Clang/MSVC H8 assembly gates, sanitizers,
+  genuine 32-bit shadow gates, AArch64, MSVC, and MinGW header smoke tests.
 
 ## Final Production Gate
 
