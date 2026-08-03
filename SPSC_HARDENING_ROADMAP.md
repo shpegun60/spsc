@@ -711,6 +711,16 @@ fusion, even if they land in the same release phase.
   are not presented as a library-wide throughput claim. The canonical H0
   harness currently has these two payload models but not a literal multi-size
   sweep; H9/H10 must extend that before any general alias or performance claim.
+- The accepted performance position for the comparable canonical
+  `queue<CFA>` workload is practical parity with Rigtorp. The stable paired
+  capture records `Rigtorp / spsc = 0.962` in steady state: `spsc::queue` was
+  about 4% ahead, which is inside that host's 4-10% steady-state variation and
+  is therefore recorded as parity rather than a ranking claim. Its forced
+  empty/full boundary ratio was `0.660`, where `spsc::queue` was about 52%
+  ahead. H8's controlled queue boundary delta was `-0.2%`, so it introduced no
+  measured regression against that position. This conclusion applies only to
+  the recorded GCC 15.2, 8-byte lifetime-payload, capacity-1024 paired setup;
+  H9/H10 must still broaden it before any cross-platform or all-payload claim.
 
 ## H9 - Shadow-Aware Bulk Snapshot Path
 
