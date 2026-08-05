@@ -23,8 +23,9 @@
  *
  *       * VolatileCounter<T>
  *           - Volatile integral variable.
- *           - Prevents compiler reordering around loads/stores of this object.
- *           - Does NOT provide cross-core ordering guarantees.
+ *           - Makes accesses to the counter itself volatile accesses.
+ *           - Does NOT order surrounding non-volatile payload accesses and is
+ *             not a standalone synchronization primitive.
  *
  *       * AtomicCounter<T, Orders>
  *           - std::atomic<U> wrapper (U is unsigned version of T).
@@ -44,8 +45,9 @@
  *           - AlignB defaults to ::spsc::hw::cacheline_bytes.
  *
  * Integration hints:
- *   - Use PlainCounter/VolatileCounter for single-core microcontroller-only
- *     builds when you control all access patterns.
+ *   - Use PlainCounter for a single context or externally synchronized access.
+ *   - Use VolatileCounter only when external synchronization or a documented
+ *     compiler/platform contract supplies payload ordering and visibility.
  *   - Use AtomicCounter for cross-core or host code, or when you want strict
  *     acquire/release semantics for SPSC queues.
  *   - Use CachelineXxxCounter aliases (CachelineAtomicCounter, etc.) when
@@ -64,6 +66,7 @@
 
 #include <type_traits>
 #include <atomic>
+#include <utility>
 
 #include "spsc_tools.hpp"      // RB_FORCEINLINE / RB_NOINLINE / etc.
 #include "spsc_cacheline.hpp"  // ::spsc::hw::cacheline_bytes
@@ -179,8 +182,11 @@ public:
 };
 
 /* ----------------------------- VolatileCounter -----------------------------
- * Single-core publish/observe; prevents compiler reordering around this object.
- * NOT a memory barrier; not safe for multi-core without external sync.
+ * Volatile accesses apply only to the counter object. They do not create a
+ * portable C++ happens-before edge and do not order surrounding non-volatile
+ * payload accesses. Use only with external synchronization or a documented
+ * compiler/platform publication contract; single-core execution alone is not
+ * such a guarantee.
  * --------------------------------------------------------------------------- */
 template<typename T>
 class VolatileCounter {
@@ -281,43 +287,56 @@ namespace detail {
     }
 
     /* --------------------------------------------------------------------
-     * cacheline_pad<PadBytes>:
-     *   - Helper to avoid zero-sized arrays in standard C++.
-     *   - Specialization for PadBytes == 0 becomes an empty type.
-     * -------------------------------------------------------------------- */
-    template<reg PadBytes>
-    struct cacheline_pad {
-        unsigned char padding[PadBytes];
-    };
-
-    template<>
-    struct cacheline_pad<0> {
-        // No padding needed
-    };
-
-    /* --------------------------------------------------------------------
      * CacheSlot<T, L>:
      *   - Aligns T to L.
      *   - Adds padding so that sizeof(CacheSlot) is a multiple of L.
+     *   - Omits the padding member entirely when T already fills whole slots.
      *   - L must be non-zero power-of-two and >= alignof(T).
      *
      * Typical use:
      *   CacheSlot<MyType, 64> slot;
      *   static_assert(sizeof(slot) % 64 == 0, "");
      * -------------------------------------------------------------------- */
-    template<class T, reg L>
+    template<
+        class T,
+        reg L,
+        reg PadBytes = (L == 0u)
+                           ? 0u
+                           : ((sizeof(T) % L) == 0u ? 0u
+                                                    : (L - (sizeof(T) % L)))
+    >
     struct CacheSlot {
+        static_assert(L != 0, "CacheSlot: alignment L must be non-zero");
+        static_assert((L & (L - 1u)) == 0u, "CacheSlot: alignment L must be power-of-two");
+        static_assert(L >= alignof(T), "CacheSlot: L must be >= alignof(T)");
+        static_assert(PadBytes != 0u,
+                      "CacheSlot: the primary template requires padding");
+
+        static constexpr reg kAlign   = L;
+        static constexpr reg kRawSize = sizeof(T);
+        static constexpr reg kRem     = kRawSize % kAlign;
+        static constexpr reg kPad     = PadBytes;
+
+        alignas(L) T value{};
+        unsigned char padding[kPad];
+    };
+
+    /* A zero-length array is non-standard, while an empty padding member still
+     * occupies storage and can round an exact one-line object up to two lines.
+     * Specializing the whole slot keeps the C++17 layout exact.
+     */
+    template<class T, reg L>
+    struct CacheSlot<T, L, 0u> {
         static_assert(L != 0, "CacheSlot: alignment L must be non-zero");
         static_assert((L & (L - 1u)) == 0u, "CacheSlot: alignment L must be power-of-two");
         static_assert(L >= alignof(T), "CacheSlot: L must be >= alignof(T)");
 
         static constexpr reg kAlign   = L;
         static constexpr reg kRawSize = sizeof(T);
-        static constexpr reg kRem     = kRawSize % kAlign;
-        static constexpr reg kPad     = (kRem == 0u) ? 0u : (kAlign - kRem);
+        static constexpr reg kRem     = 0u;
+        static constexpr reg kPad     = 0u;
 
         alignas(L) T value{};
-        cacheline_pad<kPad> pad;
     };
 
 } // namespace detail
@@ -453,6 +472,8 @@ private:
 
     static_assert(sizeof(Slot) % AlignB == 0,
                   "CachelineCounter: Slot size must be multiple of AlignB");
+    static_assert(sizeof(Slot) == sizeof(Counter) + Slot::kPad,
+                  "CachelineCounter: Slot must contain only required padding");
 
 public:
     CachelineCounter() = default;

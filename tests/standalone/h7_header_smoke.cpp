@@ -77,6 +77,19 @@ using static_latest = ::spsc::latest<std::uint32_t, 8u, ::spsc::policy::CFA<>>;
 using static_typed_pool =
     ::spsc::typed_pool<std::uint32_t, 8u, ::spsc::policy::CFA<>>;
 using endpoint_base = ::spsc::SPSCbase<8u, ::spsc::policy::CFA<>>;
+using one_line_counter =
+    ::spsc::cnt::CachelineCounter<::spsc::cnt::PlainCounter<std::uint32_t>, 64u>;
+using nested_one_line_counter =
+    ::spsc::cnt::CachelineCounter<one_line_counter, 64u>;
+
+static_assert(sizeof(one_line_counter) == 64u,
+              "a cacheline counter must occupy exactly one requested line");
+static_assert(alignof(one_line_counter) == 64u,
+              "a cacheline counter must retain the requested alignment");
+static_assert(sizeof(nested_one_line_counter) == 64u,
+              "zero padding must not double an already line-sized counter");
+static_assert(alignof(nested_one_line_counter) == 64u,
+              "nested cacheline counters must retain the requested alignment");
 
 static_assert(std::is_same_v<
                   ::spsc::fast_fifo<std::uint32_t, 8u>,

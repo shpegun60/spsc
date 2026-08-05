@@ -6,6 +6,37 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-08-05
+
+This maintenance release hardens packaging, portability, metadata layout, and
+STM32H7 buffer-storage contracts without changing the SPSC endpoint mechanics.
+
+### Added
+
+- Standalone C++17 checks that compile every public header independently.
+- A standalone qmake consumer that validates both short and `spsc/...` include
+  forms using only `spsc.pri`.
+- An STM32H7 buffer-pool smoke test covering the 100-byte payload, 128-byte
+  physical stride, and 32-byte alignment contract.
+- Explicit `buffer_pool` aliases: `payload_bytes()`, `cache_span_bytes()`, and
+  `storage_alignment()`.
+
+### Changed
+
+- Clarified that `V`, `VV`, `CV`, and `CVV` rely on external platform/toolchain
+  ordering and do not establish portable C++ acquire/release synchronization;
+  `CA`/`CFA` remain the recommended task/task and ISR/task policies.
+- Documented the STM32H7 split between `CP` buffer storage and `CFA<>` SPSC
+  transport metadata, including payload versus cache-maintenance span.
+
+### Fixed
+
+- Completed `spsc.pri` include roots and header manifest, including
+  `buffer_pool.hpp`, `spsc_slot_wrap.hpp`, and the root `basic_types.h`.
+- Added direct `<utility>` dependencies to headers that use utility facilities.
+- Removed zero-length `CacheSlot` padding storage, preventing exact-cache-line
+  nested/custom counter layouts from being inflated by an extra cache line.
+
 ## [2.0.0] - 2026-08-03
 
 This major release contains intentional source and object-layout/ABI changes
@@ -141,6 +172,7 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
-[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/shpegun60/spsc/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/shpegun60/spsc/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/shpegun60/spsc/releases/tag/v1.0.0

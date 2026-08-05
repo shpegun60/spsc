@@ -18,7 +18,9 @@
  * - Keep DMA / cache-sensitive buffers grouped in a dedicated type.
  * - Support both static and dynamic storage.
  * - Reuse SPSC allocator/policy alignment rules.
- * - Expose logical buffer size separately from the physical cache-safe span.
+ * - Expose logical buffer size separately from the policy-rounded storage span.
+ *   That span is cache-maintenance-safe when policy alignment matches the
+ *   target's real cache line.
  */
 
 #ifndef SPSC_BUFFER_POOL_HPP_
@@ -188,7 +190,7 @@ public:
     // Size / Span Introspection
     //
     // count()/size() describe the logical buffer shape.
-    // size_bytes()/span_bytes() expose logical byte count vs effective cache-safe slot span.
+    // size_bytes()/span_bytes() expose logical byte count vs policy-rounded slot span.
     // For fixed forms configured == usable.
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] static constexpr size_type count() noexcept { return Count; }
@@ -196,6 +198,9 @@ public:
     [[nodiscard]] static constexpr size_type size_bytes() noexcept { return static_cast<size_type>(sizeof(buffer_type)); }
     [[nodiscard]] static constexpr size_type span_bytes() noexcept { return static_cast<size_type>(sizeof(stored_buffer_type)); }
     [[nodiscard]] static constexpr size_type alignment() noexcept { return static_cast<size_type>(alignof(stored_buffer_type)); }
+    [[nodiscard]] static constexpr size_type payload_bytes() noexcept { return size_bytes(); }
+    [[nodiscard]] static constexpr size_type cache_span_bytes() noexcept { return span_bytes(); }
+    [[nodiscard]] static constexpr size_type storage_alignment() noexcept { return alignment(); }
     [[nodiscard]] constexpr base_allocator_type get_allocator() const noexcept { return base_allocator_type{}; }
 
     // ------------------------------------------------------------------------------------------
@@ -402,13 +407,16 @@ public:
     // Size / Span Introspection
     //
     // count()/size() describe the usable logical shape.
-    // span_bytes() exposes the physical cache-safe span for valid storage.
+    // span_bytes() exposes the physical policy-rounded span for valid storage.
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] size_type count() const noexcept { return is_valid() ? count_ : 0u; }
     [[nodiscard]] static constexpr size_type size() noexcept { return BufferSize; }
     [[nodiscard]] static constexpr size_type size_bytes() noexcept { return static_cast<size_type>(sizeof(buffer_type)); }
     [[nodiscard]] static constexpr size_type span_bytes() noexcept { return static_cast<size_type>(sizeof(stored_buffer_type)); }
     [[nodiscard]] static constexpr size_type alignment() noexcept { return static_cast<size_type>(alignof(stored_buffer_type)); }
+    [[nodiscard]] static constexpr size_type payload_bytes() noexcept { return size_bytes(); }
+    [[nodiscard]] static constexpr size_type cache_span_bytes() noexcept { return span_bytes(); }
+    [[nodiscard]] static constexpr size_type storage_alignment() noexcept { return alignment(); }
     [[nodiscard]] constexpr base_allocator_type get_allocator() const noexcept { return base_allocator_type{}; }
 
     // ------------------------------------------------------------------------------------------
@@ -725,13 +733,16 @@ public:
     // Size / Span Introspection
     //
     // size()/size_bytes() expose usable logical size.
-    // span_bytes() exposes the physical cache-safe span for valid storage.
+    // span_bytes() exposes the physical policy-rounded span for valid storage.
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] static constexpr size_type count() noexcept { return Count; }
     [[nodiscard]] size_type size() const noexcept { return is_valid() ? buffer_size_ : 0u; }
     [[nodiscard]] size_type size_bytes() const noexcept { return is_valid() ? detail::logical_buffer_bytes<size_type, value_type>(buffer_size_) : 0u; }
     [[nodiscard]] size_type span_bytes() const noexcept { return is_valid() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
     [[nodiscard]] static constexpr size_type alignment() noexcept { return static_cast<size_type>(alloc::policy_storage_alignment_v<policy_type, value_type>); }
+    [[nodiscard]] size_type payload_bytes() const noexcept { return size_bytes(); }
+    [[nodiscard]] size_type cache_span_bytes() const noexcept { return span_bytes(); }
+    [[nodiscard]] static constexpr size_type storage_alignment() noexcept { return alignment(); }
     [[nodiscard]] constexpr base_allocator_type get_allocator() const noexcept { return base_allocator_type{}; }
 
     // ------------------------------------------------------------------------------------------
@@ -1137,13 +1148,16 @@ public:
     // Size / Span Introspection
     //
     // count()/size() expose usable logical shape.
-    // span_bytes() exposes the physical cache-safe span for valid storage.
+    // span_bytes() exposes the physical policy-rounded span for valid storage.
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] size_type count() const noexcept { return is_valid() ? count_ : 0u; }
     [[nodiscard]] size_type size() const noexcept { return is_valid() ? buffer_size_ : 0u; }
     [[nodiscard]] size_type size_bytes() const noexcept { return is_valid() ? detail::logical_buffer_bytes<size_type, value_type>(buffer_size_) : 0u; }
     [[nodiscard]] size_type span_bytes() const noexcept { return is_valid() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
     [[nodiscard]] static constexpr size_type alignment() noexcept { return static_cast<size_type>(alloc::policy_storage_alignment_v<policy_type, value_type>); }
+    [[nodiscard]] size_type payload_bytes() const noexcept { return size_bytes(); }
+    [[nodiscard]] size_type cache_span_bytes() const noexcept { return span_bytes(); }
+    [[nodiscard]] static constexpr size_type storage_alignment() noexcept { return alignment(); }
     [[nodiscard]] constexpr base_allocator_type get_allocator() const noexcept { return base_allocator_type{}; }
 
     // ------------------------------------------------------------------------------------------

@@ -30,8 +30,8 @@
  *
  *   2) Ready-made aliases:
  *        - P   : plain counters and geometry; single context or external sync
- *        - V   : volatile counters (ISR <-> task), plain geometry
- *        - VV  : everything volatile (strict volatile propagation)
+ *        - V   : volatile counters, externally ordered/platform-specific
+ *        - VV  : volatile counters and geometry, with the same restriction
  *        - A<O>: atomic counters with configurable orders, plain geometry
  *        - AA<O>: atomic counters and atomic geometry (heavy shared setups)
  *
@@ -62,6 +62,7 @@
 #define SPSC_POLICY_HPP_
 
 #include <type_traits>
+#include <utility>
 
 #include "basic_types.h"      // reg
 #include "spsc_cacheline.hpp" // spsc::hw::cacheline_bytes
@@ -141,8 +142,8 @@ struct Policy {
 
 /* --------------------------- Ready-made aliases ---------------------------
  * P   : plain counters and geometry; single context or external sync
- * V   : ISR <-> task, single-core (volatile counters; plain geometry)
- * VV  : everything volatile (rare; mainly for strict volatile propagation)
+ * V   : volatile counters; requires external or platform-specific ordering
+ * VV  : volatile counters and geometry; same synchronization restriction
  * A<O>: RTOS/tasks (strict atomic counters with RMW add/inc; plain geometry)
  * FA<O>: single-writer atomic counters (load+store add/inc; plain geometry)
  * AA<O>: strict atomic counters and geometry atomic (shared memory / SMP)

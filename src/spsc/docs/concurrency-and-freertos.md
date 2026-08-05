@@ -81,13 +81,16 @@ headers when you want the default policy to be atomic (`A<>`).
 
 ### `V` / `VV`
 
-Use when:
+Use only when all of the following hold:
 
-- you intentionally choose the volatile ISR/task model
-- the target is a known single-core embedded system
-- you understand the difference between volatile propagation and atomic synchronization
+- an external synchronization mechanism or a documented compiler/platform
+  contract orders publication and observation of the payload
+- the target-specific behavior has been reviewed and tested
+- you intentionally accept a non-portable integration contract
 
-This is a specialized embedded path.
+Volatile metadata access alone does not create acquire/release synchronization,
+does not establish a C++ happens-before edge, and does not order surrounding
+non-volatile payload accesses. A single-core target by itself is not enough.
 
 ### `A<>`
 
@@ -155,15 +158,18 @@ Typical fits:
 
 ### ISR -> Task
 
-Two reasonable choices:
+Two portable atomic choices under the SPSC ownership contract are:
 
 ```cpp
-using Conservative = spsc::policy::CA<>;
-using EmbeddedTuned = spsc::policy::CV;
+using StrictRmw = spsc::policy::CA<>;
+using SingleWriter = spsc::policy::CFA<>;
 ```
 
-Use `CA<>` when you want the strict-RMW atomic backend.
-Use `CV` when you deliberately want the volatile ISR/task model on a known single-core target.
+Use `CA<>` when you want the strict-RMW atomic backend. `CFA<>` is also correct
+when exactly one producer and one consumer own their respective counters.
+`V` / `CV` are not standalone ISR/task synchronization policies; use them only
+under the explicit external or platform-specific ordering contract described
+above.
 
 Typical fits:
 
@@ -178,9 +184,8 @@ The same SPSC contract still applies:
 - one producer task
 - one consumer ISR
 
-Again, `A<>` / `CA<>` is a straightforward strict-RMW starting point unless
-you intentionally choose the volatile family. `FA<>` / `CFA<>` remain valid
-when the exact SPSC single-writer rule holds.
+Again, `A<>` / `CA<>` is a straightforward strict-RMW starting point.
+`FA<>` / `CFA<>` remain valid when the exact SPSC single-writer rule holds.
 
 Typical fits:
 
@@ -432,16 +437,19 @@ void ParserTask(void*)
 }
 ```
 
-### Single-Core Embedded Variant With `CV`
+### Platform-Specific Volatile Variant (Expert Opt-In)
 
-On a deliberately tuned single-core MCU path:
+If an external synchronization mechanism or the compiler/platform contract
+explicitly guarantees payload ordering:
 
 ```cpp
 using EmbeddedPolicy = spsc::policy::CV;
 using SampleQ = spsc::fifo<std::uint16_t, 128, EmbeddedPolicy>;
 ```
 
-Use this only when you intentionally accept the volatile ISR/task model.
+This is not portable C++ synchronization. Do not select `CV` merely because the
+MCU has one core; keep `CA<>` or `CFA<>` unless that external contract is both
+documented and tested.
 
 ## 8. Task -> ISR Examples
 
@@ -752,19 +760,21 @@ for (;;) {
 Management APIs are not concurrent. A simple practical pattern is:
 
 ```cpp
-static volatile bool stopRequested = false;
-static volatile bool producerStopped = false;
-static volatile bool consumerStopped = false;
+#include <atomic>
+
+static std::atomic<bool> stopRequested{false};
+static std::atomic<bool> producerStopped{false};
+static std::atomic<bool> consumerStopped{false};
 
 void ProducerTask(void*)
 {
     for (;;) {
-        if (stopRequested) {
-            producerStopped = true;
-            while (stopRequested) {
+        if (stopRequested.load(std::memory_order_acquire)) {
+            producerStopped.store(true, std::memory_order_release);
+            while (stopRequested.load(std::memory_order_acquire)) {
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
-            producerStopped = false;
+            producerStopped.store(false, std::memory_order_release);
         }
 
         produce_into_queue();
@@ -774,12 +784,12 @@ void ProducerTask(void*)
 void ConsumerTask(void*)
 {
     for (;;) {
-        if (stopRequested) {
-            consumerStopped = true;
-            while (stopRequested) {
+        if (stopRequested.load(std::memory_order_acquire)) {
+            consumerStopped.store(true, std::memory_order_release);
+            while (stopRequested.load(std::memory_order_acquire)) {
                 vTaskDelay(pdMS_TO_TICKS(1));
             }
-            consumerStopped = false;
+            consumerStopped.store(false, std::memory_order_release);
         }
 
         consume_from_queue();
@@ -788,16 +798,17 @@ void ConsumerTask(void*)
 
 void ReconfigureQueue()
 {
-    stopRequested = true;
+    stopRequested.store(true, std::memory_order_release);
 
-    while (!producerStopped || !consumerStopped) {
+    while (!producerStopped.load(std::memory_order_acquire) ||
+           !consumerStopped.load(std::memory_order_acquire)) {
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     q.clear();
     q.resize(newCapacity);
 
-    stopRequested = false;
+    stopRequested.store(false, std::memory_order_release);
 }
 ```
 
@@ -807,7 +818,7 @@ The synchronization primitive around the stop request is up to your system; the 
 
 - do not let two tasks both use producer-side APIs on the same queue
 - do not call `resize()` while producer and consumer are active
-- do not assume `volatile` is the same thing as full atomic synchronization
+- do not use `volatile` metadata as standalone task/ISR synchronization
 - do not assume the queue performs blocking or cache maintenance for you
 
 Bad pattern:
@@ -832,6 +843,6 @@ spsc::fifo<int, 64> qB;
 If you want one compact rule set:
 
 - task/task: start with `CA<>`
-- ISR/task on a single-core embedded target: start with `CA<>`, use `CV` only if you intentionally want the volatile model
+- ISR/task on an embedded target: start with `CA<>` or `CFA<>`; use `CV` only with documented external/platform ordering
 - management operations: only while the queue is stopped
 - DMA payloads: solve payload alignment separately from metadata policy

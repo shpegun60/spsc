@@ -54,18 +54,26 @@ The policy controls only the queue metadata behavior: counters, geometry, atomic
 By default, containers use `spsc::policy::default_policy`, which is `P`. Define
 `SPSC_DEFAULT_POLICY_ATOMIC=1` before including the library if you want
 `default_policy` to be `A<>`.
-If you opt into `P`, treat that instance as single-thread/single-core only; it is
-not a task/task or thread/thread synchronization policy.
+If you opt into `P`, use that instance from one execution context or provide
+external synchronization. Merely running on one core is not sufficient when a
+task and an ISR can preempt each other.
 
 Common ready-made policies from [`base/spsc_policy.hpp`](base/spsc_policy.hpp):
 
 - `spsc::policy::P`: plain counters for one context or external synchronization
-- `spsc::policy::V`: volatile producer counters, good fit for ISR -> task on one core
-- `spsc::policy::VV`: everything volatile
+- `spsc::policy::V`: volatile counters with plain geometry
+- `spsc::policy::VV`: volatile counters and volatile geometry
 - `spsc::policy::A<>`: atomic RMW-counter backend
 - `spsc::policy::FA<>`: single-writer atomic-counter backend
 - `spsc::policy::AA<>`: atomic counters and atomic geometry
 - `spsc::policy::CP`, `CV`, `CVV`, `CA<>`, `CFA<>`, `CAA<>`: cacheline-aligned variants
+
+`V`, `VV`, `CV`, and `CVV` do not provide portable acquire/release
+synchronization and do not order surrounding non-volatile payload accesses.
+Use them only when external synchronization or a documented compiler/platform
+contract provides publication ordering. For ordinary task/task, ISR/task, or
+task/ISR handoff, start with `A<>` / `FA<>` or their cache-aligned `CA<>` /
+`CFA<>` variants.
 
 `CacheAligned` policies pad and align policy-owned metadata. For raw-slot
 owning containers such as `pool` and `latest<void>`, the default allocator path
@@ -317,6 +325,20 @@ using RxPool = spsc::pool<0, Policy>;
 
 RxPool q{8, 100}; // CacheAligned path may round raw slot bytes upward
 ```
+
+For standalone DMA buffer storage, prefer the non-atomic cache-aligned policy;
+the separate transport object owns the concurrent SPSC contract:
+
+```cpp
+using DmaBuffers =
+    spsc::buffer_pool<std::byte, 100, 8, spsc::policy::CP>;
+using Transport = spsc::pool_view<8, spsc::policy::CFA<>>;
+```
+
+For `buffer_pool`, `payload_bytes()` is the logical payload and
+`cache_span_bytes()` is the policy-rounded physical span. The latter is a cache
+maintenance span only when the configured policy alignment matches the target
+cache line.
 
 For complete task/ISR/DMA patterns, see [Concurrency and FreeRTOS](docs/concurrency-and-freertos.md).
 
