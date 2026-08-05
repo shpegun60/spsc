@@ -42,17 +42,43 @@ dynamicShape.resize(8, 1500);
 
 - `count()` is the number of buffers.
 - `size()` is the logical element count per buffer.
-- `size_bytes()` is the logical byte size of one buffer.
-- `span_bytes()` is the physical per-buffer span after policy/allocator alignment rounding.
+- `size_bytes()` / `payload_bytes()` are the logical byte size of one buffer.
+- `span_bytes()` / `cache_span_bytes()` are the physical per-buffer span after
+  policy alignment rounding.
+- `alignment()` / `storage_alignment()` report the alignment guaranteed by the
+  value type and policy. They do not report a stronger alignment that a custom
+  allocator may happen to provide.
 - `data(i)` returns `nullptr` when `i` is outside the valid buffer range.
 - `operator[](i)` is the assert-style indexed form for valid indices.
 
 Cache-aligned policies can align storage and round the physical span reported by
-`span_bytes()`. Runtime-sized variants allocate each payload separately, so treat
-this as a per-buffer alignment/span contract rather than a contiguous adjacency
-guarantee. On STM32F7/STM32H7-style DMA paths, use `span_bytes()` as the
-physical per-buffer span when that is the region handed to DMA. Hardware cache
-maintenance still belongs outside the container.
+`cache_span_bytes()`. Runtime-sized variants allocate each payload separately,
+so treat this as a per-buffer alignment/span contract rather than a contiguous
+adjacency guarantee. The cache-span name is a valid cache-maintenance contract
+only when the selected policy alignment matches the target's real cache line.
+Hardware cache maintenance still belongs outside the container.
+
+## STM32H7 DMA Storage
+
+`buffer_pool` owns storage but has no producer/consumer indices, so it needs
+alignment from its policy, not atomic counters. Use `CP` for the storage and an
+atomic policy such as `CFA<>` on the queue or view that transfers ownership:
+
+```cpp
+using DmaBuffers =
+    spsc::buffer_pool<std::byte, 100, 8, spsc::policy::CP>;
+using Transport = spsc::pool_view<8, spsc::policy::CFA<>>;
+
+static_assert(DmaBuffers::payload_bytes() == 100);
+static_assert(DmaBuffers::cache_span_bytes() == 128);
+static_assert(DmaBuffers::storage_alignment() == 32);
+```
+
+For STM32H7, ensure `SPSC_CACHELINE_BYTES == 32` through the STM32 target macro
+or `-DSPSC_FORCE_CACHELINE=32`. The allocator/linker still decides whether
+dynamic storage resides in DMA-accessible SRAM. `buffer_pool` deliberately does
+not perform `SCB_CleanDCache_by_Addr`, `SCB_InvalidateDCache_by_Addr`, DMA
+ownership transfer, or memory-region selection.
 
 ## Good Fits
 

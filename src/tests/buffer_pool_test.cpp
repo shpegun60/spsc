@@ -427,6 +427,9 @@ static void verify_invariants(const Q& q, const char* context = nullptr)
     }
 
     QVERIFY(q.span_bytes() >= q.size_bytes());
+    QCOMPARE(q.payload_bytes(), q.size_bytes());
+    QCOMPARE(q.cache_span_bytes(), q.span_bytes());
+    QCOMPARE(q.storage_alignment(), q.alignment());
 
     std::vector<std::uintptr_t> seen_ptrs;
     seen_ptrs.reserve(static_cast<std::size_t>(q.count()));
@@ -618,6 +621,9 @@ static void api_smoke_compile()
     static_assert(std::is_same_v<decltype(std::declval<Q&>().alignment()), size_type>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().span_bytes()), size_type>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().size_bytes()), size_type>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().storage_alignment()), size_type>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().cache_span_bytes()), size_type>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().payload_bytes()), size_type>);
 
     if constexpr (::spsc::test::has_destroy_method<Q>::value) {
         static_assert(std::is_same_v<decltype(std::declval<Q&>().destroy()), void>);

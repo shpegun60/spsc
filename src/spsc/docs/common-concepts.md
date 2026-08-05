@@ -152,8 +152,8 @@ Ready-made families:
 
 - `default_policy`: `P` by default; define `SPSC_DEFAULT_POLICY_ATOMIC=1` only when you deliberately want `A<>` as the default
 - `P`: plain counters for a single context or externally synchronized use
-- `V`: volatile counters for ISR/task style communication
-- `VV`: both counters and geometry volatile
+- `V`: volatile counters for externally ordered or platform-specific access
+- `VV`: both counters and geometry volatile, with the same restriction
 - `A<>`: atomic counters whose increments use atomic RMW operations
 - `FA<>`: single-writer atomic counters whose increments use a relaxed load
   followed by a release store
@@ -163,6 +163,12 @@ Cache-line aligned aliases:
 
 - `CP`, `CV`, `CVV`
 - `CA<>`, `CFA<>`, `CAA<>`
+
+The volatile families (`V`, `VV`, `CV`, and `CVV`) are not standalone portable
+synchronization policies. Volatile access applies to their metadata objects but
+does not create a C++ happens-before edge or order the surrounding payload. Use
+them only when an external synchronization mechanism or a documented
+compiler/platform contract supplies those guarantees.
 
 Example:
 
