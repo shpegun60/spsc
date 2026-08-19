@@ -275,13 +275,16 @@ public:
     [[nodiscard]] const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
     [[nodiscard]] const_reverse_iterator rend()   const noexcept { return const_reverse_iterator(begin()); }
 
-    void swap(chunk& other) noexcept {
+    void swap(chunk& other)
+        noexcept(noexcept(storage_.swap(other.storage_)))
+    {
+        storage_.swap(other.storage_);
+
         using std::swap;
-        swap(storage_, other.storage_);
         swap(len_, other.len_);
     }
 
-    friend void swap(chunk& a, chunk& b) noexcept { a.swap(b); }
+    friend void swap(chunk& a, chunk& b) noexcept(noexcept(a.swap(b))) { a.swap(b); }
 };
 
 /* =======================================================================
@@ -441,7 +444,8 @@ public:
                 }
             } else {
                 for (size_type i = 0; i < len_; ++i) {
-                    if constexpr (std::is_move_assignable_v<T>) {
+                    if constexpr (std::is_nothrow_move_assignable_v<T> ||
+                                  !std::is_copy_assignable_v<T>) {
                         new_storage[i] = std::move(storage_[i]);
                     } else {
                         new_storage[i] = storage_[i];

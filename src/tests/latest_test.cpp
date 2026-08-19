@@ -525,6 +525,54 @@ static void typed_coalescing_publish(Q& q) {
 }
 
 template <class Q>
+static void typed_coalescing_pending_slot_contract(Q& q) {
+    using T = typename Q::value_type;
+
+    auto write = [](T& slot, const std::uint32_t seq) {
+        slot.seq = seq;
+        slot.a   = seq ^ 0x11111111u;
+        slot.b   = seq + 0x2222u;
+        slot.c   = ~seq;
+    };
+
+    q.clear();
+    const reg cap = q.capacity();
+    QVERIFY(cap >= 4u);
+
+    for (reg i = 0u; i < cap - 3u; ++i) {
+        T& slot = q.claim();
+        write(slot, static_cast<std::uint32_t>(i + 1u));
+        q.publish();
+    }
+
+    T& committed = q.claim();
+    write(committed, 0xAAu);
+    QVERIFY(q.coalescing_publish());
+    QCOMPARE(q.size(), static_cast<reg>(cap - 2u));
+
+    T& pending = q.claim();
+    write(pending, 0xBBu);
+    QVERIFY(!q.coalescing_publish());
+    QCOMPARE(q.front().seq, 0xAAu);
+
+    // Consumer progress only advances tail to the committed head. It must not
+    // publish the producer-private 0xBB slot.
+    q.pop();
+    QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
+
+    // The next producer claim can reuse the unpublished logical slot. Only
+    // the replacement value becomes visible when this later publication wins.
+    T& replacement = q.claim();
+    write(replacement, 0xCCu);
+    QVERIFY(q.coalescing_publish());
+    QCOMPARE(q.size(), reg{1u});
+    QCOMPARE(q.front().seq, 0xCCu);
+    q.pop();
+    QVERIFY(q.empty());
+}
+
+template <class Q>
 static void typed_fuzz(Q& q, std::uint32_t seed) {
     using T = typename Q::value_type;
 
@@ -683,6 +731,56 @@ static void raw_try_api(Q& q) {
 
     QVERIFY(q.try_pop());
     QVERIFY(!q.try_pop());
+}
+
+template <class Q>
+static void raw_coalescing_pending_slot_contract(Q& q) {
+    auto write = [](void* slot, const std::uint32_t seq) {
+        Blob value{};
+        value.seq = seq;
+        value.a   = seq ^ 0x11111111u;
+        value.b   = seq + 0x2222u;
+        value.c   = ~seq;
+        std::memcpy(slot, &value, sizeof(value));
+    };
+
+    auto read_seq = [](const void* slot) {
+        Blob value{};
+        std::memcpy(&value, slot, sizeof(value));
+        return value.seq;
+    };
+
+    q.clear();
+    const reg cap = q.capacity();
+    QVERIFY(cap >= 4u);
+
+    for (reg i = 0u; i < cap - 3u; ++i) {
+        void* slot = q.claim();
+        write(slot, static_cast<std::uint32_t>(i + 1u));
+        q.publish();
+    }
+
+    void* committed = q.claim();
+    write(committed, 0xAAu);
+    QVERIFY(q.coalescing_publish());
+    QCOMPARE(q.size(), static_cast<reg>(cap - 2u));
+
+    void* pending = q.claim();
+    write(pending, 0xBBu);
+    QVERIFY(!q.coalescing_publish());
+    QCOMPARE(read_seq(q.front()), 0xAAu);
+
+    q.pop();
+    QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
+
+    void* replacement = q.claim();
+    write(replacement, 0xCCu);
+    QVERIFY(q.coalescing_publish());
+    QCOMPARE(q.size(), reg{1u});
+    QCOMPARE(read_seq(q.front()), 0xCCu);
+    q.pop();
+    QVERIFY(q.empty());
 }
 
 template <class Q>
@@ -1211,6 +1309,7 @@ static void run_static_typed_suite() {
     typed_try_api(q);
     typed_push_emplace(q);
     typed_coalescing_publish(q);
+    typed_coalescing_pending_slot_contract(q);
     typed_fuzz(q, 0x1111u);
 
     // Shadow regression only meaningful for shadow-enabled policies, but safe to run always.
@@ -1229,6 +1328,7 @@ static void run_dynamic_typed_suite() {
     typed_try_api(q);
     typed_push_emplace(q);
     typed_coalescing_publish(q);
+    typed_coalescing_pending_slot_contract(q);
     typed_fuzz(q, 0x2222u);
 
     // move/swap basics
@@ -1259,6 +1359,7 @@ static void run_dynamic_raw_suite() {
 
     raw_basic_api(q);
     raw_try_api(q);
+    raw_coalescing_pending_slot_contract(q);
     raw_fuzz(q, 0x3333u);
 
     // move/swap basics

@@ -121,6 +121,25 @@ does not make the bounded ring unbounded. To preserve slack it may decline to
 advance head even before the ring is full; the producer can keep updating that
 unpublished slot until a later publish succeeds.
 
+After a successful `claim()` / `try_claim()`:
+
+- `true` means the claimed slot was committed, head advanced, and the value is
+  visible under the normal SPSC synchronization rules.
+- `false` means no publication occurred. Head did not advance; the written
+  slot remains producer-private, consumer progress does not publish it, and a
+  later producer claim may overwrite it.
+
+`false` means **not published**, not "queued for eventual publication". This
+helper provides coalescing, not eventual-delivery semantics. Do not rely on it
+for a one-shot command or final `Apply` update after the producer stops; use
+`publish()`, `try_publish()`, or an explicit retry protocol instead.
+
+### Periodic telemetry versus one-shot delivery
+
+`coalescing_publish()` is appropriate for repeated telemetry and newest-state
+producers where a later sample can replace an unpublished one. A one-shot
+command that must eventually arrive needs a normal publication action.
+
 ## API Groups
 
 ### Producer
@@ -212,7 +231,10 @@ q.try_push(PacketHeader{7u, 96u});
 ```cpp
 if (Telemetry* slot = latestState.try_claim()) {
     *slot = read_telemetry();
-    latestState.coalescing_publish();
+
+    if (latestState.coalescing_publish()) {
+        notify_consumer(); // A new committed value is now visible.
+    }
 }
 ```
 
@@ -301,7 +323,11 @@ if (auto* slot = latestState.try_claim()) {
 ```cpp
 if (auto* slot = latestState.try_claim()) {
     *slot = read_telemetry();
-    latestState.coalescing_publish();
+
+    const bool published = latestState.coalescing_publish();
+    if (published) {
+        notify_consumer();
+    }
 }
 ```
 

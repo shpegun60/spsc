@@ -30,6 +30,13 @@
  * - try_publish():  returns false if invalid or full()
  * - coalescing_publish(): optional helper that keeps slack near full by sometimes NOT
  *                  advancing head (multiple producer updates coalesce into one).
+ *                  After a successful claim():
+ *                    true  -> the claimed slot is committed and visible normally;
+ *                    false -> no head advance occurs and the claimed slot remains
+ *                             producer-private until a later producer publication.
+ *                  Consumer progress never publishes that pending slot. A later claim
+ *                  may overwrite it, so this is coalescing, not eventual delivery;
+ *                  use publish()/try_publish() or an explicit retry for one-shot work.
  *
  * Consumer-side contract:
  * - front():        returns reference/pointer to the latest committed slot
@@ -440,8 +447,9 @@ public:
         return true;
     }
 
-    /* Coalescing publish: keep slack near full by sometimes NOT advancing head.
-     * Returns true only when head advanced.
+    /* True commits the currently claimed slot. False does not advance head; after
+     * a successful claim the slot stays producer-private and may be overwritten.
+     * This provides coalescing, not eventual-delivery semantics.
      */
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
         const size_type cap = depth();
@@ -1057,6 +1065,10 @@ public:
         return true;
     }
 
+    /* True commits the currently claimed slot. False does not advance head; after
+     * a successful claim the slot stays producer-private and may be overwritten.
+     * This provides coalescing, not eventual-delivery semantics.
+     */
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
         const size_type cap = depth();
         if (RB_UNLIKELY(!is_valid() || cap == 0u)) {
@@ -1540,6 +1552,10 @@ public:
         return true;
     }
 
+    /* True commits the currently claimed slot. False does not advance head; after
+     * a successful claim the slot stays producer-private and may be overwritten.
+     * This provides coalescing, not eventual-delivery semantics.
+     */
     [[nodiscard]] RB_FORCEINLINE bool coalescing_publish() noexcept {
         const auto snapshot = Base::producer_single_snapshot();
         if (RB_UNLIKELY(!snapshot.available)) {

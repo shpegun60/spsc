@@ -136,6 +136,63 @@ struct Blob {
     }
 };
 
+struct CopyNoexceptMoveThrows {
+    std::uint32_t value{};
+
+    static inline int copy_assignments = 0;
+    static inline int move_assignments = 0;
+
+    constexpr CopyNoexceptMoveThrows() noexcept = default;
+    constexpr explicit CopyNoexceptMoveThrows(const std::uint32_t v) noexcept
+        : value(v)
+    {}
+
+    CopyNoexceptMoveThrows& operator=(const CopyNoexceptMoveThrows& other) noexcept {
+        value = other.value;
+        ++copy_assignments;
+        return *this;
+    }
+
+    CopyNoexceptMoveThrows& operator=(CopyNoexceptMoveThrows&& other) noexcept(false) {
+        value = other.value;
+        ++move_assignments;
+        return *this;
+    }
+
+    static void reset_assignment_counts() noexcept {
+        copy_assignments = 0;
+        move_assignments = 0;
+    }
+};
+
+struct ThrowingSwap {
+    std::uint32_t value{};
+
+    constexpr ThrowingSwap() noexcept = default;
+    constexpr explicit ThrowingSwap(const std::uint32_t v) noexcept
+        : value(v)
+    {}
+
+    friend void swap(ThrowingSwap& a, ThrowingSwap& b) noexcept(false) {
+        using std::swap;
+        swap(a.value, b.value);
+    }
+};
+
+struct NothrowSwap {
+    std::uint32_t value{};
+
+    constexpr NothrowSwap() noexcept = default;
+    constexpr explicit NothrowSwap(const std::uint32_t v) noexcept
+        : value(v)
+    {}
+
+    friend void swap(NothrowSwap& a, NothrowSwap& b) noexcept {
+        using std::swap;
+        swap(a.value, b.value);
+    }
+};
+
 template <std::size_t Align>
 struct alignas(Align) OverAligned {
     std::uint64_t a{};
@@ -293,6 +350,54 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<const CFVPlain&>().span()), std::span<const typename CFVPlain::value_type>>);
 #endif
     static_assert(std::is_void_v<decltype(std::declval<CFVPlain&>().reset())>);
+
+    using ThrowingSwapChunk = spsc::chunk<ThrowingSwap, 4u>;
+    using NothrowSwapChunk  = spsc::chunk<NothrowSwap, 4u>;
+
+    static_assert(std::is_nothrow_copy_assignable_v<CopyNoexceptMoveThrows>);
+    static_assert(std::is_move_assignable_v<CopyNoexceptMoveThrows>);
+    static_assert(!std::is_nothrow_move_assignable_v<CopyNoexceptMoveThrows>);
+    static_assert(!std::is_trivially_copyable_v<CopyNoexceptMoveThrows>);
+    static_assert(!noexcept(std::declval<ThrowingSwapChunk&>().swap(
+        std::declval<ThrowingSwapChunk&>())));
+    static_assert(noexcept(std::declval<NothrowSwapChunk&>().swap(
+        std::declval<NothrowSwapChunk&>())));
+}
+
+static void chunk_regression_suite() {
+    {
+        using Q = spsc::chunk<CopyNoexceptMoveThrows, 0u>;
+
+        Q q;
+        QVERIFY(q.reserve(2u));
+
+        const CopyNoexceptMoveThrows source{0xC0FFEEu};
+        QVERIFY(q.try_push(source));
+
+        CopyNoexceptMoveThrows::reset_assignment_counts();
+        QVERIFY(q.reserve(static_cast<reg>(q.capacity() + 1u)));
+
+        QCOMPARE(CopyNoexceptMoveThrows::copy_assignments, 1);
+        QCOMPARE(CopyNoexceptMoveThrows::move_assignments, 0);
+        QCOMPARE(q.front().value, 0xC0FFEEu);
+    }
+
+    {
+        spsc::chunk<ThrowingSwap, 4u> a;
+        spsc::chunk<ThrowingSwap, 4u> b;
+
+        a.push(ThrowingSwap{1u});
+        a.push(ThrowingSwap{2u});
+        b.push(ThrowingSwap{9u});
+
+        a.swap(b);
+
+        QCOMPARE(a.size(), reg{1u});
+        QCOMPARE(a.front().value, 9u);
+        QCOMPARE(b.size(), reg{2u});
+        QCOMPARE(b.front().value, 1u);
+        QCOMPARE(b.back().value, 2u);
+    }
 }
 
 static void static_contract_suite() {
@@ -980,6 +1085,10 @@ private slots:
 
     void dynamic_resize_overflow_guard() {
         dynamic_resize_overflow_guard_suite();
+    }
+
+    void regression_move_if_noexcept_and_swap() {
+        chunk_regression_suite();
     }
 
     void static_fuzz() {
