@@ -67,8 +67,9 @@
 #  define SPSC_CACHELINE_MIN 32u
 #endif /* SPSC_CACHELINE_MIN */
 
-#if ((SPSC_CACHELINE_MIN & (SPSC_CACHELINE_MIN - 1u)) != 0)
-#  error "SPSC_CACHELINE_MIN must be a power-of-two"
+#if (SPSC_CACHELINE_MIN == 0u) || \
+    ((SPSC_CACHELINE_MIN & (SPSC_CACHELINE_MIN - 1u)) != 0u)
+#  error "SPSC_CACHELINE_MIN must be a non-zero power-of-two"
 #endif
 
 
@@ -220,6 +221,10 @@
  *    clamp it to SPSC_CACHELINE_MIN.
  * 2) Enforce power-of-two: any misconfiguration is caught as a build error.
  * ──────────────────────────────────────────────────────────────────────────── */
+#if (SPSC_CACHELINE_BYTES == 0u)
+#  error "SPSC_CACHELINE_BYTES must be non-zero"
+#endif
+
 #if (SPSC_CACHELINE_BYTES < SPSC_CACHELINE_MIN)
 #  undef  SPSC_CACHELINE_BYTES
 #  define SPSC_CACHELINE_BYTES SPSC_CACHELINE_MIN

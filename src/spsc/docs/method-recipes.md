@@ -488,9 +488,18 @@ If the producer updates very frequently and the consumer only cares about freshn
 ```cpp
 if (Telemetry* slot = latestState.try_claim()) {
     *slot = read_telemetry();
-    latestState.coalescing_publish();
+
+    const bool published = latestState.coalescing_publish();
+    if (published) {
+        notify_consumer();
+    }
 }
 ```
+
+Here `false` means **not published**, not "queued for eventual publication".
+It is appropriate when a later periodic update may replace the current
+producer-private slot. Use `publish()`, `try_publish()`, or an explicit retry
+protocol for a one-shot command that must arrive after the producer stops.
 
 Dynamic raw `latest<void, 0>` setup:
 

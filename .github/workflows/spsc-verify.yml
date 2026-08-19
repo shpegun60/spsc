@@ -140,9 +140,11 @@ jobs:
           assert all(record['status'] == 'inconclusive' for record in comparisons)
           assert all(not record['ranking_eligible'] for record in comparisons)
           PY
-      - name: Verify relaxed publication is rejected
+      - name: Verify rejected publication and cacheline configurations
         shell: pwsh
-        run: ./scripts/test_relaxed_publication_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
+        run: |
+          ./scripts/test_relaxed_publication_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
+          ./scripts/test_cacheline_config_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
 
   linux-clean-dashboard:
     name: Linux clean qmake dashboard build
@@ -261,7 +263,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Verify owner-load counts and relaxed-publication rejection
+      - name: Verify owner-load counts and rejected configurations
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -270,7 +272,7 @@ jobs:
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl"
+          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_cacheline_config_compile_fail.ps1 -Compiler cl"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify MSVC H0R benchmark protocol

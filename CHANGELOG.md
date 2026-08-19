@@ -6,6 +6,29 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-08-19
+
+This is a narrow bug-fix and contract-documentation release. It does not
+change SPSC endpoint algorithms, policies, aliases, or container ownership
+semantics.
+
+### Fixed
+
+- Dynamic `chunk<T, 0>::reserve()` now prefers noexcept copy assignment when
+  move assignment may throw.
+- Static `chunk<T, N>::swap()` now exposes the correct conditional `noexcept`.
+- Zero-valued cacheline configuration inputs are rejected before cacheline
+  normalization.
+
+### Documentation and Tests
+
+- Clarified `latest::coalescing_publish()` true/false semantics: `false` is
+  not eventual publication and a pending producer slot may be overwritten.
+- Updated newest-state and FreeRTOS examples to observe the publication result
+  before notifying a consumer.
+- Added regressions for chunk assignment selection, conditional swap noexcept,
+  pending coalesced slots, and zero cacheline configurations.
+
 ## [2.0.1] - 2026-08-05
 
 This maintenance release hardens packaging, portability, metadata layout, and
@@ -172,7 +195,8 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
-[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/shpegun60/spsc/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/shpegun60/spsc/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/shpegun60/spsc/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/shpegun60/spsc/releases/tag/v1.0.0

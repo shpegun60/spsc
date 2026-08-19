@@ -335,8 +335,11 @@ void SamplerTask(void*)
                 read_current(),
                 read_temperature()
             };
-            telemetryQ.coalescing_publish();
-            xTaskNotifyGive(uiTaskHandle);
+            if (telemetryQ.coalescing_publish()) {
+                // Notify only when head advanced: false leaves the written
+                // slot producer-private and no new value is visible yet.
+                xTaskNotifyGive(uiTaskHandle);
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(5));
