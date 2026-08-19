@@ -18,7 +18,9 @@ jobs:
   linux-functional:
     name: Linux ${{ matrix.compiler }} ${{ matrix.configuration }} ${{ matrix.variant }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Qt package installation can be delayed by a transient hosted-runner mirror.
+    # Leave room for the actual matrix target after bounded apt retries.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -57,8 +59,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Qt and compiler dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
+          # GitHub-hosted Ubuntu runners may select a stalled Azure mirror.
+          # The canonical archive remains in the runner mirror list.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y \
             build-essential clang qt6-base-dev qt6-base-dev-tools
       - name: Build and run clean matrix target
         run: |
@@ -82,8 +89,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Clang
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y clang
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y clang
       - name: Run atomic observer sanitizer smoke
         run: |
           bash scripts/run_h7_sanitizers.sh \
@@ -108,8 +118,11 @@ jobs:
           submodules: recursive
       - name: Install compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ${{ matrix.package }}
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y ${{ matrix.package }}
       - name: Verify owner-load counts in the single-item FIFO and queue probes
         run: bash scripts/check_h8_hotpath_asm.sh --compiler '${{ matrix.compiler }}'
       - name: Verify H0R benchmark protocol and JSON classification
@@ -154,8 +167,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Qt and compiler dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y \
             build-essential qt6-base-dev qt6-base-dev-tools
       - name: Build standalone spsc.pri consumer
         run: |
@@ -191,21 +207,31 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install 32-bit C++ runtime and headers
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y g++-multilib
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y g++-multilib
       - name: Build and run both 32-bit shadow-gate states
         run: bash scripts/run_h6_32bit_shadow_matrix.sh --compiler g++
 
   linux-arm-smoke:
     name: Linux AArch64 header smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Cross-toolchain packages are larger than the smoke itself; do not cancel
+    # before the two syntax-only checks can run.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install AArch64 cross compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y g++-aarch64-linux-gnu
+          # GitHub-hosted Ubuntu runners may select a stalled Azure mirror.
+          # The canonical archive remains in the runner mirror list.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y g++-aarch64-linux-gnu
       - name: Compile C++17 and C++20 public-header smoke
         run: |
           pwsh ./scripts/check_public_headers.ps1 \

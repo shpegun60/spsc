@@ -6,6 +6,20 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-08-19
+
+This CI-only maintenance release makes hosted Linux verification resilient to
+transient Ubuntu mirror stalls. It does not change public SPSC headers, runtime
+behavior, policies, aliases, or container ownership semantics.
+
+### Fixed
+
+- GitHub Actions Linux setup now prefers the canonical Ubuntu archive when a
+  hosted runner exposes a stalled Azure mirror endpoint.
+- All Linux `apt-get` setup steps use bounded retries and HTTP(S) timeouts.
+- The AArch64 header smoke and Qt functional matrix have enough time to reach
+  their actual compile/test steps after dependency installation.
+
 ## [2.0.2] - 2026-08-19
 
 This is a narrow bug-fix and contract-documentation release. It does not
@@ -195,7 +209,8 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
-[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.0.3...HEAD
+[2.0.3]: https://github.com/shpegun60/spsc/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/shpegun60/spsc/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/shpegun60/spsc/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/shpegun60/spsc/compare/v1.0.0...v2.0.0
