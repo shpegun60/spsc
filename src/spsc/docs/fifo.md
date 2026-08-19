@@ -2,6 +2,16 @@
 
 `fifo<T, Capacity, Policy, Alloc>` is the default owning SPSC ring buffer for value-like data.
 
+## Recommended Spelling
+
+For a new declaration, prefer `local_fifo<T, Capacity>`,
+`concurrent_fifo<T, Capacity>`, or `cache_aligned_fifo<T, Capacity>` when the
+respective `P`, `FA<>`, or `CFA<>` contract is what you want. These are exact
+aliases of `fifo` and preserve the normal policy-derived allocator default.
+For deliberate advanced policy selection, retain the explicit
+`fifo<T, Capacity, Policy, Alloc>` form. See [Common Concepts](common-concepts.md#6-policies)
+for the policy and cache-isolation boundaries.
+
 It is assignment-based:
 
 - slots are default-constructed

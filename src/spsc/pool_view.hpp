@@ -1476,6 +1476,15 @@ private:
     geometry_type  bufferSize_{};
 };
 
+template<reg Capacity = 0>
+using local_pool_view = pool_view<Capacity, ::spsc::policy::P>;
+
+template<reg Capacity = 0>
+using concurrent_pool_view = pool_view<Capacity, ::spsc::policy::FA<>>;
+
+template<reg Capacity = 0>
+using cache_aligned_pool_view = pool_view<Capacity, ::spsc::policy::CFA<>>;
+
 // ------------------------------------------------------------------------
 // Deduction Guides
 // ------------------------------------------------------------------------

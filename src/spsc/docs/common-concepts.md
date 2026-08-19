@@ -164,6 +164,40 @@ Cache-line aligned aliases:
 - `CP`, `CV`, `CVV`
 - `CA<>`, `CFA<>`, `CAA<>`
 
+### Semantic aliases (v2.1)
+
+For the three common transport contracts, use semantic aliases instead of
+spelling a policy in every declaration:
+
+| Contract | Example | Fixed policy |
+| --- | --- | --- |
+| one context or external synchronization | `local_fifo<T, N>` | `P` |
+| normal portable SPSC | `concurrent_fifo<T, N>` | `FA<>` |
+| SPSC with justified cache isolation | `cache_aligned_fifo<T, N>` | `CFA<>` |
+
+The same prefixes are available for `queue`, `fifo_view`, `pool`, `pool_view`,
+`typed_pool`, `latest`, `array_fifo` and its views, and `chunk_fifo` and its
+view. They are exact type aliases: they do not add state, alter ownership, or
+depend on `default_policy`. Owning forms preserve their normal policy-derived
+allocator default and leave the final allocator argument available for a custom
+allocator.
+
+For new concurrent SPSC code, prefer `concurrent_*`. Choose
+`cache_aligned_*` only when cache isolation is appropriate for the target and
+measurement. The full `Container<..., Policy, ...>` spelling remains the
+advanced API for deliberate use of `A<>`, `CA<>`, `V`, `VV`, `CP`, `AA<>`,
+`CAA<>`, and related policies.
+
+In the shipped 2.x configuration, a bare container such as `fifo<T, N>` still
+uses the historical `default_policy` of `P`; `SPSC_DEFAULT_POLICY_ATOMIC=1`
+continues to be the explicit opt-in to `A<>`. No default changes in v2.1. A
+future major version may revise the generic default, but these aliases remain
+explicit and stable.
+
+`buffer_pool` is intentionally outside this naming scheme. Its policy controls
+storage alignment and span, not producer/consumer synchronization; use explicit
+`CP` for DMA storage and select the transport alias on the queue or view.
+
 The volatile families (`V`, `VV`, `CV`, and `CVV`) are not standalone portable
 synchronization policies. Volatile access applies to their metadata objects but
 does not create a C++ happens-before edge or order the surrounding payload. Use

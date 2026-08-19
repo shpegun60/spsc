@@ -181,6 +181,13 @@ jobs:
           qmake6 "$GITHUB_WORKSPACE/tests/standalone/qmake_consumer/consumer.pro"
           make -j2
           ./spsc_pri_consumer
+      - name: Build and run semantic alias standalone smoke
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
+            -I. -Isrc/spsc \
+            -o "$RUNNER_TEMP/semantic_alias_smoke" \
+            tests/standalone/h7_header_smoke.cpp
+          "$RUNNER_TEMP/semantic_alias_smoke"
       - name: Verify STM32H7 buffer-pool DMA layout contract
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic-errors \

@@ -6,7 +6,7 @@
 
 int main()
 {
-    ::spsc::fifo<std::uint32_t, 8u, ::spsc::policy::CFA<>> queue;
+    ::spsc::cache_aligned_fifo<std::uint32_t, 8u> queue;
 
     if (!queue.try_push(42u)) {
         return 1;

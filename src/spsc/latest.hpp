@@ -1766,6 +1766,27 @@ private:
     mutable bool      cons_has_snapshot_ = false;
 };
 
+template<class T = void, reg Depth = 0u,
+         class Alloc = ::spsc::alloc::policy_default_alloc_t<
+             ::spsc::policy::P,
+             ::spsc::alloc::object_alignment_v<T>,
+             ::spsc::alloc::default_alloc>>
+using local_latest = latest<T, Depth, ::spsc::policy::P, Alloc>;
+
+template<class T = void, reg Depth = 0u,
+         class Alloc = ::spsc::alloc::policy_default_alloc_t<
+             ::spsc::policy::FA<>,
+             ::spsc::alloc::object_alignment_v<T>,
+             ::spsc::alloc::default_alloc>>
+using concurrent_latest = latest<T, Depth, ::spsc::policy::FA<>, Alloc>;
+
+template<class T = void, reg Depth = 0u,
+         class Alloc = ::spsc::alloc::policy_default_alloc_t<
+             ::spsc::policy::CFA<>,
+             ::spsc::alloc::object_alignment_v<T>,
+             ::spsc::alloc::default_alloc>>
+using cache_aligned_latest = latest<T, Depth, ::spsc::policy::CFA<>, Alloc>;
+
 } // namespace spsc
 
 #endif /* SPSC_LATEST_HPP_ */

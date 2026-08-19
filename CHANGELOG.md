@@ -6,6 +6,35 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-19
+
+This backward-compatible feature release adds semantic aliases for the normal
+SPSC policy choices. It does not change container algorithms, memory ordering,
+ownership rules, `default_policy`, or the default value of
+`SPSC_DEFAULT_POLICY_ATOMIC`.
+
+### Added
+
+- `local_*`, `concurrent_*`, and `cache_aligned_*` type aliases for every
+  policy-driven SPSC transport container and view: `fifo`, `queue`,
+  `fifo_view`, `pool`, `pool_view`, `typed_pool`, `latest`, `array_fifo`,
+  `array_fifo_view`, `carray_fifo_view`, `chunk_fifo`, and `chunk_fifo_view`.
+  They bind respectively to `P`, `FA<>`, and `CFA<>` without a runtime wrapper.
+- Semantic aliases preserve each owning container's existing policy-derived
+  default allocator and still accept an explicit custom allocator.
+- Compile-time identity coverage for every semantic alias and runtime smoke
+  coverage for the three primary `fifo` spellings.
+
+### Documentation
+
+- New code is guided to use `concurrent_*` for portable one-producer/
+  one-consumer transport and `cache_aligned_*` only when cache isolation is
+  appropriate for the measured target.
+- The full `Container<..., Policy, ...>` form remains the advanced API for
+  policies such as `A<>`, `CA<>`, `V`, `VV`, `CP`, `AA<>`, and `CAA<>`.
+- `buffer_pool` deliberately has no concurrency-named aliases: its policy
+  describes storage layout, so DMA storage continues to use explicit `CP`.
+
 ## [2.0.3] - 2026-08-19
 
 This CI-only maintenance release makes hosted Linux verification resilient to
@@ -209,7 +238,8 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
-[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.0.3...HEAD
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/shpegun60/spsc/compare/v2.0.3...v2.1.0
 [2.0.3]: https://github.com/shpegun60/spsc/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/shpegun60/spsc/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/shpegun60/spsc/compare/v2.0.0...v2.0.1

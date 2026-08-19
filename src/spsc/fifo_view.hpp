@@ -1344,6 +1344,14 @@ private:
     storage_type storage_{nullptr};
 };
 
+template<class T, reg Capacity = 0>
+using local_fifo_view = fifo_view<T, Capacity, ::spsc::policy::P>;
+
+template<class T, reg Capacity = 0>
+using concurrent_fifo_view = fifo_view<T, Capacity, ::spsc::policy::FA<>>;
+
+template<class T, reg Capacity = 0>
+using cache_aligned_fifo_view = fifo_view<T, Capacity, ::spsc::policy::CFA<>>;
 
 // ------------------------------------------------------------------------
 // Deduction Guides

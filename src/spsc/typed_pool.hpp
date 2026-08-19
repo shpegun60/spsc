@@ -1851,6 +1851,21 @@ private:
     slots_storage slots_{};
 };
 
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::P, T, ::spsc::alloc::default_alloc>>
+using local_typed_pool = typed_pool<T, Capacity, ::spsc::policy::P, Alloc>;
+
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::FA<>, T, ::spsc::alloc::default_alloc>>
+using concurrent_typed_pool = typed_pool<T, Capacity, ::spsc::policy::FA<>, Alloc>;
+
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::CFA<>, T, ::spsc::alloc::default_alloc>>
+using cache_aligned_typed_pool = typed_pool<T, Capacity, ::spsc::policy::CFA<>, Alloc>;
+
 } // namespace spsc
 
 #endif /* SPSC_TYPED_POOL_HPP_ */

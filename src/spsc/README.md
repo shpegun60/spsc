@@ -93,6 +93,43 @@ off by default unless `SPSC_SHADOW_ALLOW_32BIT=1` is selected explicitly.
 API. Applications should use the concrete containers and views rather than
 derive from `SPSCbase` or expose its protected endpoint helpers.
 
+## Semantic Aliases (v2.1)
+
+For new code, choose the concurrency contract from the type name instead of
+starting with an explicit policy:
+
+| Use case | Recommended type | Fixed policy |
+| --- | --- | --- |
+| One execution context or external synchronization | `local_fifo<T, N>` | `P` |
+| Normal portable producer/consumer SPSC | `concurrent_fifo<T, N>` | `FA<>` |
+| Concurrent SPSC where cache isolation is justified | `cache_aligned_fifo<T, N>` | `CFA<>` |
+
+The same `local_*`, `concurrent_*`, and `cache_aligned_*` scheme exists for
+the policy-driven transport types: `fifo`, `queue`, `fifo_view`, `pool`,
+`pool_view`, `typed_pool`, `latest`, the `array_fifo` family, and the
+`chunk_fifo` family. They are exact compile-time aliases, not runtime wrapper
+classes. Owning aliases retain the matching policy-derived default allocator
+and still accept a custom allocator in the natural final template position.
+
+For new concurrent SPSC code, prefer `concurrent_*` aliases. Use
+`cache_aligned_*` when cache-line isolation is useful for the target and has
+been justified by measurement; it is not a universal throughput claim. Use the
+full `Container<..., Policy, ...>` form when you intentionally need advanced
+policies such as `A<>`, `CA<>`, `V`, `VV`, `CP`, `AA<>`, or `CAA<>`.
+
+The historical bare form is unchanged throughout the 2.x line:
+`fifo<T, N>` still follows `default_policy`, whose shipped configuration is
+`P`; `SPSC_DEFAULT_POLICY_ATOMIC=1` remains the explicit opt-in to `A<>`.
+The semantic aliases never depend on that default. A future major release may
+change the bare default toward `FA<>`; this release does not do so.
+
+`buffer_pool` intentionally has no `local_*`, `concurrent_*`, or
+`cache_aligned_*` aliases. It owns storage but has no producer/consumer index;
+its policy expresses storage layout. Keep using explicit `policy::CP` for
+cache-aligned DMA storage and apply `concurrent_*` or `cache_aligned_*` to the
+queue or view that transfers ownership. Legacy `fast_fifo` and `fast_queue`
+remain available and still select `CFA<>`.
+
 ## Quick Examples
 
 The examples below use the current pointer-based `try_*` API style used by the library.

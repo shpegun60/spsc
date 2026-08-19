@@ -1558,6 +1558,27 @@ private:
     geometry_type  	bufferSize_{};
 };
 
+template<
+    reg Capacity = 0,
+    typename Alloc = ::spsc::alloc::policy_default_alloc_t<
+        ::spsc::policy::P, 1u, ::spsc::alloc::default_alloc>
+    >
+using local_pool = pool<Capacity, ::spsc::policy::P, Alloc>;
+
+template<
+    reg Capacity = 0,
+    typename Alloc = ::spsc::alloc::policy_default_alloc_t<
+        ::spsc::policy::FA<>, 1u, ::spsc::alloc::default_alloc>
+    >
+using concurrent_pool = pool<Capacity, ::spsc::policy::FA<>, Alloc>;
+
+template<
+    reg Capacity = 0,
+    typename Alloc = ::spsc::alloc::policy_default_alloc_t<
+        ::spsc::policy::CFA<>, 1u, ::spsc::alloc::default_alloc>
+    >
+using cache_aligned_pool = pool<Capacity, ::spsc::policy::CFA<>, Alloc>;
+
 } // namespace spsc
 
 #endif /* SPSC_POOL_HPP_ */

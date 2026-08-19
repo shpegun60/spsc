@@ -27,6 +27,25 @@ If you are new to the library, read in this order:
 | FIFO of `chunk<T,...>` blocks | [`chunk_fifo` family](chunk_fifo.md) |
 | Owning collection of fixed-size buffers | [`buffer_pool`](buffer_pool.md) |
 
+## Choose the Concurrency Spelling
+
+For policy-driven SPSC transport containers, the v2.1 aliases make the common
+contract visible in the type name:
+
+| Need | Prefer | Policy |
+| --- | --- | --- |
+| one context or external synchronization | `local_*` | `P` |
+| ordinary portable one-producer/one-consumer transport | `concurrent_*` | `FA<>` |
+| concurrent transport with justified cache isolation | `cache_aligned_*` | `CFA<>` |
+
+This applies to `fifo`, `queue`, their views, pools, `latest`, and the array
+and chunk FIFO families. The aliases are zero-cost type aliases; the explicit
+`Container<..., Policy, ...>` form remains available for advanced policy
+selection. `buffer_pool` is deliberately excluded because it is storage, not
+an SPSC transport endpoint; keep its DMA alignment policy explicit (normally
+`CP`). See [Common Concepts](common-concepts.md#6-policies) for the full
+policy contract.
+
 ## Container Guides
 
 - [Common Concepts](common-concepts.md)
