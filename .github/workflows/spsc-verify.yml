@@ -59,6 +59,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Qt and compiler dependencies
         run: |
+          # GitHub-hosted Ubuntu runners may select a stalled Azure mirror.
+          # The canonical archive remains in the runner mirror list.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y \
             build-essential clang qt6-base-dev qt6-base-dev-tools
@@ -208,6 +213,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install AArch64 cross compiler
         run: |
+          # GitHub-hosted Ubuntu runners may select a stalled Azure mirror.
+          # The canonical archive remains in the runner mirror list.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y g++-aarch64-linux-gnu
       - name: Compile C++17 and C++20 public-header smoke
