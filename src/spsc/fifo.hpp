@@ -1597,6 +1597,21 @@ private:
 // Convenience Aliases
 // ---------------------------------------------------------------------------
 
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::P, T, ::spsc::alloc::default_alloc>>
+using local_fifo = fifo<T, Capacity, ::spsc::policy::P, Alloc>;
+
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::FA<>, T, ::spsc::alloc::default_alloc>>
+using concurrent_fifo = fifo<T, Capacity, ::spsc::policy::FA<>, Alloc>;
+
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::CFA<>, T, ::spsc::alloc::default_alloc>>
+using cache_aligned_fifo = fifo<T, Capacity, ::spsc::policy::CFA<>, Alloc>;
+
 /**
  * fast_fifo<T, Capacity>:
  * Convenience alias selecting CFA<>: cache-aligned metadata with the

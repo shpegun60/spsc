@@ -408,6 +408,39 @@ public:
 
 };
 
+template <class T, reg N, reg FifoCapacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::P, std::array<T, N>, ::spsc::alloc::default_alloc>>
+using local_array_fifo = array_fifo<T, N, FifoCapacity, ::spsc::policy::P, Alloc>;
+
+template <class T, reg N, reg FifoCapacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::FA<>, std::array<T, N>, ::spsc::alloc::default_alloc>>
+using concurrent_array_fifo = array_fifo<T, N, FifoCapacity, ::spsc::policy::FA<>, Alloc>;
+
+template <class T, reg N, reg FifoCapacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_value_alloc_t<
+             ::spsc::policy::CFA<>, std::array<T, N>, ::spsc::alloc::default_alloc>>
+using cache_aligned_array_fifo = array_fifo<T, N, FifoCapacity, ::spsc::policy::CFA<>, Alloc>;
+
+template <class T, reg N, reg FifoCapacity = 0>
+using local_array_fifo_view = array_fifo_view<T, N, FifoCapacity, ::spsc::policy::P>;
+
+template <class T, reg N, reg FifoCapacity = 0>
+using concurrent_array_fifo_view = array_fifo_view<T, N, FifoCapacity, ::spsc::policy::FA<>>;
+
+template <class T, reg N, reg FifoCapacity = 0>
+using cache_aligned_array_fifo_view = array_fifo_view<T, N, FifoCapacity, ::spsc::policy::CFA<>>;
+
+template <class T, reg N, reg FifoCapacity = 0>
+using local_carray_fifo_view = carray_fifo_view<T, N, FifoCapacity, ::spsc::policy::P>;
+
+template <class T, reg N, reg FifoCapacity = 0>
+using concurrent_carray_fifo_view = carray_fifo_view<T, N, FifoCapacity, ::spsc::policy::FA<>>;
+
+template <class T, reg N, reg FifoCapacity = 0>
+using cache_aligned_carray_fifo_view = carray_fifo_view<T, N, FifoCapacity, ::spsc::policy::CFA<>>;
+
 } // namespace spsc
 
 #endif /* SPSC_BASE_ARRAY_FIFO_HPP_ */

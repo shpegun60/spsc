@@ -5,6 +5,11 @@
 It is not an SPSC queue by itself. Use it when you need stable buffer storage for
 DMA, packet payloads, or another queue/pool layer that moves buffer ownership.
 
+`buffer_pool` intentionally has no `local_*`, `concurrent_*`, or
+`cache_aligned_*` aliases. Its `Policy` controls storage alignment and physical
+span rather than producer/consumer synchronization. Keep storage policy
+selection explicit, especially `CP` for cache-aligned DMA storage.
+
 ## Variants
 
 - `buffer_pool<T, BufferSize, Count>`: static buffer size and static count

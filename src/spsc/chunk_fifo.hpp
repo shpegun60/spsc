@@ -305,6 +305,57 @@ public:
 
 };
 
+template<
+    class T,
+    reg   ChunkCapacity = 0,
+    reg   FifoCapacity  = 0,
+    typename Alloc      = ::spsc::alloc::policy_default_value_alloc_t<
+        ::spsc::policy::P, ::spsc::chunk<T, ChunkCapacity>, ::spsc::alloc::default_alloc>
+    >
+using local_chunk_fifo = chunk_fifo<T, ChunkCapacity, FifoCapacity, ::spsc::policy::P, Alloc>;
+
+template<
+    class T,
+    reg   ChunkCapacity = 0,
+    reg   FifoCapacity  = 0,
+    typename Alloc      = ::spsc::alloc::policy_default_value_alloc_t<
+        ::spsc::policy::FA<>, ::spsc::chunk<T, ChunkCapacity>, ::spsc::alloc::default_alloc>
+    >
+using concurrent_chunk_fifo = chunk_fifo<T, ChunkCapacity, FifoCapacity, ::spsc::policy::FA<>, Alloc>;
+
+template<
+    class T,
+    reg   ChunkCapacity = 0,
+    reg   FifoCapacity  = 0,
+    typename Alloc      = ::spsc::alloc::policy_default_value_alloc_t<
+        ::spsc::policy::CFA<>, ::spsc::chunk<T, ChunkCapacity>, ::spsc::alloc::default_alloc>
+    >
+using cache_aligned_chunk_fifo = chunk_fifo<T, ChunkCapacity, FifoCapacity, ::spsc::policy::CFA<>, Alloc>;
+
+template<
+    class T,
+    reg   ChunkCapacity,
+    reg   FifoCapacity  = 0,
+    typename Alloc      = ::spsc::alloc::default_alloc
+    >
+using local_chunk_fifo_view = chunk_fifo_view<T, ChunkCapacity, FifoCapacity, ::spsc::policy::P, Alloc>;
+
+template<
+    class T,
+    reg   ChunkCapacity,
+    reg   FifoCapacity  = 0,
+    typename Alloc      = ::spsc::alloc::default_alloc
+    >
+using concurrent_chunk_fifo_view = chunk_fifo_view<T, ChunkCapacity, FifoCapacity, ::spsc::policy::FA<>, Alloc>;
+
+template<
+    class T,
+    reg   ChunkCapacity,
+    reg   FifoCapacity  = 0,
+    typename Alloc      = ::spsc::alloc::default_alloc
+    >
+using cache_aligned_chunk_fifo_view = chunk_fifo_view<T, ChunkCapacity, FifoCapacity, ::spsc::policy::CFA<>, Alloc>;
+
 } // namespace spsc
 
 #endif /* SPSC_CHUNK_FIFO_HPP_ */

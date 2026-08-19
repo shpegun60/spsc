@@ -1556,6 +1556,21 @@ private:
 // Convenience Aliases
 // ---------------------------------------------------------------------------
 
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_alloc_t<
+             ::spsc::policy::P, alignof(T), ::spsc::alloc::align_alloc<alignof(T)>>>
+using local_queue = queue<T, Capacity, ::spsc::policy::P, Alloc>;
+
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_alloc_t<
+             ::spsc::policy::FA<>, alignof(T), ::spsc::alloc::align_alloc<alignof(T)>>>
+using concurrent_queue = queue<T, Capacity, ::spsc::policy::FA<>, Alloc>;
+
+template <class T, reg Capacity = 0,
+         typename Alloc = ::spsc::alloc::policy_default_alloc_t<
+             ::spsc::policy::CFA<>, alignof(T), ::spsc::alloc::align_alloc<alignof(T)>>>
+using cache_aligned_queue = queue<T, Capacity, ::spsc::policy::CFA<>, Alloc>;
+
 /**
  * fast_queue<T, Capacity>:
  * Convenience alias selecting CFA<>: cache-aligned metadata with the
