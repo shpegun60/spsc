@@ -6,6 +6,47 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+This major release changes the implicit `default_policy` for bare containers.
+It deliberately does not alter endpoint algorithms, fully specified policies,
+or the semantic aliases introduced in v2.1.
+
+### Changed
+
+- With no `SPSC_DEFAULT_POLICY_ATOMIC` definition, `default_policy` is now
+  `FA<>`. Bare policy-based containers such as `fifo<T, N>` therefore use the
+  portable single-writer atomic SPSC backend by default.
+- `SPSC_DEFAULT_POLICY_ATOMIC` is now a legacy explicit configuration override
+  rather than a synthesized library default: explicit `0` remains `P`, and
+  explicit `1` remains strict `A<>`.
+- `local_*`, `concurrent_*`, and `cache_aligned_*` remain fixed respectively to
+  `P`, `FA<>`, and `CFA<>`, independently of the legacy override.
+- `policy::CacheAligned<>` has always defaulted its `Base` argument to
+  `default_policy`; it therefore now means `CFA<>` in the normal v3
+  configuration. Spell `CP`, `CFA<>`, or `CA<>` when that base must be fixed.
+
+### Breaking
+
+- A bare container compiled without the legacy macro is a different C++ type
+  from its v2.1 counterpart. Its policy type, metadata layout, `sizeof`,
+  `alignof`, generated code, atomic requirements, and ABI may change.
+- The P-to-FA switch alone does not change the shipped policy-derived default
+  allocator: both policies request allocator alignment `1`. Explicit
+  cache-aligned policies still select their aligned allocator path.
+- `buffer_pool` also uses `default_policy` when its policy is omitted. It is
+  not an SPSC endpoint; its P/FA physical layout and default allocator remain
+  the same, but its C++ type changes and the bare form can now inherit the
+  lock-free atomic toolchain requirement. Storage-sensitive uses should spell
+  `P` or `CP` explicitly as appropriate.
+
+### Migration
+
+- Before upgrading, replace v2 plain bare containers with `local_*` when the
+  plain layout and external-synchronization contract must remain unchanged.
+- Move real one-producer/one-consumer handoffs to `concurrent_*` (or
+  `cache_aligned_*` when justified) before or during the upgrade.
+- See [`migration-v3.md`](src/spsc/docs/migration-v3.md) for the exact macro
+  compatibility table and source migration examples.
+
 ## [2.1.0] - 2026-08-19
 
 This backward-compatible feature release adds semantic aliases for the normal

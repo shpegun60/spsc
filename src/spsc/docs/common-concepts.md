@@ -146,11 +146,12 @@ For guard- and bulk-helper specific APIs, see [Guard and Bulk Helpers](guard-and
 
 ## 6. Policies
 
-All main containers use a `Policy` parameter controlling the metadata counters.
+All main containers use a `Policy` parameter controlling metadata counters and,
+where applicable, policy-derived storage alignment.
 
 Ready-made families:
 
-- `default_policy`: `P` by default; define `SPSC_DEFAULT_POLICY_ATOMIC=1` only when you deliberately want `A<>` as the default
+- `default_policy`: `FA<>` when no legacy override macro is defined
 - `P`: plain counters for a single context or externally synchronized use
 - `V`: volatile counters for externally ordered or platform-specific access
 - `VV`: both counters and geometry volatile, with the same restriction
@@ -164,7 +165,11 @@ Cache-line aligned aliases:
 - `CP`, `CV`, `CVV`
 - `CA<>`, `CFA<>`, `CAA<>`
 
-### Semantic aliases (v2.1)
+The generic `CacheAligned<>` spelling defaults its base to `default_policy`, so
+in the normal v3 configuration it is `CFA<>`. Prefer the named aliases above
+when the base policy must not depend on build configuration.
+
+### Semantic aliases
 
 For the three common transport contracts, use semantic aliases instead of
 spelling a policy in every declaration:
@@ -188,11 +193,20 @@ measurement. The full `Container<..., Policy, ...>` spelling remains the
 advanced API for deliberate use of `A<>`, `CA<>`, `V`, `VV`, `CP`, `AA<>`,
 `CAA<>`, and related policies.
 
-In the shipped 2.x configuration, a bare container such as `fifo<T, N>` still
-uses the historical `default_policy` of `P`; `SPSC_DEFAULT_POLICY_ATOMIC=1`
-continues to be the explicit opt-in to `A<>`. No default changes in v2.1. A
-future major version may revise the generic default, but these aliases remain
-explicit and stable.
+In v3, a bare container such as `fifo<T, N>` uses `FA<>` when
+`SPSC_DEFAULT_POLICY_ATOMIC` is undefined. The macro is a legacy explicit
+override, with deliberately preserved meanings:
+
+| Configuration | `default_policy` |
+| --- | --- |
+| macro undefined | `FA<>` |
+| `SPSC_DEFAULT_POLICY_ATOMIC=0` | `P` |
+| `SPSC_DEFAULT_POLICY_ATOMIC=1` | `A<>` |
+
+Do not use this macro for new policy selection. Use the semantic aliases or an
+explicit policy instead. The aliases remain explicit and stable in all three
+configurations. For the v2 plain-default migration and its ABI/layout impact,
+read [Migrating from v2 to v3](migration-v3.md).
 
 `buffer_pool` is intentionally outside this naming scheme. Its policy controls
 storage alignment and span, not producer/consumer synchronization; use explicit

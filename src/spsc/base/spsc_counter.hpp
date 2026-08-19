@@ -35,6 +35,10 @@
  *               Orders::rmw   → std::memory_order for add()/inc()
  *           - By default uses acquire/release/acq_rel palette.
  *
+ *       * FastAtomicCounter<T, Orders>
+ *           - The same atomic load/store publication contract.
+ *           - add()/inc() use load+store and therefore require one writer.
+ *
  *       * CachelineCounter<Counter, AlignB>
  *           - Wraps any Counter type (Plain/Volatile/Atomic) into a slot that:
  *               • is aligned to AlignB bytes
@@ -50,6 +54,7 @@
  *     compiler/platform contract supplies payload ordering and visibility.
  *   - Use AtomicCounter for cross-core or host code, or when you want strict
  *     acquire/release semantics for SPSC queues.
+ *   - Use FastAtomicCounter for an SPSC-owned index with exactly one writer.
  *   - Use CachelineXxxCounter aliases (CachelineAtomicCounter, etc.) when
  *     producer and consumer counters live in different cores or threads and
  *     you want to avoid cache-line contention.

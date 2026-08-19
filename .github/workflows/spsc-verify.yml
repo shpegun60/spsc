@@ -153,11 +153,28 @@ jobs:
           assert all(record['status'] == 'inconclusive' for record in comparisons)
           assert all(not record['ranking_eligible'] for record in comparisons)
           PY
-      - name: Verify rejected publication and cacheline configurations
+      - name: Verify rejected publication, cacheline, and default-policy configurations
         shell: pwsh
         run: |
           ./scripts/test_relaxed_publication_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
           ./scripts/test_cacheline_config_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
+          ./scripts/test_default_policy_config_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
+      - name: Compile all valid v3 default-policy modes
+        run: |
+          compile_mode() {
+            shift
+            '${{ matrix.compiler }}' \
+              -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
+              -I. -Isrc/spsc -fsyntax-only "$@" \
+              tests/standalone/h7_header_smoke.cpp
+          }
+          compile_mode modern
+          compile_mode legacy_plain \
+            -DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=0
+          compile_mode legacy_strict \
+            -DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=1
 
   linux-clean-dashboard:
     name: Linux clean qmake dashboard build
@@ -181,13 +198,24 @@ jobs:
           qmake6 "$GITHUB_WORKSPACE/tests/standalone/qmake_consumer/consumer.pro"
           make -j2
           ./spsc_pri_consumer
-      - name: Build and run semantic alias standalone smoke
+      - name: Build and run v3 default-policy and semantic-alias smoke
         run: |
-          g++ -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
-            -I. -Isrc/spsc \
-            -o "$RUNNER_TEMP/semantic_alias_smoke" \
-            tests/standalone/h7_header_smoke.cpp
-          "$RUNNER_TEMP/semantic_alias_smoke"
+          compile_and_run() {
+            local name="$1"
+            shift
+            g++ -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
+              -I. -Isrc/spsc "$@" \
+              -o "$RUNNER_TEMP/default_policy_${name}" \
+              tests/standalone/h7_header_smoke.cpp
+            "$RUNNER_TEMP/default_policy_${name}"
+          }
+          compile_and_run modern
+          compile_and_run legacy_plain \
+            -DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=0
+          compile_and_run legacy_strict \
+            -DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=1
       - name: Verify STM32H7 buffer-pool DMA layout contract
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
@@ -226,7 +254,7 @@ jobs:
     name: Linux AArch64 header smoke
     runs-on: ubuntu-24.04
     # Cross-toolchain packages are larger than the smoke itself; do not cancel
-    # before the two syntax-only checks can run.
+    # before all syntax-only checks can run.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -244,6 +272,14 @@ jobs:
           pwsh ./scripts/check_public_headers.ps1 \
             -Compiler aarch64-linux-gnu-g++
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
+          aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=0 \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
+          aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=1 \
             -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
           aarch64-linux-gnu-g++ -std=c++20 -Wall -Wextra -Werror -pedantic \
             -DSPSC_HAS_SPAN=1 -I. -Isrc/spsc -fsyntax-only \
@@ -266,6 +302,14 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
             -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=0 \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=1 \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
           g++ -std=c++20 -Wall -Wextra -Werror -pedantic -DSPSC_HAS_SPAN=1 \
             -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
 
@@ -284,7 +328,7 @@ jobs:
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $command = "call `"$vcvars`" && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++20 /W4 /WX /EHsc /DSPSC_HAS_SPAN=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp"
+          $command = "call `"$vcvars`" && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 /DSPSC_DEFAULT_POLICY_ATOMIC=0 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 /DSPSC_DEFAULT_POLICY_ATOMIC=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++20 /W4 /WX /EHsc /DSPSC_HAS_SPAN=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -305,7 +349,7 @@ jobs:
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_cacheline_config_compile_fail.ps1 -Compiler cl"
+          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_cacheline_config_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_default_policy_config_compile_fail.ps1 -Compiler cl"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify MSVC H0R benchmark protocol

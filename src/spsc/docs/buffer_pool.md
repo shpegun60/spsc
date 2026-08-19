@@ -10,6 +10,11 @@ DMA, packet payloads, or another queue/pool layer that moves buffer ownership.
 span rather than producer/consumer synchronization. Keep storage policy
 selection explicit, especially `CP` for cache-aligned DMA storage.
 
+In v3, omitting its policy follows the global `FA<>` default even though
+`buffer_pool` is not an SPSC endpoint. For a storage layout that must remain
+plain or DMA-cache-aligned across the v2-to-v3 boundary, spell `P` or `CP`
+explicitly. See [Migrating from v2 to v3](migration-v3.md).
+
 ## Variants
 
 - `buffer_pool<T, BufferSize, Count>`: static buffer size and static count
@@ -17,12 +22,16 @@ selection explicit, especially `CP` for cache-aligned DMA storage.
 - `buffer_pool<T, 0, Count>`: runtime buffer size, static count
 - `buffer_pool<T, 0, 0>`: runtime buffer size and runtime count
 
+Readable aliases preserve the same four shapes and the same default-policy
+mapping: `static_buffer_pool`, `fixed_buffer_pool`,
+`fixed_count_buffer_pool`, and `dynamic_buffer_pool`.
+
 ## Basic Static Example
 
 ```cpp
 #include "buffer_pool.hpp"
 
-spsc::buffer_pool<std::byte, 1500, 8> buffers;
+spsc::buffer_pool<std::byte, 1500, 8, spsc::policy::P> buffers;
 
 for (auto i = decltype(buffers)::size_type{0}; i < buffers.count(); ++i) {
     std::byte* payload = buffers.data(i);
@@ -33,13 +42,13 @@ for (auto i = decltype(buffers)::size_type{0}; i < buffers.count(); ++i) {
 ## Dynamic Shape Examples
 
 ```cpp
-spsc::buffer_pool<std::byte, 1500, 0> runtimeCount;
+spsc::buffer_pool<std::byte, 1500, 0, spsc::policy::P> runtimeCount;
 runtimeCount.resize(8);
 
-spsc::buffer_pool<std::byte, 0, 8> runtimeSize;
+spsc::buffer_pool<std::byte, 0, 8, spsc::policy::P> runtimeSize;
 runtimeSize.resize(1500);
 
-spsc::buffer_pool<std::byte, 0, 0> dynamicShape;
+spsc::buffer_pool<std::byte, 0, 0, spsc::policy::P> dynamicShape;
 dynamicShape.resize(8, 1500);
 ```
 

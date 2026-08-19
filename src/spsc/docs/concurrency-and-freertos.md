@@ -75,9 +75,11 @@ Use when:
 - there is no real cross-context concurrency
 - the queue is effectively local or single-threaded
 
-Do not treat the default `P` policy as the normal choice for task/task or ISR/task
-synchronization. Define `SPSC_DEFAULT_POLICY_ATOMIC=1` before including the
-headers when you want the default policy to be atomic (`A<>`).
+In v3, the normal bare default is `FA<>`, so do not set a macro merely to make
+ordinary task/task or ISR/task handoff atomic. `SPSC_DEFAULT_POLICY_ATOMIC` is
+a legacy explicit override: `0` selects `P`, `1` selects strict `A<>`, and an
+undefined macro selects the modern `FA<>` default. Prefer `local_*`,
+`concurrent_*`, or an explicit policy for new code.
 
 ### `V` / `VV`
 
