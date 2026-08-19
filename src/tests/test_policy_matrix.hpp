@@ -9,12 +9,19 @@
 
 namespace spsc::test {
 
-static_assert(SPSC_DEFAULT_POLICY_ATOMIC == 0,
-              "test matrix expects the public default policy to be plain unless explicitly overridden");
+#if defined(SPSC_DEFAULT_POLICY_ATOMIC)
+using expected_default_policy = std::conditional_t<
+    (SPSC_DEFAULT_POLICY_ATOMIC != 0),
+    ::spsc::policy::A<>,
+    ::spsc::policy::P>;
+#else
+using expected_default_policy = ::spsc::policy::FA<>;
+#endif
+
 static_assert(SPSC_REQUIRE_LOCK_FREE == 1,
               "test matrix expects lock-free enforcement to stay enabled by default");
-static_assert(std::is_same_v<::spsc::policy::default_policy, ::spsc::policy::P>,
-              "default_policy must match the configured plain-by-default contract");
+static_assert(std::is_same_v<::spsc::policy::default_policy, expected_default_policy>,
+              "default_policy must match the v3 modern or legacy-override contract");
 
 template <class... Policies>
 struct policy_pack {};

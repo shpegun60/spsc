@@ -9,6 +9,7 @@ The examples below are C++17-safe unless explicitly marked otherwise. Helpers th
 ## Start Here
 
 - [Documentation Hub](docs/README.md)
+- [Migrating from v2 to v3](docs/migration-v3.md)
 - [Common Concepts](docs/common-concepts.md)
 - [Concurrency and FreeRTOS](docs/concurrency-and-freertos.md)
 - [Method Recipes](docs/method-recipes.md)
@@ -50,13 +51,25 @@ For FreeRTOS and MCU examples, see [Concurrency and FreeRTOS](docs/concurrency-a
 
 ## Policy Cheat Sheet
 
-The policy controls only the queue metadata behavior: counters, geometry, atomicity, and cacheline padding.
-By default, containers use `spsc::policy::default_policy`, which is `P`. Define
-`SPSC_DEFAULT_POLICY_ATOMIC=1` before including the library if you want
-`default_policy` to be `A<>`.
-If you opt into `P`, use that instance from one execution context or provide
-external synchronization. Merely running on one core is not sufficient when a
-task and an ISR can preempt each other.
+The policy controls counters, geometry, atomicity, cacheline padding, and where
+applicable policy-derived storage alignment. In v3, a container with no
+explicit policy uses `spsc::policy::default_policy`, which is `FA<>` when no
+legacy override is defined. That is the normal portable
+one-producer/one-consumer default.
+
+`SPSC_DEFAULT_POLICY_ATOMIC` is a legacy explicit build override, not a normal
+policy-selection API:
+
+| Configuration before including the headers | `default_policy` |
+| --- | --- |
+| macro undefined | `FA<>` |
+| `SPSC_DEFAULT_POLICY_ATOMIC=0` | `P` |
+| `SPSC_DEFAULT_POLICY_ATOMIC=1` | `A<>` |
+
+New code should select `local_*`, `concurrent_*`, `cache_aligned_*`, or an
+explicit `Policy` rather than set a build-wide override. `P` still requires one
+execution context or external synchronization; merely running on one core is
+not sufficient when a task and an ISR can preempt each other.
 
 Common ready-made policies from [`base/spsc_policy.hpp`](base/spsc_policy.hpp):
 
@@ -93,7 +106,7 @@ off by default unless `SPSC_SHADOW_ALLOW_32BIT=1` is selected explicitly.
 API. Applications should use the concrete containers and views rather than
 derive from `SPSCbase` or expose its protected endpoint helpers.
 
-## Semantic Aliases (v2.1)
+## Semantic Aliases
 
 For new code, choose the concurrency contract from the type name instead of
 starting with an explicit policy:
@@ -117,11 +130,13 @@ been justified by measurement; it is not a universal throughput claim. Use the
 full `Container<..., Policy, ...>` form when you intentionally need advanced
 policies such as `A<>`, `CA<>`, `V`, `VV`, `CP`, `AA<>`, or `CAA<>`.
 
-The historical bare form is unchanged throughout the 2.x line:
-`fifo<T, N>` still follows `default_policy`, whose shipped configuration is
-`P`; `SPSC_DEFAULT_POLICY_ATOMIC=1` remains the explicit opt-in to `A<>`.
-The semantic aliases never depend on that default. A future major release may
-change the bare default toward `FA<>`; this release does not do so.
+In v3, the bare form follows the modern `FA<>` default:
+`fifo<T, N>` is equivalent to `concurrent_fifo<T, N>` under the normal
+undefined-macro configuration. The semantic aliases never depend on the
+default. To preserve a v2 plain bare container's layout and synchronization
+contract, migrate it to `local_*` before upgrading. See
+[Migrating from v2 to v3](docs/migration-v3.md) for the exact compatibility
+table, including explicit legacy macro builds.
 
 `buffer_pool` intentionally has no `local_*`, `concurrent_*`, or
 `cache_aligned_*` aliases. It owns storage but has no producer/consumer index;

@@ -51,13 +51,16 @@
 #endif /* SPSC_ASSERT */
 
 
-/* Optional: globally choose atomic default policy.
- * 0 = Plain for a single context or external synchronization,
- * 1 = Atomic by default.
+/* Legacy default-policy configuration override.
+ *
+ * Do not define this macro here. In v3 its presence is meaningful:
+ *   undefined -> policy::FA<> (the modern concurrent default)
+ *   0         -> policy::P    (legacy explicit plain default)
+ *   1         -> policy::A<>  (legacy explicit strict-atomic default)
+ *
+ * New code should select an explicit semantic alias or policy instead of
+ * setting this build-wide compatibility override.
  */
-#ifndef SPSC_DEFAULT_POLICY_ATOMIC
-#  define SPSC_DEFAULT_POLICY_ATOMIC 0
-#endif /* SPSC_DEFAULT_POLICY_ATOMIC */
 
 /* --------------------------------------------------------------------
  * Optional: require lock-free atomics or allow fallback toolchains.

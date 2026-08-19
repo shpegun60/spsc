@@ -11,6 +11,10 @@
  *   - Dynamic model  : CapacityCtrl<0, P>    → runtime capacity/mask with
  *                       policy-driven geometry backend.
  *
+ * Implementation status:
+ *   - CapacityCtrl is an internal support type, not a supported application
+ *     extension API. Its default Policy follows policy::default_policy.
+ *
  * Design:
  *   - For C != 0:
  *       * Header-only, no storage, no runtime.

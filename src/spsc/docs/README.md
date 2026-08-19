@@ -5,11 +5,12 @@ This folder contains the split documentation for the `spsc` containers.
 If you are new to the library, read in this order:
 
 1. [Common Concepts](common-concepts.md)
-2. [Concurrency and FreeRTOS](concurrency-and-freertos.md)
-3. [Method Recipes](method-recipes.md)
-4. [Guard and Bulk Helpers](guard-and-bulk-helpers.md)
-5. One container guide from the list below
-6. The short [Quick Start](../README.md) when you want a fast overview before diving into container-specific docs
+2. [Migrating from v2 to v3](migration-v3.md) when upgrading an existing project
+3. [Concurrency and FreeRTOS](concurrency-and-freertos.md)
+4. [Method Recipes](method-recipes.md)
+5. [Guard and Bulk Helpers](guard-and-bulk-helpers.md)
+6. One container guide from the list below
+7. The short [Quick Start](../README.md) when you want a fast overview before diving into container-specific docs
 
 ## Quick Container Choice
 
@@ -29,7 +30,7 @@ If you are new to the library, read in this order:
 
 ## Choose the Concurrency Spelling
 
-For policy-driven SPSC transport containers, the v2.1 aliases make the common
+For policy-driven SPSC transport containers, the semantic aliases make the common
 contract visible in the type name:
 
 | Need | Prefer | Policy |
@@ -46,9 +47,15 @@ an SPSC transport endpoint; keep its DMA alignment policy explicit (normally
 `CP`). See [Common Concepts](common-concepts.md#6-policies) for the full
 policy contract.
 
+In v3, bare policy-driven containers use `FA<>` by default when no legacy
+override macro is defined. If upgrading plain v2 bare containers, read
+[Migrating from v2 to v3](migration-v3.md) before relying on their old layout
+or storage assumptions.
+
 ## Container Guides
 
 - [Common Concepts](common-concepts.md)
+- [Migrating from v2 to v3](migration-v3.md)
 - [Concurrency and FreeRTOS](concurrency-and-freertos.md)
 - [Method Recipes](method-recipes.md)
 - [Guard and Bulk Helpers](guard-and-bulk-helpers.md)

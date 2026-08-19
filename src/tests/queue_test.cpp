@@ -248,7 +248,7 @@ constexpr int kThreadTimeoutMs  = 15'000;
 static_assert(std::is_same_v<
                   ::spsc::fast_queue<int, 16>,
                   ::spsc::queue<int, 16, ::spsc::policy::CFA<>>>,
-              "fast_queue must select the single-writer CFA policy in 2.0");
+              "fast_queue must remain the single-writer CFA alias");
 
 template <class Q>
 static void api_smoke_compile() {

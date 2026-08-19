@@ -33,12 +33,15 @@
  *        - V   : volatile counters, externally ordered/platform-specific
  *        - VV  : volatile counters and geometry, with the same restriction
  *        - A<O>: atomic counters with configurable orders, plain geometry
+ *        - FA<O>: single-writer atomic counters, plain geometry
  *        - AA<O>: atomic counters and atomic geometry (heavy shared setups)
  *
  *   3) default_policy:
- *        - Controlled via SPSC_DEFAULT_POLICY_ATOMIC:
+ *        - Modern v3 default when SPSC_DEFAULT_POLICY_ATOMIC is undefined:
+ *            FA<> (single-writer atomic counters)
+ *        - Legacy explicit SPSC_DEFAULT_POLICY_ATOMIC override:
  *            0 → P   (PlainCounter)
- *            1 → A<> (AtomicCounter with default_orders)
+ *            1 → A<> (strict AtomicCounter with default_orders)
  *
  *   4) CacheAligned<Base, CAlign, GAlign>:
  *        - Derives a new policy from Base but wraps:
@@ -169,16 +172,26 @@ using ARMW = A<O>;
 template <class O = default_orders>
 using AARMW = AA<O>;
 
-/* Default policy: compile-time switchable without editing callers. */
-#ifndef SPSC_DEFAULT_POLICY_ATOMIC
-#  define SPSC_DEFAULT_POLICY_ATOMIC 0
-#endif /* SPSC_DEFAULT_POLICY_ATOMIC */
-
+/*
+ * v3 default-policy contract:
+ *
+ *   no SPSC_DEFAULT_POLICY_ATOMIC definition -> FA<>
+ *   SPSC_DEFAULT_POLICY_ATOMIC=0            -> P   (legacy explicit override)
+ *   SPSC_DEFAULT_POLICY_ATOMIC=1            -> A<> (legacy explicit override)
+ *
+ * The macro is deliberately not synthesized when absent. Its definedness is
+ * part of the compatibility contract, so callers can distinguish the modern
+ * default from an explicit legacy plain override.
+ */
+#if defined(SPSC_DEFAULT_POLICY_ATOMIC)
 static_assert(SPSC_DEFAULT_POLICY_ATOMIC == 0 ||
                   SPSC_DEFAULT_POLICY_ATOMIC == 1,
               "SPSC_DEFAULT_POLICY_ATOMIC must be 0 or 1");
 
-using default_policy = std::conditional_t<SPSC_DEFAULT_POLICY_ATOMIC, A<>, P>;
+using default_policy = std::conditional_t<(SPSC_DEFAULT_POLICY_ATOMIC != 0), A<>, P>;
+#else
+using default_policy = FA<>;
+#endif
 
 /* ------------------------ Cache-line wrapper ------------------------
  * CacheAligned<Base, CAlign, GAlign>
@@ -188,6 +201,7 @@ using default_policy = std::conditional_t<SPSC_DEFAULT_POLICY_ATOMIC, A<>, P>;
  *   geometry_type = CachelineCounter<Base::geometry_type, GAlign>
  *
  * Defaults:
+ *   - Base   -> default_policy (and therefore follows the v3/legacy mapping)
  *   - CAlign → ::spsc::hw::cacheline_bytes
  *   - GAlign → CAlign (::spsc::hw::cacheline_bytes)
  *

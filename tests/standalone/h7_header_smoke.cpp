@@ -17,7 +17,52 @@
 #include <type_traits>
 #include <utility>
 
+#if defined(SPSC_TEST_LEGACY_DEFAULT_POLICY)
+#  if !defined(SPSC_DEFAULT_POLICY_ATOMIC)
+#    error "legacy default-policy smoke requires SPSC_DEFAULT_POLICY_ATOMIC"
+#  endif
+#  if (SPSC_TEST_LEGACY_DEFAULT_POLICY != 0) && \
+      (SPSC_TEST_LEGACY_DEFAULT_POLICY != 1)
+#    error "SPSC_TEST_LEGACY_DEFAULT_POLICY must be 0 or 1"
+#  endif
+#  if SPSC_DEFAULT_POLICY_ATOMIC != SPSC_TEST_LEGACY_DEFAULT_POLICY
+#    error "legacy default-policy smoke received a mismatched override"
+#  endif
+#else
+#  if defined(SPSC_DEFAULT_POLICY_ATOMIC)
+#    error "v3 modern default smoke must run without SPSC_DEFAULT_POLICY_ATOMIC"
+#  endif
+#endif
+
 namespace {
+
+#if defined(SPSC_TEST_LEGACY_DEFAULT_POLICY)
+using expected_default_policy = std::conditional_t<
+    (SPSC_TEST_LEGACY_DEFAULT_POLICY != 0),
+    ::spsc::policy::A<>,
+    ::spsc::policy::P>;
+#else
+using expected_default_policy = ::spsc::policy::FA<>;
+#endif
+
+using expected_cache_aligned_policy =
+    ::spsc::policy::CacheAligned<expected_default_policy>;
+
+template<class Bare, class Explicit>
+inline constexpr bool matches_v3_default_contract_v =
+    std::is_same_v<Bare, Explicit> &&
+    std::is_same_v<typename Bare::policy_type, expected_default_policy> &&
+    sizeof(Bare) == sizeof(Explicit) &&
+    alignof(Bare) == alignof(Explicit);
+
+template<class PlainPool, class FastPool>
+inline constexpr bool matches_buffer_pool_storage_contract_v =
+    !std::is_same_v<PlainPool, FastPool> &&
+    sizeof(PlainPool) == sizeof(FastPool) &&
+    alignof(PlainPool) == alignof(FastPool) &&
+    PlainPool::storage_alignment() == FastPool::storage_alignment() &&
+    std::is_same_v<typename PlainPool::base_allocator_type,
+                   typename FastPool::base_allocator_type>;
 
 template<class T, class = void>
 struct exposes_is_allocated : std::false_type {};
@@ -97,15 +142,307 @@ static_assert(alignof(nested_one_line_counter) == 64u,
 static_assert(std::is_same_v<
                   ::spsc::fast_fifo<std::uint32_t, 8u>,
                   ::spsc::fifo<std::uint32_t, 8u, ::spsc::policy::CFA<>>>,
-              "fast_fifo must select CFA in 2.0");
+              "fast_fifo must remain the explicit CFA alias");
 static_assert(std::is_same_v<
                   ::spsc::fast_queue<std::uint32_t, 8u>,
                   ::spsc::queue<std::uint32_t, 8u, ::spsc::policy::CFA<>>>,
-              "fast_queue must select CFA in 2.0");
+              "fast_queue must remain the explicit CFA alias");
 
 using alias_value_type = std::uint32_t;
 using alias_value_alloc = std::allocator<alias_value_type>;
 using alias_byte_alloc = std::allocator<std::byte>;
+
+using bare_default_fifo = ::spsc::fifo<alias_value_type, 8u>;
+using explicit_default_fifo =
+    ::spsc::fifo<alias_value_type, 8u, expected_default_policy>;
+using bare_default_queue = ::spsc::queue<alias_value_type, 8u>;
+using explicit_default_queue =
+    ::spsc::queue<alias_value_type, 8u, expected_default_policy>;
+using bare_default_fifo_view = ::spsc::fifo_view<alias_value_type, 8u>;
+using explicit_default_fifo_view =
+    ::spsc::fifo_view<alias_value_type, 8u, expected_default_policy>;
+using bare_default_pool = ::spsc::pool<8u>;
+using explicit_default_pool = ::spsc::pool<8u, expected_default_policy>;
+using bare_default_pool_view = ::spsc::pool_view<8u>;
+using explicit_default_pool_view = ::spsc::pool_view<8u, expected_default_policy>;
+using bare_default_typed_pool = ::spsc::typed_pool<alias_value_type, 8u>;
+using explicit_default_typed_pool =
+    ::spsc::typed_pool<alias_value_type, 8u, expected_default_policy>;
+using bare_default_latest = ::spsc::latest<alias_value_type, 8u>;
+using explicit_default_latest =
+    ::spsc::latest<alias_value_type, 8u, expected_default_policy>;
+using bare_default_array_fifo = ::spsc::array_fifo<alias_value_type, 4u, 8u>;
+using explicit_default_array_fifo =
+    ::spsc::array_fifo<alias_value_type, 4u, 8u, expected_default_policy>;
+using bare_default_array_fifo_view =
+    ::spsc::array_fifo_view<alias_value_type, 4u, 8u>;
+using explicit_default_array_fifo_view =
+    ::spsc::array_fifo_view<alias_value_type, 4u, 8u, expected_default_policy>;
+using bare_default_carray_fifo_view =
+    ::spsc::carray_fifo_view<alias_value_type, 4u, 8u>;
+using explicit_default_carray_fifo_view =
+    ::spsc::carray_fifo_view<alias_value_type, 4u, 8u, expected_default_policy>;
+using bare_default_chunk_fifo = ::spsc::chunk_fifo<alias_value_type, 4u, 8u>;
+using explicit_default_chunk_fifo =
+    ::spsc::chunk_fifo<alias_value_type, 4u, 8u, expected_default_policy>;
+using bare_default_chunk_fifo_view =
+    ::spsc::chunk_fifo_view<alias_value_type, 4u, 8u>;
+using explicit_default_chunk_fifo_view =
+    ::spsc::chunk_fifo_view<alias_value_type, 4u, 8u, expected_default_policy>;
+using bare_default_buffer_pool = ::spsc::buffer_pool<alias_value_type, 4u, 8u>;
+using explicit_default_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 4u, 8u, expected_default_policy>;
+
+using bare_dynamic_fifo = ::spsc::fifo<alias_value_type, 0u>;
+using explicit_dynamic_fifo =
+    ::spsc::fifo<alias_value_type, 0u, expected_default_policy>;
+using bare_dynamic_queue = ::spsc::queue<alias_value_type, 0u>;
+using explicit_dynamic_queue =
+    ::spsc::queue<alias_value_type, 0u, expected_default_policy>;
+using bare_dynamic_fifo_view = ::spsc::fifo_view<alias_value_type, 0u>;
+using explicit_dynamic_fifo_view =
+    ::spsc::fifo_view<alias_value_type, 0u, expected_default_policy>;
+using bare_dynamic_pool = ::spsc::pool<0u>;
+using explicit_dynamic_pool = ::spsc::pool<0u, expected_default_policy>;
+using bare_dynamic_pool_view = ::spsc::pool_view<0u>;
+using explicit_dynamic_pool_view = ::spsc::pool_view<0u, expected_default_policy>;
+using bare_dynamic_typed_pool = ::spsc::typed_pool<alias_value_type, 0u>;
+using explicit_dynamic_typed_pool =
+    ::spsc::typed_pool<alias_value_type, 0u, expected_default_policy>;
+using bare_dynamic_latest = ::spsc::latest<alias_value_type, 0u>;
+using explicit_dynamic_latest =
+    ::spsc::latest<alias_value_type, 0u, expected_default_policy>;
+using bare_dynamic_raw_latest = ::spsc::latest<void, 0u>;
+using explicit_dynamic_raw_latest =
+    ::spsc::latest<void, 0u, expected_default_policy>;
+using bare_dynamic_array_fifo = ::spsc::array_fifo<alias_value_type, 4u, 0u>;
+using explicit_dynamic_array_fifo =
+    ::spsc::array_fifo<alias_value_type, 4u, 0u, expected_default_policy>;
+using bare_dynamic_array_fifo_view =
+    ::spsc::array_fifo_view<alias_value_type, 4u, 0u>;
+using explicit_dynamic_array_fifo_view =
+    ::spsc::array_fifo_view<alias_value_type, 4u, 0u, expected_default_policy>;
+using bare_dynamic_carray_fifo_view =
+    ::spsc::carray_fifo_view<alias_value_type, 4u, 0u>;
+using explicit_dynamic_carray_fifo_view =
+    ::spsc::carray_fifo_view<alias_value_type, 4u, 0u, expected_default_policy>;
+using bare_dynamic_chunk_fifo = ::spsc::chunk_fifo<alias_value_type, 4u, 0u>;
+using explicit_dynamic_chunk_fifo =
+    ::spsc::chunk_fifo<alias_value_type, 4u, 0u, expected_default_policy>;
+using bare_dynamic_chunk_fifo_view =
+    ::spsc::chunk_fifo_view<alias_value_type, 4u, 0u>;
+using explicit_dynamic_chunk_fifo_view =
+    ::spsc::chunk_fifo_view<alias_value_type, 4u, 0u, expected_default_policy>;
+
+using bare_static_buffer_pool_alias =
+    ::spsc::static_buffer_pool<alias_value_type, 4u, 8u>;
+using explicit_static_buffer_pool_alias =
+    ::spsc::static_buffer_pool<alias_value_type, 4u, 8u, expected_default_policy>;
+using bare_fixed_buffer_pool_alias =
+    ::spsc::fixed_buffer_pool<alias_value_type, 4u>;
+using explicit_fixed_buffer_pool_alias =
+    ::spsc::fixed_buffer_pool<alias_value_type, 4u, expected_default_policy>;
+using bare_fixed_count_buffer_pool_alias =
+    ::spsc::fixed_count_buffer_pool<alias_value_type, 8u>;
+using explicit_fixed_count_buffer_pool_alias =
+    ::spsc::fixed_count_buffer_pool<alias_value_type, 8u, expected_default_policy>;
+using bare_dynamic_buffer_pool_alias =
+    ::spsc::dynamic_buffer_pool<alias_value_type>;
+using explicit_dynamic_buffer_pool_alias =
+    ::spsc::dynamic_buffer_pool<alias_value_type, expected_default_policy>;
+
+using plain_static_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 4u, 8u, ::spsc::policy::P>;
+using fast_static_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 4u, 8u, ::spsc::policy::FA<>>;
+using plain_fixed_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 4u, 0u, ::spsc::policy::P>;
+using fast_fixed_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 4u, 0u, ::spsc::policy::FA<>>;
+using plain_fixed_count_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 0u, 8u, ::spsc::policy::P>;
+using fast_fixed_count_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 0u, 8u, ::spsc::policy::FA<>>;
+using plain_dynamic_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 0u, 0u, ::spsc::policy::P>;
+using fast_dynamic_buffer_pool =
+    ::spsc::buffer_pool<alias_value_type, 0u, 0u, ::spsc::policy::FA<>>;
+
+using ctad_dynamic_fifo_view = decltype(
+    ::spsc::fifo_view(std::declval<alias_value_type*>(), reg{8u}));
+using ctad_static_fifo_view = decltype(
+    ::spsc::fifo_view(std::declval<alias_value_type (&)[8u]>()));
+using ctad_std_array_fifo_view = decltype(
+    ::spsc::fifo_view(std::declval<std::array<alias_value_type, 8u>&>()));
+using ctad_dynamic_pool_view = decltype(
+    ::spsc::pool_view(std::declval<void**>(), reg{8u}, reg{4u}));
+using ctad_static_pool_view = decltype(
+    ::spsc::pool_view(std::declval<void* (&)[8u]>(), reg{4u}));
+using ctad_std_array_pool_view = decltype(
+    ::spsc::pool_view(std::declval<std::array<void*, 8u>&>(), reg{4u}));
+
+static_assert(std::is_same_v<::spsc::policy::default_policy, expected_default_policy>);
+static_assert(matches_v3_default_contract_v<bare_default_fifo, explicit_default_fifo>);
+static_assert(matches_v3_default_contract_v<bare_default_queue, explicit_default_queue>);
+static_assert(matches_v3_default_contract_v<bare_default_fifo_view, explicit_default_fifo_view>);
+static_assert(matches_v3_default_contract_v<bare_default_pool, explicit_default_pool>);
+static_assert(matches_v3_default_contract_v<bare_default_pool_view, explicit_default_pool_view>);
+static_assert(matches_v3_default_contract_v<bare_default_typed_pool, explicit_default_typed_pool>);
+static_assert(matches_v3_default_contract_v<bare_default_latest, explicit_default_latest>);
+static_assert(matches_v3_default_contract_v<bare_default_array_fifo, explicit_default_array_fifo>);
+static_assert(matches_v3_default_contract_v<
+                  bare_default_array_fifo_view,
+                  explicit_default_array_fifo_view>);
+static_assert(matches_v3_default_contract_v<
+                  bare_default_carray_fifo_view,
+                  explicit_default_carray_fifo_view>);
+static_assert(matches_v3_default_contract_v<bare_default_chunk_fifo, explicit_default_chunk_fifo>);
+static_assert(matches_v3_default_contract_v<
+                  bare_default_chunk_fifo_view,
+                  explicit_default_chunk_fifo_view>);
+static_assert(matches_v3_default_contract_v<
+                  bare_default_buffer_pool,
+                  explicit_default_buffer_pool>);
+static_assert(matches_v3_default_contract_v<bare_dynamic_fifo, explicit_dynamic_fifo>);
+static_assert(matches_v3_default_contract_v<bare_dynamic_queue, explicit_dynamic_queue>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_fifo_view,
+                  explicit_dynamic_fifo_view>);
+static_assert(matches_v3_default_contract_v<bare_dynamic_pool, explicit_dynamic_pool>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_pool_view,
+                  explicit_dynamic_pool_view>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_typed_pool,
+                  explicit_dynamic_typed_pool>);
+static_assert(matches_v3_default_contract_v<bare_dynamic_latest, explicit_dynamic_latest>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_raw_latest,
+                  explicit_dynamic_raw_latest>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_array_fifo,
+                  explicit_dynamic_array_fifo>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_array_fifo_view,
+                  explicit_dynamic_array_fifo_view>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_carray_fifo_view,
+                  explicit_dynamic_carray_fifo_view>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_chunk_fifo,
+                  explicit_dynamic_chunk_fifo>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_chunk_fifo_view,
+                  explicit_dynamic_chunk_fifo_view>);
+static_assert(matches_v3_default_contract_v<
+                  bare_static_buffer_pool_alias,
+                  explicit_static_buffer_pool_alias>);
+static_assert(matches_v3_default_contract_v<
+                  bare_fixed_buffer_pool_alias,
+                  explicit_fixed_buffer_pool_alias>);
+static_assert(matches_v3_default_contract_v<
+                  bare_fixed_count_buffer_pool_alias,
+                  explicit_fixed_count_buffer_pool_alias>);
+static_assert(matches_v3_default_contract_v<
+                  bare_dynamic_buffer_pool_alias,
+                  explicit_dynamic_buffer_pool_alias>);
+static_assert(std::is_same_v<
+                  ::spsc::policy::CacheAligned<>,
+                  expected_cache_aligned_policy>);
+static_assert(std::is_same_v<
+                  ctad_dynamic_fifo_view,
+                  ::spsc::fifo_view<alias_value_type, 0u, expected_default_policy>>);
+static_assert(std::is_same_v<
+                  ctad_static_fifo_view,
+                  ::spsc::fifo_view<alias_value_type, 8u, expected_default_policy>>);
+static_assert(std::is_same_v<
+                  ctad_std_array_fifo_view,
+                  ::spsc::fifo_view<alias_value_type, 8u, expected_default_policy>>);
+static_assert(std::is_same_v<
+                  ctad_dynamic_pool_view,
+                  ::spsc::pool_view<0u, expected_default_policy>>);
+static_assert(std::is_same_v<
+                  ctad_static_pool_view,
+                  ::spsc::pool_view<8u, expected_default_policy>>);
+static_assert(std::is_same_v<
+                  ctad_std_array_pool_view,
+                  ::spsc::pool_view<8u, expected_default_policy>>);
+static_assert(matches_buffer_pool_storage_contract_v<
+                  plain_static_buffer_pool,
+                  fast_static_buffer_pool>);
+static_assert(matches_buffer_pool_storage_contract_v<
+                  plain_fixed_buffer_pool,
+                  fast_fixed_buffer_pool>);
+static_assert(matches_buffer_pool_storage_contract_v<
+                  plain_fixed_count_buffer_pool,
+                  fast_fixed_count_buffer_pool>);
+static_assert(matches_buffer_pool_storage_contract_v<
+                  plain_dynamic_buffer_pool,
+                  fast_dynamic_buffer_pool>);
+static_assert(plain_static_buffer_pool::payload_bytes() ==
+              fast_static_buffer_pool::payload_bytes());
+static_assert(plain_static_buffer_pool::cache_span_bytes() ==
+              fast_static_buffer_pool::cache_span_bytes());
+static_assert(plain_fixed_buffer_pool::payload_bytes() ==
+              fast_fixed_buffer_pool::payload_bytes());
+static_assert(plain_fixed_buffer_pool::cache_span_bytes() ==
+              fast_fixed_buffer_pool::cache_span_bytes());
+static_assert(std::is_same_v<
+                  ::spsc::cap::CapacityCtrl<8u>,
+                  ::spsc::cap::CapacityCtrl<8u, expected_default_policy>>);
+static_assert(std::is_same_v<
+                  ::spsc::cap::CapacityCtrl<0u>,
+                  ::spsc::cap::CapacityCtrl<0u, expected_default_policy>>);
+static_assert(std::is_same_v<
+                  ::spsc::SPSCbase<8u>,
+                  ::spsc::SPSCbase<8u, expected_default_policy>>);
+static_assert(std::is_same_v<
+                  typename bare_default_fifo::base_allocator_type,
+                  typename explicit_default_fifo::base_allocator_type>);
+static_assert(std::is_same_v<
+                  typename bare_default_queue::base_allocator_type,
+                  typename explicit_default_queue::base_allocator_type>);
+static_assert(std::is_same_v<
+                  typename bare_default_pool::base_allocator_type,
+                  typename explicit_default_pool::base_allocator_type>);
+static_assert(std::is_same_v<
+                  typename bare_default_latest::base_allocator_type,
+                  typename explicit_default_latest::base_allocator_type>);
+static_assert(std::is_same_v<
+                  typename bare_default_buffer_pool::base_allocator_type,
+                  typename explicit_default_buffer_pool::base_allocator_type>);
+static_assert(::spsc::alloc::policy_allocator_alignment_v<::spsc::policy::P> == 1u);
+static_assert(::spsc::alloc::policy_allocator_alignment_v<::spsc::policy::FA<>> == 1u);
+static_assert(std::is_same_v<
+                  typename ::spsc::fifo<
+                      alias_value_type,
+                      0u,
+                      ::spsc::policy::P>::base_allocator_type,
+                  typename ::spsc::fifo<
+                      alias_value_type,
+                      0u,
+                      ::spsc::policy::FA<>>::base_allocator_type>);
+static_assert(std::is_same_v<
+                  typename ::spsc::buffer_pool<
+                      alias_value_type,
+                      0u,
+                      0u,
+                      ::spsc::policy::P>::base_allocator_type,
+                  typename ::spsc::buffer_pool<
+                      alias_value_type,
+                      0u,
+                      0u,
+                      ::spsc::policy::FA<>>::base_allocator_type>);
+
+#if !defined(SPSC_TEST_LEGACY_DEFAULT_POLICY)
+static_assert(std::is_same_v<bare_default_fifo, ::spsc::concurrent_fifo<alias_value_type, 8u>>);
+static_assert(!std::is_same_v<bare_default_fifo, ::spsc::local_fifo<alias_value_type, 8u>>);
+static_assert(std::is_same_v<::spsc::policy::CacheAligned<>, ::spsc::policy::CFA<>>);
+#elif SPSC_TEST_LEGACY_DEFAULT_POLICY == 0
+static_assert(std::is_same_v<::spsc::policy::CacheAligned<>, ::spsc::policy::CP>);
+#else
+static_assert(std::is_same_v<::spsc::policy::CacheAligned<>, ::spsc::policy::CA<>>);
+#endif
 
 static_assert(std::is_same_v<
                   ::spsc::local_fifo<alias_value_type, 8u>,

@@ -10,6 +10,7 @@ Quick links:
 - [Reproducible benchmark and validity protocol](benchmarks/README.md)
 - [Quick Start](src/spsc/README.md)
 - [Documentation Hub](src/spsc/docs/README.md)
+- [Migrating from v2 to v3](src/spsc/docs/migration-v3.md)
 - [Common Concepts](src/spsc/docs/common-concepts.md)
 - [Concurrency and FreeRTOS](src/spsc/docs/concurrency-and-freertos.md)
 - [Method Recipes](src/spsc/docs/method-recipes.md)
@@ -127,6 +128,7 @@ Detailed API documentation is in:
 
 - `src/spsc/README.md` for the quick start and top-level overview
 - `src/spsc/docs/README.md` for the new split-by-container documentation hub
+- `src/spsc/docs/migration-v3.md` for the major-version default-policy migration
 - `src/spsc/docs/concurrency-and-freertos.md` for task/ISR/FreeRTOS guidance
 
 ## Build
