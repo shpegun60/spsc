@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-20
+
 This major release changes the implicit `default_policy` for bare containers.
 It deliberately does not alter endpoint algorithms, fully specified policies,
 or the semantic aliases introduced in v2.1.
@@ -279,7 +281,8 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
-[Unreleased]: https://github.com/shpegun60/spsc/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/shpegun60/spsc/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/shpegun60/spsc/compare/v2.0.3...v2.1.0
 [2.0.3]: https://github.com/shpegun60/spsc/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/shpegun60/spsc/compare/v2.0.1...v2.0.2
