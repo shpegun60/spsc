@@ -381,6 +381,13 @@ using custom_counter_fifo = ::spsc::fifo<value, 8u, custom_policy>;
 using custom_counter_without_relaxed_fifo =
     ::spsc::fifo<value, 8u, custom_policy_without_relaxed_load>;
 
+template<typename T>
+void copy_assign_through_alias(T& value)
+{
+    const T& alias = value;
+    value = alias;
+}
+
 bool verify_copy_and_swap_runtime()
 {
     assign_copy_fifo fifo_source;
@@ -392,7 +399,7 @@ bool verify_copy_and_swap_runtime()
     }
     assign_copy_fifo fifo_assigned;
     fifo_assigned = fifo_source;
-    fifo_assigned = fifo_assigned;
+    copy_assign_through_alias(fifo_assigned);
     if (fifo_assigned.size() != 1u || fifo_assigned.front().payload != 17) {
         return false;
     }
@@ -421,7 +428,7 @@ bool verify_copy_and_swap_runtime()
     }
     copyable_typed typed_assigned;
     typed_assigned = typed_source;
-    typed_assigned = typed_assigned;
+    copy_assign_through_alias(typed_assigned);
     if (typed_assigned.size() != 1u || typed_assigned.try_front() == nullptr ||
         typed_assigned.try_front()->payload != 23) {
         return false;
