@@ -613,7 +613,8 @@ public:
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
         const auto snapshot = Base::producer_single_owner_snapshot();
-        new (&storage_[snapshot.index]) value_type(std::forward<U>(v));
+        pointer slot = storage_ + snapshot.index;
+        (void)::new (static_cast<void *>(slot)) value_type(std::forward<U>(v));
         Base::producer_commit_owner(snapshot.owner);
     }
 
@@ -627,7 +628,8 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
-        new (&storage_[snapshot.index]) value_type(std::forward<U>(v));
+        pointer slot = storage_ + snapshot.index;
+        (void)::new (static_cast<void *>(slot)) value_type(std::forward<U>(v));
         Base::producer_commit_single(snapshot);
         return true;
     }
@@ -638,7 +640,7 @@ public:
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
         const auto snapshot = Base::producer_single_owner_snapshot();
-        pointer slot = &storage_[snapshot.index];
+        pointer slot = storage_ + snapshot.index;
         slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
         slot = std::launder(slot);
         Base::producer_commit_owner(snapshot.owner);
@@ -655,7 +657,7 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return nullptr;
         }
-        pointer slot = &storage_[snapshot.index];
+        pointer slot = storage_ + snapshot.index;
         slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
         slot = std::launder(slot);
         Base::producer_commit_single(snapshot);
@@ -668,7 +670,7 @@ public:
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
         const auto snapshot = Base::producer_single_owner_snapshot();
-        return &storage_[snapshot.index];
+        return storage_ + snapshot.index;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
@@ -676,7 +678,7 @@ public:
             return nullptr;
         }
         const auto snapshot = Base::producer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? storage_ + snapshot.index : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
@@ -1547,9 +1549,10 @@ private:
    */
     [[nodiscard]] RB_FORCEINLINE pointer
     slot_ptr(size_type index) const noexcept {
-        // &storage_[index] gives T*. std::launder is needed when storage is reused via placement-new;
-        // it does not provide synchronization or memory ordering.
-        return std::launder(&storage_[index]);
+        // std::launder is needed when storage is reused via placement-new; it
+        // does not provide synchronization or memory ordering. Pointer
+        // arithmetic also avoids class-specific operator& lookup.
+        return std::launder(storage_ + index);
     }
 
 private:

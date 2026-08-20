@@ -7,7 +7,10 @@
 #include "src/spsc/queue.hpp"
 #include "src/spsc/typed_pool.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <new>
 #include <type_traits>
 #include <utility>
 
@@ -80,6 +83,100 @@ struct no_adl_swap {
     no_adl_swap& operator=(no_adl_swap&&) noexcept = default;
 
     friend void swap(no_adl_swap&, no_adl_swap&) = delete;
+};
+
+struct throwing_move_noexcept_copy {
+    static inline unsigned move_assignments{0u};
+    static inline unsigned copy_assignments{0u};
+
+    int payload{0};
+
+    throwing_move_noexcept_copy() noexcept = default;
+    throwing_move_noexcept_copy(const throwing_move_noexcept_copy&) noexcept = default;
+    throwing_move_noexcept_copy(throwing_move_noexcept_copy&&) noexcept(false) = default;
+
+    throwing_move_noexcept_copy&
+    operator=(const throwing_move_noexcept_copy& other) noexcept {
+        ++copy_assignments;
+        payload = other.payload;
+        return *this;
+    }
+
+    throwing_move_noexcept_copy&
+    operator=(throwing_move_noexcept_copy&& other) noexcept(false) {
+        ++move_assignments;
+        payload = other.payload;
+        return *this;
+    }
+
+    friend void swap(throwing_move_noexcept_copy&,
+                     throwing_move_noexcept_copy&) = delete;
+};
+
+struct swap_scratch_probe {
+    static inline std::size_t live_count{0u};
+    static inline std::size_t peak_live_count{0u};
+
+    int payload{0};
+
+    static void record_construction() noexcept {
+        ++live_count;
+        if (live_count > peak_live_count) {
+            peak_live_count = live_count;
+        }
+    }
+
+    swap_scratch_probe() noexcept { record_construction(); }
+
+    swap_scratch_probe(const swap_scratch_probe& other) noexcept
+        : payload(other.payload) {
+        record_construction();
+    }
+
+    swap_scratch_probe(swap_scratch_probe&& other) noexcept
+        : payload(other.payload) {
+        record_construction();
+    }
+
+    swap_scratch_probe& operator=(const swap_scratch_probe& other) noexcept {
+        payload = other.payload;
+        return *this;
+    }
+
+    swap_scratch_probe& operator=(swap_scratch_probe&& other) noexcept {
+        payload = other.payload;
+        return *this;
+    }
+
+    ~swap_scratch_probe() noexcept { --live_count; }
+
+    friend void swap(swap_scratch_probe&, swap_scratch_probe&) = delete;
+};
+
+struct class_specific_new_value {
+    int payload{0};
+
+    class_specific_new_value() noexcept = default;
+    explicit class_specific_new_value(const int value) noexcept : payload(value) {}
+
+    static void* operator new(std::size_t) = delete;
+    class_specific_new_value* operator&() = delete;
+    const class_specific_new_value* operator&() const = delete;
+};
+
+struct non_assignable_latest_value {
+    non_assignable_latest_value() = default;
+    non_assignable_latest_value(const non_assignable_latest_value&) = default;
+    non_assignable_latest_value(non_assignable_latest_value&&) = default;
+
+    non_assignable_latest_value&
+    operator=(const non_assignable_latest_value&) = delete;
+
+    non_assignable_latest_value&
+    operator=(non_assignable_latest_value&&) = delete;
+
+    friend void swap(non_assignable_latest_value&,
+                     non_assignable_latest_value&) = delete;
 };
 
 struct non_trivial_payload {
@@ -172,6 +269,7 @@ using dynamic_chunk = ::spsc::chunk<value, 0u>;
 using typed = ::spsc::typed_pool<value, 8u>;
 using move_only_typed = ::spsc::typed_pool<move_only, 8u>;
 using object_queue = ::spsc::queue<value, 8u>;
+using class_new_queue = ::spsc::queue<class_specific_new_value, 8u>;
 using raw_latest = ::spsc::latest<void, 0u>;
 
 static_assert(has_emplace<static_latest, int>::value);
@@ -222,6 +320,8 @@ static_assert(has_emplace<typename object_queue::write_guard, int>::value);
 static_assert(!has_emplace<typename object_queue::write_guard, bad_argument>::value);
 static_assert(has_emplace_next<typename object_queue::bulk_write_guard, int>::value);
 static_assert(!has_emplace_next<typename object_queue::bulk_write_guard, bad_argument>::value);
+static_assert(has_push<class_new_queue, int>::value);
+static_assert(has_try_push<class_new_queue, int>::value);
 
 static_assert(has_push<raw_latest, std::uint32_t>::value);
 static_assert(has_try_push<raw_latest, std::uint32_t>::value);
@@ -262,6 +362,9 @@ static_assert(!exposes_slots<copyable_typed>::value);
 
 #if (SPSC_ENABLE_EXCEPTIONS != 0)
 using throwing_move_fifo = ::spsc::fifo<throwing_move_only, 8u>;
+using non_assignable_latest = ::spsc::latest<non_assignable_latest_value, 8u>;
+using non_assignable_aligned_slot =
+    ::spsc::detail::cache_aligned_slot<non_assignable_latest_value, 64u>;
 static_assert(!std::is_copy_constructible_v<throwing_move_fifo>);
 static_assert(!std::is_copy_assignable_v<throwing_move_fifo>);
 static_assert(std::is_move_constructible_v<throwing_move_fifo>);
@@ -270,6 +373,10 @@ static_assert(std::is_same_v<
               decltype(std::move_if_noexcept(
                   std::declval<throwing_move_fifo&>())),
               throwing_move_fifo&&>);
+static_assert(!std::is_move_constructible_v<non_assignable_latest>);
+static_assert(!std::is_move_assignable_v<non_assignable_latest>);
+static_assert(!std::is_swappable_v<non_assignable_latest>);
+static_assert(!std::is_swappable_v<non_assignable_aligned_slot>);
 #endif
 
 using swap_fifo = ::spsc::fifo<no_adl_swap, 8u>;
@@ -284,10 +391,32 @@ static_assert(std::is_swappable_v<swap_fifo>);
 static_assert(std::is_swappable_v<swap_latest>);
 static_assert(std::is_move_constructible_v<swap_latest>);
 static_assert(std::is_move_assignable_v<swap_latest>);
+using swap_latest_member_pointer =
+    void (swap_latest::*)(swap_latest&) noexcept;
+static_assert(std::is_same_v<decltype(&swap_latest::swap),
+                             swap_latest_member_pointer>);
 static_assert(std::is_swappable_v<swap_chunk>);
 static_assert(std::is_swappable_v<swap_pool>);
 static_assert(std::is_swappable_v<swap_array_fifo>);
 static_assert(std::is_swappable_v<swap_chunk_fifo>);
+static_assert(!std::is_swappable_v<throwing_move_noexcept_copy>);
+static_assert(!::spsc::detail::fallback_value_swap_uses_move_v<
+              throwing_move_noexcept_copy>);
+static_assert(::spsc::detail::value_swap_noexcept_v<
+              throwing_move_noexcept_copy>);
+using scratch_array = std::array<swap_scratch_probe, 8u>;
+static_assert(::spsc::detail::value_swappable_v<scratch_array>);
+static_assert(::spsc::detail::value_swap_noexcept_v<scratch_array>);
+using zero_non_assignable_array =
+    std::array<non_assignable_latest_value, 0u>;
+static_assert(::spsc::detail::value_swappable_v<zero_non_assignable_array>);
+static_assert(::spsc::detail::value_swap_noexcept_v<zero_non_assignable_array>);
+using aligned_scratch_slot =
+    ::spsc::detail::cache_aligned_slot<scratch_array, 64u>;
+using aligned_scratch_storage = std::array<aligned_scratch_slot, 2u>;
+static_assert(std::is_swappable_v<aligned_scratch_slot>);
+static_assert(std::is_nothrow_swappable_v<aligned_scratch_slot>);
+static_assert(::spsc::detail::value_swap_noexcept_v<aligned_scratch_storage>);
 
 struct custom_counter {
     using value_type = reg;
@@ -386,6 +515,128 @@ void copy_assign_through_alias(T& value)
 {
     const T& alias = value;
     value = alias;
+}
+
+bool verify_value_swap_runtime()
+{
+    zero_non_assignable_array zero_lhs{};
+    zero_non_assignable_array zero_rhs{};
+    ::spsc::detail::swap_value(zero_lhs, zero_rhs);
+
+    throwing_move_noexcept_copy lhs;
+    throwing_move_noexcept_copy rhs;
+    lhs.payload = 41;
+    rhs.payload = 43;
+    throwing_move_noexcept_copy::move_assignments = 0u;
+    throwing_move_noexcept_copy::copy_assignments = 0u;
+
+    ::spsc::detail::swap_value(lhs, rhs);
+    if (lhs.payload != 43 || rhs.payload != 41 ||
+        throwing_move_noexcept_copy::move_assignments != 0u ||
+        throwing_move_noexcept_copy::copy_assignments != 3u) {
+        return false;
+    }
+
+    throwing_move_noexcept_copy::move_assignments = 0u;
+    throwing_move_noexcept_copy::copy_assignments = 0u;
+    ::spsc::detail::swap_value(lhs, lhs);
+    if (lhs.payload != 43 ||
+        throwing_move_noexcept_copy::move_assignments != 0u ||
+        throwing_move_noexcept_copy::copy_assignments != 0u) {
+        return false;
+    }
+
+    bool bounded_array_scratch = false;
+    {
+        scratch_array array_lhs{};
+        scratch_array array_rhs{};
+        const std::size_t baseline_live = swap_scratch_probe::live_count;
+        swap_scratch_probe::peak_live_count = baseline_live;
+        array_lhs[0].payload = 47;
+        array_rhs[0].payload = 53;
+
+        ::spsc::detail::swap_value(array_lhs, array_rhs);
+        bounded_array_scratch =
+            baseline_live == (2u * array_lhs.size()) &&
+            swap_scratch_probe::peak_live_count == (baseline_live + 1u) &&
+            array_lhs[0].payload == 53 && array_rhs[0].payload == 47;
+    }
+
+    if (!bounded_array_scratch || swap_scratch_probe::live_count != 0u) {
+        return false;
+    }
+
+    bool bounded_aligned_scratch = false;
+    {
+        aligned_scratch_storage storage_lhs{};
+        aligned_scratch_storage storage_rhs{};
+        const std::size_t baseline_live = swap_scratch_probe::live_count;
+        swap_scratch_probe::peak_live_count = baseline_live;
+        storage_lhs[0][0].payload = 61;
+        storage_rhs[0][0].payload = 67;
+
+        ::spsc::detail::swap_value(storage_lhs, storage_rhs);
+        bounded_aligned_scratch =
+            baseline_live ==
+                (2u * storage_lhs.size() * storage_lhs[0].size()) &&
+            swap_scratch_probe::peak_live_count == (baseline_live + 1u) &&
+            storage_lhs[0][0].payload == 67 &&
+            storage_rhs[0][0].payload == 61;
+    }
+
+    return bounded_aligned_scratch && swap_scratch_probe::live_count == 0u;
+}
+
+bool verify_queue_placement_new_runtime()
+{
+    class_new_queue queue;
+    if (!queue.try_push(59)) {
+        return false;
+    }
+    queue.push(61);
+
+    const class_specific_new_value* value_ptr = queue.try_front();
+    if (value_ptr == nullptr || value_ptr->payload != 59) {
+        return false;
+    }
+
+    if (!queue.try_pop()) {
+        return false;
+    }
+
+    value_ptr = queue.try_front();
+    if (value_ptr == nullptr || value_ptr->payload != 61 || !queue.try_pop()) {
+        return false;
+    }
+
+    class_specific_new_value& emplaced = queue.emplace(71);
+    if (emplaced.payload != 71 || !queue.try_pop()) {
+        return false;
+    }
+
+    value_ptr = queue.try_emplace(73);
+    if (value_ptr == nullptr || value_ptr->payload != 73 || !queue.try_pop()) {
+        return false;
+    }
+
+    class_specific_new_value* claimed = queue.claim();
+    (void)::new (static_cast<void*>(claimed)) class_specific_new_value(79);
+    queue.publish();
+    value_ptr = queue.try_front();
+    if (value_ptr == nullptr || value_ptr->payload != 79 || !queue.try_pop()) {
+        return false;
+    }
+
+    claimed = queue.try_claim();
+    if (claimed == nullptr) {
+        return false;
+    }
+    (void)::new (static_cast<void*>(claimed)) class_specific_new_value(83);
+    if (!queue.try_publish()) {
+        return false;
+    }
+    value_ptr = queue.try_front();
+    return value_ptr != nullptr && value_ptr->payload == 83 && queue.try_pop();
 }
 
 bool verify_copy_and_swap_runtime()
@@ -549,5 +800,9 @@ bool verify_copy_and_swap_runtime()
 
 int main()
 {
-    return verify_copy_and_swap_runtime() ? 0 : 1;
+    return verify_value_swap_runtime() &&
+                   verify_queue_placement_new_runtime() &&
+                   verify_copy_and_swap_runtime()
+               ? 0
+               : 1;
 }

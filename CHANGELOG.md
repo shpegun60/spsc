@@ -15,6 +15,15 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Static value-storage containers now have a valid assignment-based swap
   fallback for payloads that deliberately omit ADL `swap` but satisfy the
   container's existing default-construction and assignment requirements.
+  Array and cache-aligned wrapper storage is exchanged element by element,
+  avoiding a whole-storage stack temporary, and the fallback prefers a
+  no-throw copy assignment when move assignment may throw.
+- Static `latest` no longer advertises move construction, move assignment, or
+  swap when its payload cannot support the storage exchange those operations
+  perform.
+- Object-queue construction now selects global placement-new explicitly and
+  obtains raw slots without class-specific address lookup, so payload classes
+  with custom allocation or address functions cannot hide those operations.
 - `latest`, `chunk`, `typed_pool`, and object-queue guard helpers now remove
   unsupported `push`/`emplace` calls during overload resolution instead of
   accepting a detection expression and failing only in the function body.
@@ -27,8 +36,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Tests
 
-- Added standalone trait/SFINAE runtime smoke coverage plus compile-fail gates
-  for invalid custom counter and allocator-alignment extensions.
+- Added standalone trait/SFINAE runtime smoke coverage, including bounded
+  array-swap scratch and class-specific placement-new regressions, plus
+  compile-fail gates for invalid custom counter and allocator-alignment
+  extensions.
 
 ## [3.0.0] - 2026-08-20
 

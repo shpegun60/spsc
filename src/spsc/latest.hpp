@@ -1381,8 +1381,18 @@ class latest : private ::spsc::SPSCbase<Depth, Policy>
 {
     using Base = ::spsc::SPSCbase<Depth, Policy>;
     using storage_type = std::array<T, Depth>;
+    static constexpr bool kStorageSwapEnabled =
+        ::spsc::detail::value_swappable_v<storage_type>;
     static constexpr bool kNoThrowStorageSwap =
         ::spsc::detail::value_swap_noexcept_v<storage_type>;
+    struct disabled_move_source;
+    using move_source = std::conditional_t<kStorageSwapEnabled,
+                                           latest&&,
+                                           disabled_move_source&&>;
+    struct disabled_swap_source;
+    using swap_source = std::conditional_t<kStorageSwapEnabled,
+                                           latest&,
+                                           disabled_swap_source&>;
 
 public:
     // ------------------------------------------------------------------------------------------
@@ -1448,43 +1458,69 @@ public:
     latest(const latest&) = delete;
     latest& operator=(const latest&) = delete;
 
-    latest(latest&& other) noexcept(kNoThrowStorageSwap) { move_from(std::move(other)); }
-
-    latest& operator=(latest&& other) noexcept(kNoThrowStorageSwap) {
-        if (this != &other) {
+    latest(move_source other) noexcept(kNoThrowStorageSwap) {
+        if constexpr (kStorageSwapEnabled) {
             move_from(std::move(other));
+        } else {
+            (void)other;
+        }
+    }
+
+    latest& operator=(move_source other) noexcept(kNoThrowStorageSwap) {
+        if constexpr (kStorageSwapEnabled) {
+            if (this != &other) {
+                move_from(std::move(other));
+            }
+        } else {
+            (void)other;
         }
         return *this;
     }
 
     ~latest() noexcept = default;
 
-    void swap(latest& other) noexcept(kNoThrowStorageSwap) {
-        using std::swap;
-        ::spsc::detail::swap_value(storage_, other.storage_);
-        swap(cons_head_snapshot_, other.cons_head_snapshot_);
-        swap(cons_has_snapshot_, other.cons_has_snapshot_);
+    void swap(swap_source other) noexcept(kNoThrowStorageSwap) {
+        if constexpr (kStorageSwapEnabled) {
+            if (this == &other) {
+                return;
+            }
 
-        const size_type head_a = Base::head();
-        const size_type tail_a = Base::tail();
+            using std::swap;
+            ::spsc::detail::swap_value(storage_, other.storage_);
+            swap(cons_head_snapshot_, other.cons_head_snapshot_);
+            swap(cons_has_snapshot_, other.cons_has_snapshot_);
 
-        const size_type head_b = other.Base::head();
-        const size_type tail_b = other.Base::tail();
+            const size_type head_a = Base::head();
+            const size_type tail_a = Base::tail();
 
-        // IMPORTANT: Base has optional shadow caches (producer/consumer) used by atomic backends.
-        // Any non-concurrent modification of head/tail must re-sync shadows, otherwise stale
-        // shadows can under-report "used" and allow overwrites.
-        {
-            const bool ok_a = Base::init(head_b, tail_b);
-            const bool ok_b = other.Base::init(head_a, tail_a);
-            SPSC_ASSERT(ok_a);
-            SPSC_ASSERT(ok_b);
-            (void)ok_a;
-            (void)ok_b;
+            const size_type head_b = other.Base::head();
+            const size_type tail_b = other.Base::tail();
+
+            // IMPORTANT: Base has optional shadow caches (producer/consumer) used by atomic backends.
+            // Any non-concurrent modification of head/tail must re-sync shadows, otherwise stale
+            // shadows can under-report "used" and allow overwrites.
+            {
+                const bool ok_a = Base::init(head_b, tail_b);
+                const bool ok_b = other.Base::init(head_a, tail_a);
+                SPSC_ASSERT(ok_a);
+                SPSC_ASSERT(ok_b);
+                (void)ok_a;
+                (void)ok_b;
+            }
+        } else {
+            (void)other;
         }
     }
 
-    friend void swap(latest& a, latest& b) noexcept(noexcept(a.swap(b))) { a.swap(b); }
+    friend void swap(swap_source a,
+                     swap_source b) noexcept(kNoThrowStorageSwap) {
+        if constexpr (kStorageSwapEnabled) {
+            a.swap(b);
+        } else {
+            (void)a;
+            (void)b;
+        }
+    }
 
     [[nodiscard]] static constexpr size_type depth() noexcept { return static_cast<size_type>(Depth); }
 
