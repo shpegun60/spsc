@@ -1156,7 +1156,9 @@ public:
         [[nodiscard]] size_type constructed() const noexcept { return constructed_; }
         [[nodiscard]] size_type remaining() const noexcept { return regs_.total - constructed_; }
 
-        template <class... Args>
+        template <class... Args,
+                  typename = std::enable_if_t<
+                      std::is_constructible_v<value_type, Args &&...>>>
         [[nodiscard]] pointer emplace_next(Args &&...args) noexcept(
             std::is_nothrow_constructible_v<value_type, Args &&...>) {
             SPSC_ASSERT(q_ != nullptr);
@@ -1322,7 +1324,9 @@ public:
         explicit operator bool() const noexcept { return (q_ != nullptr) && (ptr_ != nullptr); }
 
         // Safe path: construct and arm publishing.
-        template <class... Args>
+        template <class... Args,
+                  typename = std::enable_if_t<
+                      std::is_constructible_v<value_type, Args &&...>>>
         [[nodiscard]] pointer emplace(Args &&...args) noexcept(
             std::is_nothrow_constructible_v<value_type, Args &&...>) {
             SPSC_ASSERT(q_ && ptr_);

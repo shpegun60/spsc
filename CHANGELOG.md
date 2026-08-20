@@ -6,6 +6,30 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Fixed
+
+- `fifo` and `typed_pool` now report copy construction and copy assignment
+  accurately through standard type traits. Their deep-copy operations are
+  unavailable when the payload cannot support the operation they actually
+  perform.
+- Static value-storage containers now have a valid assignment-based swap
+  fallback for payloads that deliberately omit ADL `swap` but satisfy the
+  container's existing default-construction and assignment requirements.
+- `latest`, `chunk`, `typed_pool`, and object-queue guard helpers now remove
+  unsupported `push`/`emplace` calls during overload resolution instead of
+  accepting a detection expression and failing only in the function body.
+- `cache_aligned_slot` no longer advertises construction from `const T&` or
+  `T&&` when the wrapped type cannot perform that construction.
+- Custom counter backends are validated against the real no-throw
+  `value_type`/`store`/`load`/`add`/`inc` contract, including an optional
+  `load_relaxed()`. Custom `Policy::allocator_alignment` values must now be
+  positive, `std::size_t`-representable integral or enum powers of two.
+
+### Tests
+
+- Added standalone trait/SFINAE runtime smoke coverage plus compile-fail gates
+  for invalid custom counter and allocator-alignment extensions.
+
 ## [3.0.0] - 2026-08-20
 
 This major release changes the implicit `default_policy` for bare containers.

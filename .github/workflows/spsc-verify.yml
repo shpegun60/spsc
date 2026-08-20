@@ -153,12 +153,28 @@ jobs:
           assert all(record['status'] == 'inconclusive' for record in comparisons)
           assert all(not record['ranking_eligible'] for record in comparisons)
           PY
-      - name: Verify rejected publication, cacheline, and default-policy configurations
+      - name: Verify rejected publication, cacheline, default-policy, and extension configurations
         shell: pwsh
         run: |
           ./scripts/test_relaxed_publication_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
           ./scripts/test_cacheline_config_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
           ./scripts/test_default_policy_config_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
+          ./scripts/test_policy_extension_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
+      - name: Compile trait and callable-SFINAE contract smoke in all default-policy modes
+        run: |
+          compile_trait() {
+            '${{ matrix.compiler }}' \
+              -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
+              -I. -Isrc/spsc -fsyntax-only "$@" \
+              tests/standalone/trait_sfinae_contract_smoke.cpp
+          }
+          compile_trait
+          compile_trait \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=0
+          compile_trait \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=1
+          compile_trait \
+            -DSPSC_ENABLE_EXCEPTIONS=1
       - name: Compile all valid v3 default-policy modes
         run: |
           compile_mode() {
@@ -223,6 +239,19 @@ jobs:
             -o "$RUNNER_TEMP/stm32h7_buffer_pool_smoke" \
             tests/standalone/stm32h7_buffer_pool_smoke.cpp
           "$RUNNER_TEMP/stm32h7_buffer_pool_smoke"
+      - name: Build and run trait and callable-SFINAE contract smoke
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
+            -I. -Isrc/spsc \
+            -o "$RUNNER_TEMP/trait_sfinae_contract_smoke" \
+            tests/standalone/trait_sfinae_contract_smoke.cpp
+          "$RUNNER_TEMP/trait_sfinae_contract_smoke"
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
+            -DSPSC_ENABLE_EXCEPTIONS=1 \
+            -I. -Isrc/spsc \
+            -o "$RUNNER_TEMP/trait_sfinae_contract_smoke_exceptions" \
+            tests/standalone/trait_sfinae_contract_smoke.cpp
+          "$RUNNER_TEMP/trait_sfinae_contract_smoke_exceptions"
       - name: Build dashboard and one runner from a clean directory
         run: |
           bash scripts/run_h7_matrix.sh \
@@ -284,6 +313,9 @@ jobs:
           aarch64-linux-gnu-g++ -std=c++20 -Wall -Wextra -Werror -pedantic \
             -DSPSC_HAS_SPAN=1 -I. -Isrc/spsc -fsyntax-only \
             tests/standalone/h7_header_smoke.cpp
+          aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -I. -Isrc/spsc -fsyntax-only \
+            tests/standalone/trait_sfinae_contract_smoke.cpp
 
   windows-mingw-header-smoke:
     name: Windows MinGW header smoke
@@ -312,6 +344,17 @@ jobs:
             -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
           g++ -std=c++20 -Wall -Wextra -Werror -pedantic -DSPSC_HAS_SPAN=1 \
             -I. -Isrc/spsc -fsyntax-only tests/standalone/h7_header_smoke.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/trait_sfinae_contract_smoke.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=0 \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/trait_sfinae_contract_smoke.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_DEFAULT_POLICY_ATOMIC=1 \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/trait_sfinae_contract_smoke.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_ENABLE_EXCEPTIONS=1 \
+            -I. -Isrc/spsc -fsyntax-only tests/standalone/trait_sfinae_contract_smoke.cpp
 
   windows-msvc-header-smoke:
     name: Windows MSVC header smoke
@@ -328,7 +371,7 @@ jobs:
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $command = "call `"$vcvars`" && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 /DSPSC_DEFAULT_POLICY_ATOMIC=0 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 /DSPSC_DEFAULT_POLICY_ATOMIC=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++20 /W4 /WX /EHsc /DSPSC_HAS_SPAN=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp"
+          $command = "call `"$vcvars`" && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_DEFAULT_POLICY_ATOMIC=0 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_DEFAULT_POLICY_ATOMIC=1 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_ENABLE_EXCEPTIONS=1 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 /DSPSC_DEFAULT_POLICY_ATOMIC=0 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 /DSPSC_DEFAULT_POLICY_ATOMIC=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++20 /W4 /WX /EHsc /DSPSC_HAS_SPAN=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -349,7 +392,7 @@ jobs:
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_cacheline_config_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_default_policy_config_compile_fail.ps1 -Compiler cl"
+          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_cacheline_config_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_default_policy_config_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_policy_extension_compile_fail.ps1 -Compiler cl"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify MSVC H0R benchmark protocol

@@ -290,7 +290,8 @@ class SPSCbase
     using Cnt  = typename PolicyT::counter_type;
 
     static_assert(::spsc::policy::detail::is_counter_like_v<Cnt>,
-                  "[SPSCbase]: PolicyT::counter_type must implement store/load/add/inc with reg-compatible value");
+                  "[SPSCbase]: PolicyT::counter_type must satisfy the custom "
+                  "counter contract");
 
     // Atomic backend property is independent of shadows.
     static constexpr bool kAtomicBackend =

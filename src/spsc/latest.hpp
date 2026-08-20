@@ -65,6 +65,7 @@
 #include "base/spsc_capacity_ctrl.hpp" // ::spsc::cap helpers
 #include "base/spsc_policy.hpp"        // ::spsc::policy::default_policy
 #include "base/spsc_tools.hpp"         // RB_FORCEINLINE, RB_UNLIKELY, SPSC_TRY...
+#include "base/spsc_value_swap.hpp"
 
 namespace spsc {
 
@@ -598,12 +599,12 @@ public:
     }
 
 
-    template<class U>
+    template<class U,
+             class V = std::decay_t<U>,
+             typename = std::enable_if_t<
+                 std::is_trivially_copyable_v<V> &&
+                 std::is_constructible_v<V, U&&>>>
     RB_FORCEINLINE void push(U&& src) noexcept(std::is_nothrow_constructible_v<std::decay_t<U>, U&&>) {
-        using V = std::decay_t<U>;
-        static_assert(std::is_trivially_copyable_v<V>,
-                      "latest<void,0>::push(U): U must be trivially copyable");
-
         SPSC_ASSERT(buffer_size() >= static_cast<size_type>(sizeof(V)));
         SPSC_ASSERT(is_valid());
         if (RB_UNLIKELY(!is_valid())) {
@@ -624,12 +625,12 @@ public:
         Base::producer_commit_single(snapshot);
     }
 
-    template<class U>
+    template<class U,
+             class V = std::decay_t<U>,
+             typename = std::enable_if_t<
+                 std::is_trivially_copyable_v<V> &&
+                 std::is_constructible_v<V, U&&>>>
     [[nodiscard]] RB_FORCEINLINE bool try_push(U&& src) noexcept(std::is_nothrow_constructible_v<std::decay_t<U>, U&&>) {
-        using V = std::decay_t<U>;
-        static_assert(std::is_trivially_copyable_v<V>,
-                      "latest<void,0>::try_push(U): U must be trivially copyable");
-
         if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
@@ -1218,7 +1219,8 @@ public:
     }
 
 
-    template<class U>
+    template<class U,
+             typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>>
     RB_FORCEINLINE void push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
         SPSC_ASSERT(is_valid());
         if (RB_UNLIKELY(!is_valid())) {
@@ -1234,7 +1236,8 @@ public:
         Base::producer_commit_single(snapshot);
     }
 
-    template<class U>
+    template<class U,
+             typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>>
     [[nodiscard]] RB_FORCEINLINE bool try_push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
         if (RB_UNLIKELY(!is_valid())) {
             return false;
@@ -1248,7 +1251,10 @@ public:
         return true;
     }
 
-    template<class... Args>
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
     RB_FORCEINLINE reference emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
@@ -1262,7 +1268,10 @@ public:
         return slot;
     }
 
-    template<class... Args>
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
     [[nodiscard]] RB_FORCEINLINE pointer try_emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
@@ -1371,6 +1380,9 @@ template<class T, reg Depth, class Policy, class Alloc>
 class latest : private ::spsc::SPSCbase<Depth, Policy>
 {
     using Base = ::spsc::SPSCbase<Depth, Policy>;
+    using storage_type = std::array<T, Depth>;
+    static constexpr bool kNoThrowStorageSwap =
+        ::spsc::detail::value_swap_noexcept_v<storage_type>;
 
 public:
     // ------------------------------------------------------------------------------------------
@@ -1436,9 +1448,9 @@ public:
     latest(const latest&) = delete;
     latest& operator=(const latest&) = delete;
 
-    latest(latest&& other) noexcept(std::is_nothrow_swappable_v<value_type>) { move_from(std::move(other)); }
+    latest(latest&& other) noexcept(kNoThrowStorageSwap) { move_from(std::move(other)); }
 
-    latest& operator=(latest&& other) noexcept(std::is_nothrow_swappable_v<value_type>) {
+    latest& operator=(latest&& other) noexcept(kNoThrowStorageSwap) {
         if (this != &other) {
             move_from(std::move(other));
         }
@@ -1447,9 +1459,9 @@ public:
 
     ~latest() noexcept = default;
 
-    void swap(latest& other) noexcept(std::is_nothrow_swappable_v<value_type>) {
+    void swap(latest& other) noexcept(kNoThrowStorageSwap) {
         using std::swap;
-        swap(storage_, other.storage_);
+        ::spsc::detail::swap_value(storage_, other.storage_);
         swap(cons_head_snapshot_, other.cons_head_snapshot_);
         swap(cons_has_snapshot_, other.cons_has_snapshot_);
 
@@ -1683,7 +1695,8 @@ public:
         cons_has_snapshot_  = false;
     }
 
-    template<class U>
+    template<class U,
+             typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>>
     RB_FORCEINLINE void push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
         const auto snapshot = Base::producer_single_snapshot();
         SPSC_ASSERT(snapshot.available);
@@ -1692,7 +1705,8 @@ public:
         Base::producer_commit_single(snapshot);
     }
 
-    template<class U>
+    template<class U,
+             typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>>
     [[nodiscard]] RB_FORCEINLINE bool try_push(U&& value) noexcept(std::is_nothrow_assignable_v<reference, U&&>) {
         const auto snapshot = Base::producer_single_snapshot();
         if (RB_UNLIKELY(!snapshot.available)) {
@@ -1703,7 +1717,10 @@ public:
         return true;
     }
 
-    template<class... Args>
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
     RB_FORCEINLINE reference emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
@@ -1716,7 +1733,10 @@ public:
         return slot;
     }
 
-    template<class... Args>
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
     [[nodiscard]] RB_FORCEINLINE pointer try_emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
@@ -1741,8 +1761,8 @@ private:
         return Base::consumer_empty_cached();
     }
 
-    void move_from(latest&& other) noexcept(std::is_nothrow_swappable_v<value_type>) {
-        storage_.swap(other.storage_);
+    void move_from(latest&& other) noexcept(kNoThrowStorageSwap) {
+        ::spsc::detail::swap_value(storage_, other.storage_);
 
         // Keep shadow caches consistent with externally set head/tail (move is non-concurrent).
         {
@@ -1761,7 +1781,7 @@ private:
 
 private:
     alignas(::spsc::alloc::policy_storage_alignment_v<policy_type, value_type>)
-        std::array<value_type, Depth> storage_{};
+        storage_type storage_{};
     mutable size_type cons_head_snapshot_ = 0u;
     mutable bool      cons_has_snapshot_ = false;
 };

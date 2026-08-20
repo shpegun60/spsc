@@ -475,8 +475,35 @@ template<class Policy, class = void>
 struct policy_allocator_alignment : std::integral_constant<std::size_t, 1u> {};
 
 template<class Policy>
+struct checked_policy_allocator_alignment
+    : std::integral_constant<
+          std::size_t,
+          static_cast<std::size_t>(Policy::allocator_alignment)> {
+private:
+    using raw_type = std::remove_cv_t<
+        std::remove_reference_t<decltype(Policy::allocator_alignment)>>;
+    static constexpr std::size_t alignment =
+        static_cast<std::size_t>(Policy::allocator_alignment);
+
+    static_assert((std::is_integral_v<raw_type> &&
+                   !std::is_same_v<raw_type, bool>) ||
+                      std::is_enum_v<raw_type>,
+                  "[spsc::alloc]: Policy::allocator_alignment must be an "
+                  "integral or enum constant");
+    static_assert(static_cast<long double>(Policy::allocator_alignment) > 0.0L &&
+                      static_cast<long double>(Policy::allocator_alignment) <=
+                          static_cast<long double>(
+                              std::numeric_limits<std::size_t>::max()),
+                  "[spsc::alloc]: Policy::allocator_alignment must be positive "
+                  "and representable as size_t");
+    static_assert(alignment != 0u && is_pow2(alignment),
+                  "[spsc::alloc]: Policy::allocator_alignment must be a "
+                  "non-zero power of two");
+};
+
+template<class Policy>
 struct policy_allocator_alignment<Policy, std::void_t<decltype(Policy::allocator_alignment)>>
-    : std::integral_constant<std::size_t, static_cast<std::size_t>(Policy::allocator_alignment)> {};
+    : checked_policy_allocator_alignment<Policy> {};
 
 template<class Alloc, class T>
 using rebind_alloc_t = typename std::allocator_traits<Alloc>::template rebind_alloc<T>;

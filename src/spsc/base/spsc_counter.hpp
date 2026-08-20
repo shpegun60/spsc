@@ -128,7 +128,14 @@ template<class T>
 struct counter_has_relaxed_load<
     T,
     std::void_t<decltype(std::declval<const rb_remove_cvref_t<T> &>()
-                             .load_relaxed())>> : std::true_type {};
+                             .load_relaxed())>>
+    : std::bool_constant<
+          std::is_convertible_v<
+              decltype(std::declval<const rb_remove_cvref_t<T> &>()
+                           .load_relaxed()),
+              counter_value_t<T>> &&
+          noexcept(std::declval<const rb_remove_cvref_t<T> &>()
+                       .load_relaxed())> {};
 
 template<class T>
 inline constexpr bool counter_has_relaxed_load_v =

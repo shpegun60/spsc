@@ -88,24 +88,59 @@ static_assert(std::is_integral_v<reg> && std::is_unsigned_v<reg>,
 
 namespace detail {
 
-/* Helper trait: detect "counter-like" counter backend.
- * Requirements:
- *   - T has:  void store(reg)
- *   - T has:  reg-compatible load()   (convertible to reg)
- *   - T has:  void add(reg)
- *   - T has:  void inc()
+/* Optional owner-side relaxed load is valid only when it preserves the same
+ * value domain and cannot throw.  Its absence remains supported: SPSCbase
+ * falls back to load() for third-party counters.
+ */
+template<typename T, typename Value, typename = void>
+struct relaxed_load_contract : std::true_type {};
+
+template<typename T, typename Value>
+struct relaxed_load_contract<
+    T, Value,
+    std::void_t<decltype(std::declval<const T&>().load_relaxed())>>
+    : std::bool_constant<
+          std::is_convertible_v<
+              decltype(std::declval<const T&>().load_relaxed()), Value> &&
+          noexcept(std::declval<const T&>().load_relaxed())> {};
+
+/* Full contract for a custom counter backend.
+ *
+ * SPSCbase is noexcept and every owning container later names value_type, so
+ * merely detecting store/load/add/inc is not enough.  Keep this trait equal
+ * to the actual extension contract: an unsigned integral, reg-compatible
+ * value domain; no-throw construction and counter operations; and a correctly
+ * typed optional load_relaxed().
  */
 template <typename T, typename = void>
 struct is_counter_like : std::false_type {};
 
 template <typename T>
 struct is_counter_like<
-    T, std::void_t<decltype(std::declval<T &>().store(std::declval<reg>())),
-                decltype(std::declval<const T &>().load()),
-                decltype(std::declval<T &>().add(std::declval<reg>())),
-                decltype(std::declval<T &>().inc())>>
-    : std::bool_constant<std::is_convertible_v<
-          decltype(std::declval<const T &>().load()), reg>> {};
+    T, std::void_t<typename T::value_type,
+                   decltype(std::declval<T&>().store(
+                       std::declval<typename T::value_type>())),
+                   decltype(std::declval<const T&>().load()),
+                   decltype(std::declval<T&>().add(
+                       std::declval<typename T::value_type>())),
+                   decltype(std::declval<T&>().inc())>>
+    : std::bool_constant<
+          std::is_integral_v<std::remove_cv_t<typename T::value_type>> &&
+          std::is_unsigned_v<std::remove_cv_t<typename T::value_type>> &&
+          !std::is_same_v<std::remove_cv_t<typename T::value_type>, bool> &&
+          std::is_convertible_v<typename T::value_type, reg> &&
+          std::is_convertible_v<reg, typename T::value_type> &&
+          std::is_nothrow_default_constructible_v<T> &&
+          std::is_convertible_v<
+              decltype(std::declval<const T&>().load()),
+              typename T::value_type> &&
+          noexcept(std::declval<T&>().store(
+              std::declval<typename T::value_type>())) &&
+          noexcept(std::declval<const T&>().load()) &&
+          noexcept(std::declval<T&>().add(
+              std::declval<typename T::value_type>())) &&
+          noexcept(std::declval<T&>().inc()) &&
+          relaxed_load_contract<T, typename T::value_type>::value> {};
 
 template <typename T>
 inline constexpr bool is_counter_like_v = is_counter_like<T>::value;
@@ -130,11 +165,9 @@ template <
 >
 struct Policy {
     static_assert(detail::is_counter_like_v<Cnt>,
-                  "[Policy]: counter_type must implement store/load/add/inc with "
-                  "reg-compatible value");
+                  "[Policy]: counter_type must satisfy the custom counter contract");
     static_assert(detail::is_counter_like_v<Geo>,
-                  "[Policy]: geometry_type must implement store/load/add/inc "
-                  "with reg-compatible value");
+                  "[Policy]: geometry_type must satisfy the custom counter contract");
 
     using counter_type = Cnt;
     using geometry_type = Geo;
@@ -223,11 +256,9 @@ private:
     using base_geometry_type = typename Base::geometry_type;
 
     static_assert(detail::is_counter_like_v<base_counter_type>,
-                  "[CacheAligned]: Base::counter_type must be counter-like "
-                  "(store/load/add/inc)");
+                  "[CacheAligned]: Base::counter_type must satisfy the custom counter contract");
     static_assert(detail::is_counter_like_v<base_geometry_type>,
-                  "[CacheAligned]: Base::geometry_type must be counter-like "
-                  "(store/load/add/inc)");
+                  "[CacheAligned]: Base::geometry_type must satisfy the custom counter contract");
 
     static_assert(CAlign != 0, "[CacheAligned]: CAlign must be non-zero");
     static_assert((CAlign & (CAlign - 1u)) == 0u,
@@ -246,10 +277,10 @@ public:
 
     static_assert(
         detail::is_counter_like_v<counter_type>,
-        "[CacheAligned]: resulting counter_type must remain counter-like");
+        "[CacheAligned]: resulting counter_type must satisfy the custom counter contract");
     static_assert(
         detail::is_counter_like_v<geometry_type>,
-        "[CacheAligned]: resulting geometry_type must remain counter-like");
+        "[CacheAligned]: resulting geometry_type must satisfy the custom counter contract");
 };
 
 /* --------------------------- Cache-line aliases --------------------------- */
