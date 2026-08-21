@@ -6,6 +6,40 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Fixed
+
+- Dynamic raw `latest` now treats depth and slot bytes as independent
+  grow-only axes in both `reserve()` and non-zero `resize()` calls. A
+  successful reserve cannot shrink the other axis, and `reserve(0, bytes)` no
+  longer reports success on an invalid object that cannot provide storage.
+- Dynamic `pool::resize(depth, buffer_size)` now retains the existing slot
+  width while depth grows, preventing silent payload-suffix truncation.
+- Payload address lookup in `fifo`, `fifo_view`, typed `latest`, `chunk`, and
+  snapshot iterators now bypasses class-specific `operator&` consistently.
+- Custom counter validation now rejects a `noexcept` load whose conversion to
+  its declared value type or the library index type can throw, including the
+  optional relaxed-load path.
+
+### Tests
+
+- Added full four-direction depth/slot-width resize matrices and hostile
+  payload address regressions.
+- The genuine 32-bit job now executes reserve boundaries for dynamic `fifo`,
+  `queue`, and typed/raw `latest`, including allocator and state-preservation
+  checks at `RB_MAX_UNAMBIGUOUS` and above it.
+
+### CI
+
+- Added a bare-metal `arm-none-eabi-g++` Cortex-M7/Thumb syntax gate using the
+  actual newlib C++ headers, with both normal and explicitly enabled 32-bit
+  shadow configurations.
+
+### Documentation
+
+- Clarified grow-only multi-axis management, exception-time prefix publication
+  by object bulk guards, and the fact that view `state_t` is not a portable
+  persistence or wire format.
+
 ## [3.0.1] - 2026-08-21
 
 This patch release closes the post-v3 trait, raw-storage, reserve, and recovery

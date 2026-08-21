@@ -306,10 +306,29 @@ public:
             return false;
         }
         if (is_valid()) {
-            if (depth() >= min_depth && buffer_size() >= min_bytes_per_slot) {
+            const size_type current_depth = depth();
+            const size_type current_bytes = buffer_size();
+            const size_type target_depth =
+                (current_depth < min_depth) ? min_depth : current_depth;
+            const size_type target_bytes =
+                (current_bytes < min_bytes_per_slot)
+                    ? min_bytes_per_slot
+                    : current_bytes;
+
+            if (target_depth == current_depth && target_bytes == current_bytes) {
                 return true;
             }
+
+            return resize(target_depth, target_bytes);
         }
+
+        // A raw latest cannot become valid without both geometry and a
+        // non-zero slot size. The all-zero request remains a successful
+        // no-op, matching the one-dimensional dynamic reserve contract.
+        if (min_depth == 0u) {
+            return min_bytes_per_slot == 0u;
+        }
+
         return resize(min_depth, min_bytes_per_slot);
     }
 
@@ -329,7 +348,7 @@ public:
             return false;
         }
 
-        const size_type eff_bytes_per_slot =
+        size_type eff_bytes_per_slot =
             ::spsc::alloc::round_up_size_for_policy<policy_type, base_allocator_type>(
                 bytes_per_slot);
         if (RB_UNLIKELY(eff_bytes_per_slot == 0u)) {
@@ -344,13 +363,24 @@ public:
             depth_req = ::spsc::cap::RB_MAX_UNAMBIGUOUS;
         }
 
-        const size_type depth_pow2 = static_cast<size_type>(::spsc::cap::rb_next_power2(depth_req));
+        size_type depth_pow2 = static_cast<size_type>(::spsc::cap::rb_next_power2(depth_req));
         if (!::spsc::cap::rb_is_pow2(depth_pow2)) {
             return false;
         }
 
         if (is_valid()) {
-            if (depth_pow2 <= depth() && eff_bytes_per_slot <= buffer_size()) {
+            const size_type current_depth = depth();
+            const size_type current_bytes = buffer_size();
+
+            if (depth_pow2 < current_depth) {
+                depth_pow2 = current_depth;
+            }
+            if (eff_bytes_per_slot < current_bytes) {
+                eff_bytes_per_slot = current_bytes;
+            }
+
+            if (depth_pow2 == current_depth &&
+                eff_bytes_per_slot == current_bytes) {
                 return true;
             }
         }
@@ -1055,7 +1085,7 @@ public:
             return nullptr;
         }
         const auto snapshot = Base::producer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? storage_ + snapshot.index : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
@@ -1294,7 +1324,7 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return nullptr;
         }
-        pointer slot = &storage_[snapshot.index];
+        pointer slot = storage_ + snapshot.index;
         *slot = value_type(std::forward<Args>(args)...);
         Base::producer_commit_single(snapshot);
         return slot;
@@ -1593,7 +1623,7 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return nullptr;
         }
-        return &storage_[snapshot.index];
+        return storage_.data() + snapshot.index;
     }
 
     RB_FORCEINLINE void publish() noexcept {
@@ -1792,7 +1822,7 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return nullptr;
         }
-        pointer slot = &storage_[snapshot.index];
+        pointer slot = storage_.data() + snapshot.index;
         *slot = value_type(std::forward<Args>(args)...);
         Base::producer_commit_single(snapshot);
         return slot;

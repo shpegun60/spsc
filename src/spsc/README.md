@@ -275,7 +275,7 @@ struct Frame {
 spsc::typed_pool<Frame, 16> q;
 
 if (Frame* slot = q.try_claim()) {
-    new (slot) Frame{};
+    ::new (static_cast<void*>(slot)) Frame{};
     prepare_frame(*slot);
     q.publish();
 }

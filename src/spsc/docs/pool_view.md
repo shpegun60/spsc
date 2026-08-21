@@ -66,6 +66,13 @@ layout. Save and validate all of that metadata separately. `adopt()` can reject
 locally impossible indices, but it cannot detect a compatible-looking restore
 into the wrong geometry or slot table.
 
+`state_t` uses the library's platform-sized `size_type`. It is an index
+snapshot for a matching build, not a portable disk, shared-protocol, or wire
+format. Cross-build persistence must encode fixed-width fields explicitly,
+choose a byte order and format version, range-check on decode, and still
+validate capacity, slot width, slot ordering, and backing layout before
+`adopt()`.
+
 ## More Example Patterns
 
 ### External DMA Buffers In Static RAM
@@ -146,7 +153,7 @@ The API intentionally mirrors `pool`:
 - `attach`
 - `adopt`
 - `detach`
-- serialized `state_t`
+- index-only `state_t` snapshot
 
 ## Correct Usage Pattern
 

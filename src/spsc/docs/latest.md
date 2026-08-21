@@ -426,6 +426,12 @@ For the dynamic typed form, a successful `reserve(min_depth)` guarantees
 `spsc::cap::RB_MAX_UNAMBIGUOUS` returns `false` without allocating or changing
 the current object.
 
+For raw dynamic storage, depth and slot bytes are independent grow-only axes.
+When either non-zero `resize()` or `reserve()` argument requests growth, the
+other axis retains at least its current value. `resize(0, bytes)` remains the
+explicit destroy operation; an invalid `reserve(0, bytes)` with non-zero bytes
+returns `false` because no usable raw geometry can be created.
+
 ### `destroy()`
 
 ```cpp

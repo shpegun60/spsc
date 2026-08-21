@@ -177,9 +177,10 @@ contracts:
 .\bin\debug\spsc_test_cxx20_span.exe --run-suite chunk span_contract
 ```
 
-H6 also has two standalone policy targets. The first succeeds only when the
-compiler rejects relaxed atomic publication. Run the second from an x86 Visual
-Studio Developer PowerShell (or another genuine 32-bit compiler environment):
+H6 also has standalone policy and boundary targets. The first succeeds only
+when the compiler rejects relaxed atomic publication. Run the second from an
+x86 Visual Studio Developer PowerShell (or another genuine 32-bit compiler
+environment); it checks both reserve boundaries and the two shadow states:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test_relaxed_publication_compile_fail.ps1 -Compiler C:\msys64\ucrt64\bin\g++.exe
@@ -210,8 +211,8 @@ bash scripts/run_h6_32bit_shadow_matrix.sh --compiler g++
 `run_h7_matrix.ps1` accepts `-Qmake`, `-Make`, and `-Compiler` paths when the
 Qt kit is not already configured on `PATH`. The GitHub Actions workflow runs
 the explicit C++17 shadow Debug/Release matrix, C++20 span Debug/Release
-targets, Linux sanitizers, genuine 32-bit execution, AArch64 header smoke, and
-Windows MinGW/MSVC header smoke.
+targets, Linux sanitizers, genuine 32-bit execution, AArch64 header smoke,
+bare-metal Cortex-M7/Thumb header smoke, and Windows MinGW/MSVC header smoke.
 
 The dashboard:
 

@@ -451,6 +451,30 @@ if (!guard.first().empty()) {
 }
 ```
 
+### Exception unwinding and constructed prefixes
+
+With exceptions enabled, each successful `queue` or `typed_pool`
+`bulk_write_guard::emplace_next()` arms publication of the constructed prefix.
+If a later construction throws, guard destruction publishes that already
+constructed prefix; the throwing element itself is not counted. This is safe
+partial-progress semantics, not an all-or-nothing transaction.
+
+For all-or-nothing behavior, catch while the guard is still alive and cancel
+before rethrowing:
+
+```cpp
+auto guard = q.scoped_write(8);
+try {
+    while (guard.remaining() != 0u) {
+        guard.emplace_next(next_value());
+    }
+    guard.commit();
+} catch (...) {
+    guard.cancel();
+    throw;
+}
+```
+
 ## 8. Practical Guidance
 
 Prefer these layers in order:

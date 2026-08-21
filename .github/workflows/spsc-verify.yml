@@ -264,7 +264,7 @@ jobs:
             --jobs 2
 
   linux-32bit:
-    name: Linux genuine 32-bit shadow gate
+    name: Linux genuine 32-bit reserve and shadow gate
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -276,7 +276,7 @@ jobs:
           fi
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y g++-multilib
-      - name: Build and run both 32-bit shadow-gate states
+      - name: Build and run reserve boundaries and both shadow-gate states
         run: bash scripts/run_h6_32bit_shadow_matrix.sh --compiler g++
 
   linux-arm-smoke:
@@ -315,6 +315,50 @@ jobs:
             tests/standalone/h7_header_smoke.cpp
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
             -I. -Isrc/spsc -fsyntax-only \
+            tests/standalone/trait_sfinae_contract_smoke.cpp
+
+  linux-cortex-m7-smoke:
+    name: Linux ARM Cortex-M7 bare-metal header smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the bare-metal Cortex-M/R compiler and C++ headers
+        run: |
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's/azure\.//' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y \
+            gcc-arm-none-eabi libstdc++-arm-none-eabi-dev libnewlib-dev
+      - name: Compile the C++17 public surface for Cortex-M7 Thumb
+        run: |
+          common_flags=(
+            -std=c++17
+            -mcpu=cortex-m7
+            -mthumb
+            -mfloat-abi=soft
+            -ffreestanding
+            -fno-exceptions
+            -fno-rtti
+            -Wall
+            -Wextra
+            -Werror
+            -pedantic-errors
+            -I.
+            -Isrc/spsc
+            -fsyntax-only
+          )
+          arm-none-eabi-g++ --version
+          arm-none-eabi-g++ "${common_flags[@]}" \
+            tests/standalone/h7_header_smoke.cpp
+          arm-none-eabi-g++ "${common_flags[@]}" \
+            -DSPSC_ENABLE_SHADOW_INDICES=1 \
+            -DSPSC_SHADOW_ALLOW_32BIT=1 \
+            tests/standalone/h7_header_smoke.cpp
+          arm-none-eabi-g++ "${common_flags[@]}" \
+            tests/standalone/stm32h7_buffer_pool_smoke.cpp
+          arm-none-eabi-g++ "${common_flags[@]}" \
             tests/standalone/trait_sfinae_contract_smoke.cpp
 
   windows-mingw-header-smoke:

@@ -448,6 +448,11 @@ spsc::pool<0> dyn;
 dyn.resize(32, 128);
 ```
 
+Every non-zero resize axis is grow-only. For example, growing depth with
+`resize(64, 16)` on an existing `32 x 128` dynamic pool produces at least
+`64 x 128`; it does not truncate existing 128-byte payloads to 16 bytes.
+Passing zero for either axis remains the explicit destroy operation.
+
 ### `clear()`, `destroy()`
 
 ```cpp

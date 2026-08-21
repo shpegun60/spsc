@@ -1869,33 +1869,50 @@ static void test_resize_semantics() {
 
     const reg old_cap = q.capacity();
     const reg old_bs  = q.buffer_size();
+    const reg lower_depth = (old_cap > 2u) ? (old_cap / 2u) : old_cap;
 
-    // Resize with smaller buffer size must not shrink.
-    QVERIFY(resize_to(q, old_cap, (old_bs > 1u) ? (old_bs - 1u) : old_bs));
+    const auto verify_payloads = [&]() {
+        QCOMPARE(q.size(), n);
+        for (reg i = 0; i < q.size(); ++i) {
+            Blob got{};
+            load_blob_from_slot(q[i], got);
+            expect_blob_eq(got, model[static_cast<std::size_t>(i)]);
+        }
+    };
+
+    // depth down, bytes down: neither grow-only axis may shrink.
+    QVERIFY(resize_to(q, lower_depth,
+                      (old_bs > 1u) ? (old_bs - 1u) : old_bs));
     QCOMPARE(q.capacity(), old_cap);
     QCOMPARE(q.buffer_size(), old_bs);
-    QCOMPARE(q.size(), n);
+    verify_payloads();
 
-    // Grow buffer size.
+    // depth down, bytes up: retain depth while growing slot width.
     const reg new_bs = static_cast<reg>(old_bs + 32u);
-    QVERIFY(resize_to(q, old_cap, new_bs));
+    QVERIFY(resize_to(q, lower_depth, new_bs));
     QCOMPARE(q.capacity(), old_cap);
     QCOMPARE(q.buffer_size(), expected_pool_buffer_size<Q>(new_bs));
-    QCOMPARE(q.size(), n);
+    verify_payloads();
 
-    // Validate migrated data.
-    for (reg i = 0; i < q.size(); ++i) {
-        Blob got{};
-        load_blob_from_slot(q[i], got);
-        expect_blob_eq(got, model[static_cast<std::size_t>(i)]);
-    }
-
-    // Dynamic pools: request depth growth must increase capacity to next pow2 (or keep old if already >=).
+    // Dynamic pools exercise the remaining cross-axis directions.
     if constexpr (::spsc::test::has_resize_two<Q>::value) {
-        const reg want_depth = static_cast<reg>(old_cap + 3u);
-        QVERIFY(q.resize(want_depth, new_bs));
-        QVERIFY(q.capacity() >= old_cap);
+        // depth up, bytes down: retain the full old payload width.
+        const reg bytes_before_depth_growth = q.buffer_size();
+        const reg want_depth = static_cast<reg>(q.capacity() + 3u);
+        QVERIFY(q.resize(want_depth, old_bs));
+        QVERIFY(q.capacity() >= want_depth);
+        QCOMPARE(q.buffer_size(), bytes_before_depth_growth);
         QVERIFY(is_pow2(q.capacity()));
+        verify_payloads();
+
+        // depth up, bytes up: grow both axes together.
+        const reg want_depth_and_bytes = static_cast<reg>(q.capacity() + 3u);
+        const reg want_bytes = static_cast<reg>(q.buffer_size() + 32u);
+        QVERIFY(q.resize(want_depth_and_bytes, want_bytes));
+        QVERIFY(q.capacity() >= want_depth_and_bytes);
+        QCOMPARE(q.buffer_size(), expected_pool_buffer_size<Q>(want_bytes));
+        QVERIFY(is_pow2(q.capacity()));
+        verify_payloads();
     }
 
     // Shrink-to-zero should fully destroy.

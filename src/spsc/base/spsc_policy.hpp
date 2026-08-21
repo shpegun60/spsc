@@ -88,6 +88,17 @@ static_assert(std::is_integral_v<reg> && std::is_unsigned_v<reg>,
 
 namespace detail {
 
+template<typename From, typename To, typename = void>
+struct is_nothrow_value_convertible : std::false_type {};
+
+template<typename From, typename To>
+struct is_nothrow_value_convertible<
+    From, To,
+    std::void_t<decltype(static_cast<To>(std::declval<From>()))>>
+    : std::bool_constant<
+          std::is_convertible_v<From, To> &&
+          noexcept(static_cast<To>(std::declval<From>()))> {};
+
 /* Optional owner-side relaxed load is valid only when it preserves the same
  * value domain and cannot throw.  Its absence remains supported: SPSCbase
  * falls back to load() for third-party counters.
@@ -100,8 +111,9 @@ struct relaxed_load_contract<
     T, Value,
     std::void_t<decltype(std::declval<const T&>().load_relaxed())>>
     : std::bool_constant<
-          std::is_convertible_v<
-              decltype(std::declval<const T&>().load_relaxed()), Value> &&
+          is_nothrow_value_convertible<
+              decltype(std::declval<const T&>().load_relaxed()),
+              Value>::value &&
           noexcept(std::declval<const T&>().load_relaxed())> {};
 
 /* Full contract for a custom counter backend.
@@ -131,16 +143,19 @@ struct is_counter_like<
           std::is_convertible_v<typename T::value_type, reg> &&
           std::is_convertible_v<reg, typename T::value_type> &&
           std::is_nothrow_default_constructible_v<T> &&
-          std::is_convertible_v<
+          is_nothrow_value_convertible<
               decltype(std::declval<const T&>().load()),
-              typename T::value_type> &&
+              typename T::value_type>::value &&
+          is_nothrow_value_convertible<
+              decltype(std::declval<const T&>().load()), reg>::value &&
           noexcept(std::declval<T&>().store(
               std::declval<typename T::value_type>())) &&
           noexcept(std::declval<const T&>().load()) &&
           noexcept(std::declval<T&>().add(
               std::declval<typename T::value_type>())) &&
           noexcept(std::declval<T&>().inc()) &&
-          relaxed_load_contract<T, typename T::value_type>::value> {};
+          relaxed_load_contract<T, typename T::value_type>::value &&
+          relaxed_load_contract<T, reg>::value> {};
 
 template <typename T>
 inline constexpr bool is_counter_like_v = is_counter_like<T>::value;

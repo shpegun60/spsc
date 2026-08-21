@@ -170,13 +170,13 @@ public:
     // [Static] Attach via raw C-array reference.
     template<reg N, size_type C = Capacity, typename = std::enable_if_t<(C != 0u) && (N == C)>>
     explicit pool_view(pointer (&arr)[N], const size_type buffer_size) noexcept
-        : pool_view(&arr[0], buffer_size)
+        : pool_view(arr + 0, buffer_size)
     {}
 
     // [Static] Attach via raw C-array reference with Policy tag.
     template<reg N, size_type C = Capacity, typename = std::enable_if_t<(C != 0u) && (N == C)>>
     explicit pool_view(pointer (&arr)[N], const size_type buffer_size, Policy) noexcept
-        : pool_view(&arr[0], buffer_size)
+        : pool_view(arr + 0, buffer_size)
     {}
 
     // [Dynamic] Attach to external slot array with runtime depth (Capacity == 0).
@@ -370,7 +370,7 @@ public:
     template<reg N, size_type C = Capacity, typename = std::enable_if_t<(C != 0u) && (N == C)>>
     [[nodiscard]] bool attach(pointer (&arr)[N], const size_type buffer_size) noexcept
     {
-        return attach(&arr[0], buffer_size);
+        return attach(arr + 0, buffer_size);
     }
 
     template<size_type C = Capacity, typename = std::enable_if_t<C == 0>>
@@ -477,7 +477,7 @@ public:
     template<reg N, size_type C = Capacity, typename = std::enable_if_t<(C != 0u) && (N == C)>>
     [[nodiscard]] bool attach(pointer (&arr)[N], const size_type buffer_size, const state_t st) noexcept
     {
-        return attach(&arr[0], buffer_size, st);
+        return attach(arr + 0, buffer_size, st);
     }
 
     // Reset indices to empty while keeping attachment (if any).

@@ -192,17 +192,17 @@ public:
     [[nodiscard]] RB_FORCEINLINE const_reference back() const noexcept { SPSC_ASSERT(!empty()); return storage_[len_ - 1]; }
 
     [[nodiscard]] pointer try_front() noexcept {
-        return empty() ? nullptr : &storage_[0];
+        return empty() ? nullptr : storage_.data();
     }
     [[nodiscard]] const_pointer try_front() const noexcept {
-        return empty() ? nullptr : &storage_[0];
+        return empty() ? nullptr : storage_.data();
     }
 
     [[nodiscard]] pointer try_back() noexcept {
-        return empty() ? nullptr : &storage_[len_ - 1];
+        return empty() ? nullptr : storage_.data() + (len_ - 1u);
     }
     [[nodiscard]] const_pointer try_back() const noexcept {
-        return empty() ? nullptr : &storage_[len_ - 1];
+        return empty() ? nullptr : storage_.data() + (len_ - 1u);
     }
     void pop_back() noexcept {
         SPSC_ASSERT(!empty());
@@ -266,7 +266,7 @@ public:
         reference slot = storage_[len_];
         slot = value_type(std::forward<Args>(args)...);
         ++len_;
-        return &slot;
+        return std::addressof(slot);
     }
 
     // --------------------------------------------------------------------------
@@ -551,19 +551,23 @@ public:
     }
 
     [[nodiscard]] pointer try_front() noexcept {
-        return empty() ? nullptr : &storage_[0];
+        return empty() ? nullptr : storage_;
     }
     [[nodiscard]] const_pointer try_front() const noexcept {
-        return empty() ? nullptr : &storage_[0];
+        return empty() ? nullptr : storage_;
     }
 
     [[nodiscard]] pointer try_back() noexcept {
         const size_type used = size();
-        return (used == 0u || storage_ == nullptr) ? nullptr : &storage_[used - 1u];
+        return (used == 0u || storage_ == nullptr)
+                   ? nullptr
+                   : storage_ + (used - 1u);
     }
     [[nodiscard]] const_pointer try_back() const noexcept {
         const size_type used = size();
-        return (used == 0u || storage_ == nullptr) ? nullptr : &storage_[used - 1u];
+        return (used == 0u || storage_ == nullptr)
+                   ? nullptr
+                   : storage_ + (used - 1u);
     }
     void pop_back() noexcept {
         SPSC_ASSERT(!empty());
@@ -626,7 +630,7 @@ public:
         reference slot = storage_[len_];
         slot = value_type(std::forward<Args>(args)...);
         ++len_;
-        return &slot;
+        return std::addressof(slot);
     }
 
     // --------------------------------------------------------------------------

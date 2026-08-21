@@ -2249,6 +2249,8 @@ static void reserve_resize_edge_cases_raw_dynamic() {
     Q q;
     QVERIFY(q.reserve(0u, 0u));
     QVERIFY(!q.valid());
+    QVERIFY(!q.reserve(0u, 64u));
+    QVERIFY(!q.valid());
     QVERIFY(!q.resize(8u, 0u)); // bytes_per_slot must be > 0.
     QVERIFY(!q.valid());
 
@@ -2266,10 +2268,18 @@ static void reserve_resize_edge_cases_raw_dynamic() {
     QCOMPARE(q.capacity(), cap0);
     QCOMPARE(q.bytes_per_slot(), bs0);
 
-    const reg grow_req = static_cast<reg>(bs0 + 8u);
-    QVERIFY(q.reserve(cap0 + 1u, grow_req)); // Grow geometry and per-slot bytes.
+    // Each reserve axis is an independent minimum. Growing slot bytes must
+    // retain depth even when the requested minimum depth is smaller.
+    const reg grow_bytes_req = static_cast<reg>(bs0 + 8u);
+    QVERIFY(q.reserve(2u, grow_bytes_req));
+    QCOMPARE(q.capacity(), cap0);
+    QCOMPARE(q.bytes_per_slot(), expected_raw_slot_bytes<Q>(grow_bytes_req));
+
+    // The inverse cross-axis request must grow depth without shrinking bytes.
+    const reg bytes_after_growth = q.bytes_per_slot();
+    QVERIFY(q.reserve(cap0 + 1u, 1u));
     QVERIFY(q.capacity() >= cap0 + 1u);
-    QCOMPARE(q.bytes_per_slot(), expected_raw_slot_bytes<Q>(grow_req));
+    QCOMPARE(q.bytes_per_slot(), bytes_after_growth);
     QVERIFY(q.empty());
 
     const std::uint32_t v = 0xDEADBEEFu;
@@ -2282,6 +2292,39 @@ static void reserve_resize_edge_cases_raw_dynamic() {
     QVERIFY(!q.valid());
     QCOMPARE(q.capacity(), reg{0u});
     QCOMPARE(q.bytes_per_slot(), reg{0u});
+
+    // Direct resize() is also grow-only for every non-zero axis. Exercise the
+    // full depth/bytes direction matrix independently of reserve().
+    Q matrix;
+    QVERIFY(matrix.resize(8u, 64u));
+    const reg matrix_depth0 = matrix.capacity();
+    const reg matrix_bytes0 = matrix.bytes_per_slot();
+
+    // depth down, bytes down
+    QVERIFY(matrix.resize(matrix_depth0 / 2u, matrix_bytes0 / 2u));
+    QCOMPARE(matrix.capacity(), matrix_depth0);
+    QCOMPARE(matrix.bytes_per_slot(), matrix_bytes0);
+
+    // depth down, bytes up
+    const reg matrix_bytes_up_req = static_cast<reg>(matrix_bytes0 + 32u);
+    QVERIFY(matrix.resize(matrix_depth0 / 2u, matrix_bytes_up_req));
+    QCOMPARE(matrix.capacity(), matrix_depth0);
+    QCOMPARE(matrix.bytes_per_slot(),
+             expected_raw_slot_bytes<Q>(matrix_bytes_up_req));
+
+    // depth up, bytes down
+    const reg matrix_bytes1 = matrix.bytes_per_slot();
+    QVERIFY(matrix.resize(matrix_depth0 + 1u, matrix_bytes0));
+    QVERIFY(matrix.capacity() >= matrix_depth0 + 1u);
+    QCOMPARE(matrix.bytes_per_slot(), matrix_bytes1);
+
+    // depth up, bytes up
+    const reg matrix_depth1 = matrix.capacity();
+    const reg matrix_bytes_both_req = static_cast<reg>(matrix_bytes1 + 32u);
+    QVERIFY(matrix.resize(matrix_depth1 + 1u, matrix_bytes_both_req));
+    QVERIFY(matrix.capacity() >= matrix_depth1 + 1u);
+    QCOMPARE(matrix.bytes_per_slot(),
+             expected_raw_slot_bytes<Q>(matrix_bytes_both_req));
 }
 
 static void reserve_limit_contract_dynamic() {
