@@ -34,7 +34,7 @@ struct Frame {
 spsc::typed_pool<Frame, 32> q;
 
 if (Frame* slot = q.try_claim()) {
-    new (slot) Frame{};
+    ::new (static_cast<void*>(slot)) Frame{};
     fill_frame(*slot);
     q.publish();
 }
@@ -62,7 +62,7 @@ When you want explicit control, use `claim()` and construct into the slot.
 
 ```cpp
 if (Frame* slot = q.try_claim()) {
-    new (slot) Frame{};
+    ::new (static_cast<void*>(slot)) Frame{};
     initialize_frame(*slot);
     q.publish();
 }
@@ -181,7 +181,7 @@ Manual path:
 
 ```cpp
 if (auto* slot = q.try_claim()) {
-    new (slot) Frame{};
+    ::new (static_cast<void*>(slot)) Frame{};
     prepare(*slot);
     q.publish();
 }
@@ -309,7 +309,7 @@ q.emplace(args...);
 
 ```cpp
 if (Frame* slot = q.try_claim()) {
-    new (slot) Frame{};
+    ::new (static_cast<void*>(slot)) Frame{};
     prepare(*slot);
     q.publish();
 }

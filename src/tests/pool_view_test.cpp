@@ -2124,6 +2124,68 @@ static void test_reject_corrupt_state_dynamic() {
     verify_invariants(q2);
 }
 
+static void state_geometry_and_layout_are_external_contract_suite() {
+    using Q = spsc::pool_view<0u, spsc::policy::P>;
+
+    dynamic_storage<> storage;
+    storage.init(reg{16u}, kBufSz);
+
+    Q source(storage.slot_table.data(), reg{8u}, kBufSz);
+    QVERIFY(source.is_valid());
+
+    for (std::uint32_t value = 1u; value <= 8u; ++value) {
+        Blob blob{};
+        blob.seq = value;
+        QVERIFY(source.try_push(blob));
+    }
+    for (reg i = 0u; i < 6u; ++i) {
+        source.pop();
+    }
+    Blob nine{};
+    nine.seq = 9u;
+    QVERIFY(source.try_push(nine));
+    Blob ten{};
+    ten.seq = 10u;
+    QVERIFY(source.try_push(ten));
+
+    const auto saved = source.state();
+    QCOMPARE(saved.head, reg{10u});
+    QCOMPARE(saved.tail, reg{6u});
+
+    Q matching;
+    QVERIFY(matching.adopt(storage.slot_table.data(), reg{8u}, kBufSz,
+                           saved.head, saved.tail));
+    Blob matching_third{};
+    load_from_slot(matching[2u], matching_third);
+    QCOMPARE(matching_third.seq, std::uint32_t{9u});
+
+    // Capacity/mask is external metadata. Cross-geometry indices can still be
+    // locally valid while selecting different physical slots after wrap.
+    Q mismatched_geometry;
+    QVERIFY(mismatched_geometry.adopt(storage.slot_table.data(), reg{16u}, kBufSz,
+                                      saved.head, saved.tail));
+    Blob mismatched_third{};
+    load_from_slot(mismatched_geometry[2u], mismatched_third);
+    QCOMPARE(mismatched_third.seq, std::uint32_t{0u});
+    QVERIFY(mismatched_third.seq != matching_third.seq);
+
+    // buffer_size and slot ordering are also absent from state_t. Both calls
+    // are structurally valid; the recovery layer must reject such mismatches.
+    Q mismatched_buffer_size;
+    QVERIFY(mismatched_buffer_size.adopt(storage.slot_table.data(), reg{8u},
+                                         kBufSz / 2u, saved.head, saved.tail));
+    QCOMPARE(mismatched_buffer_size.buffer_size(), kBufSz / 2u);
+
+    auto reordered_slots = storage.slot_table;
+    std::swap(reordered_slots[0u], reordered_slots[6u]);
+    Q mismatched_order;
+    QVERIFY(mismatched_order.adopt(reordered_slots.data(), reg{8u}, kBufSz,
+                                   saved.head, saved.tail));
+    Blob wrong_front{};
+    load_from_slot(mismatched_order.front(), wrong_front);
+    QCOMPARE(wrong_front.seq, std::uint32_t{9u});
+}
+
 // 9) Alignment sweep: for various alignments/offsets, as<T>() must match reality.
 
 template <std::size_t Align>
@@ -2422,6 +2484,9 @@ private slots:
     void dynamic_cached_CA()  { run_dynamic_suite<spsc::policy::CA<>>(); }
     void extended_policy_regression() { extended_policy_regression_suite(); }
     void external_dma_slots_cached_CA() { test_cacheline_aligned_external_slots_cached(); }
+    void state_restore_geometry_and_layout_contract() {
+        state_geometry_and_layout_are_external_contract_suite();
+    }
 
     void threaded_atomic_A()  { run_threaded_suite<spsc::policy::A<>>(); }
     void threaded_cached_CA() { run_threaded_suite<spsc::policy::CA<>>(); }

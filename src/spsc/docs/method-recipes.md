@@ -39,6 +39,11 @@ if (q.full()) {
 }
 ```
 
+In the default no-exception configuration, an allocation-backed constructor
+may leave an invalid object when allocation fails. Check `is_valid()` before
+the queue is handed to concurrent endpoints; a static template capacity does
+not imply allocation-free storage for every container family.
+
 Useful shared introspection methods:
 
 - `capacity()`, `size()`, `free()`
@@ -137,7 +142,7 @@ q.publish(::spsc::unsafe, regs.total);
 
 ```cpp
 if (auto* slot = q.try_claim()) {
-    new (slot) Message(42, "payload");
+    ::new (static_cast<void*>(slot)) Message(42, "payload");
     q.publish();
 }
 ```
@@ -146,7 +151,7 @@ if (auto* slot = q.try_claim()) {
 
 ```cpp
 if (auto* slot = q.try_claim()) {
-    new (slot) Frame{};
+    ::new (static_cast<void*>(slot)) Frame{};
     prepare(*slot);
     q.publish();
 }
@@ -420,7 +425,7 @@ auto regs = q.claim_write(spsc::unsafe, 2);
 if (regs.first.count != 0u) {
     auto* raw = regs.first.raw;
     auto* slots = reinterpret_cast<Message*>(raw);
-    new (&slots[0]) Message(1, "hello");
+    ::new (static_cast<void*>(slots)) Message(1, "hello");
 }
 
 q.publish(::spsc::unsafe, 1);
@@ -708,18 +713,38 @@ The same idea applies to:
 ## 22. Save / Restore State Across Restart
 
 ```cpp
-spsc::fifo_view<int, 0>::state_t st = q.state();
-persist_state(st.head, st.tail);
+struct saved_fifo_state {
+    spsc::fifo_view<int, 0>::state_t indices;
+    reg effective_capacity;
+    std::uint32_t layout_version;
+};
+
+saved_fifo_state saved{
+    q.state(),
+    q.capacity(),
+    current_layout_version(),
+};
+persist_state(saved);
 ```
 
 Later:
 
 ```cpp
-spsc::fifo_view<int, 0>::state_t restored{savedHead, savedTail};
-q.attach(storage.data(), storage.size(), restored);
+spsc::fifo_view<int, 0> restored{storage.data(), storage.size()};
+if (!restored.is_valid() ||
+    restored.capacity() != saved.effective_capacity ||
+    saved.layout_version != current_layout_version()) {
+    restored.detach();
+    return false;
+}
+
+return restored.adopt(storage.data(), storage.size(),
+                      saved.indices.head, saved.indices.tail);
 ```
 
-This is one of the main reasons the `*_view` family exists.
+The `{head, tail}` state is not a self-contained geometry record. For
+`pool_view`, also persist and validate `buffer_size`, slot ordering, and backing
+buffer layout.
 
 ## 23. Drain One Container Into Another
 

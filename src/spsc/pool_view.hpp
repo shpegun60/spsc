@@ -111,7 +111,9 @@ public:
     using regions = ::spsc::bulk::slot_regions<pointer, size_type>;
 
     // ------------------------------------------------------------------------------------------
-    // Serializable State
+    // Serializable head/tail indices only. Capacity/mask, buffer size, slot
+    // ordering, and backing layout remain external recovery metadata. Restore
+    // only into matching geometry and compatible slots.
     // ------------------------------------------------------------------------------------------
     struct state_t {
         size_type head{0u};
@@ -387,7 +389,9 @@ public:
         return true;
     }
 
-    // Adopt state (restore head/tail). Validates invariants.
+    // Adopt state (restore head/tail). This validates indices against the
+    // supplied geometry, but cannot validate saved capacity, buffer layout, or
+    // slot ordering because state_t does not contain them.
     template<size_type C = Capacity, typename = std::enable_if_t<C == 0>>
     [[nodiscard]] bool adopt(pointer* slot_array, const size_type depth, const size_type buffer_size,
                              const size_type initial_head, const size_type initial_tail) noexcept

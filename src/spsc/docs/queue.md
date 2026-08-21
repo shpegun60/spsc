@@ -28,6 +28,10 @@ Even static `queue` allocates its storage so the lifetime model is consistent
 between static and dynamic variants. Static capacity fixes the ring geometry;
 it is not an allocation-free guarantee for this container.
 
+With the default no-exception allocator, allocation failure leaves the queue
+invalid instead of throwing. Check `is_valid()` after construction before the
+queue is exposed to either endpoint.
+
 ## Basic Example
 
 ```cpp
@@ -48,7 +52,7 @@ This is the right path when you want zero-copy construction.
 
 ```cpp
 if (auto* slot = q.try_claim()) {
-    new (slot) Message(42, "payload");
+    ::new (static_cast<void*>(slot)) Message(42, "payload");
     q.publish();
 }
 ```
@@ -165,7 +169,9 @@ q.emplace(7, "ready");
 - `queue(requested_capacity)` exists for the dynamic variant.
 - move is supported; copy is intentionally disabled because `queue` owns live object lifetime.
 - `swap(other)` exchanges storage and state.
-- `destroy()` releases storage and destroys live objects.
+- `destroy()` releases storage and destroys live objects. On a static-capacity
+  queue it also leaves that instance without storage; use `clear()` when the
+  queue must remain reusable.
 
 Because `queue` manages lifetime, the destructor and clear paths are semantically heavier than `fifo`.
 
@@ -193,7 +199,7 @@ Manual construction example:
 
 ```cpp
 if (auto* slot = q.try_claim()) {
-    new (slot) Message(1, "hello");
+    ::new (static_cast<void*>(slot)) Message(1, "hello");
     q.publish();
 }
 ```
@@ -239,6 +245,11 @@ if (auto guard = q.scoped_read()) {
 - `destroy()` frees storage
 
 These methods are non-concurrent.
+
+For a static-capacity `queue`, `destroy()` is terminal for its current storage:
+normal queue operations remain unavailable afterwards because there is no
+static reallocation member. Reconstruct the object (or replace it through a
+valid move assignment) before reuse. `clear()` is the reusable reset operation.
 
 ## Snippet Catalog
 
@@ -327,7 +338,7 @@ if (auto* msg = q.try_emplace(4, "queued")) {
 
 ```cpp
 auto* slot = q.claim();
-new (slot) Message(5, "manual");
+::new (static_cast<void*>(slot)) Message(5, "manual");
 q.publish();
 ```
 
@@ -335,7 +346,7 @@ q.publish();
 
 ```cpp
 if (auto* slot = q.try_claim()) {
-    new (slot) Message(6, "manual");
+    ::new (static_cast<void*>(slot)) Message(6, "manual");
     q.publish();
 }
 ```
@@ -344,7 +355,7 @@ if (auto* slot = q.try_claim()) {
 
 ```cpp
 if (auto* slot = q.try_claim()) {
-    new (slot) Message(7, "done");
+    ::new (static_cast<void*>(slot)) Message(7, "done");
     q.publish();
 }
 ```
@@ -407,7 +418,7 @@ q.consume_all();
 auto regs = q.claim_write(spsc::unsafe, 2);
 if (regs.first.count != 0u) {
     auto* slots = regs.first.ptr_uninit();
-    new (&slots[0]) Message(10, "bulk");
+    ::new (static_cast<void*>(slots)) Message(10, "bulk");
     q.publish(::spsc::unsafe, 1);
 }
 ```
@@ -466,6 +477,9 @@ the current queue.
 q.clear();
 q.destroy();
 ```
+
+Use `clear()` to destroy live elements while retaining reusable storage. A
+static-capacity queue becomes invalid after `destroy()`.
 
 ### `swap()`
 

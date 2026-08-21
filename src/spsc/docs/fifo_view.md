@@ -52,6 +52,13 @@ spsc::fifo_view<int, 0>::state_t st{
 q.attach(storage.data(), storage.size(), st);
 ```
 
+`state_t` contains only `head` and `tail`. It does not contain the effective
+capacity, mask, or a description of the backing storage. Persist
+`q.capacity()` and the application's storage-layout identity beside the state,
+then restore only when both still match. A different runtime capacity can make
+the same indices locally valid while mapping wrapped elements to different
+physical slots; `adopt()` cannot detect that mismatch.
+
 ## More Example Patterns
 
 ### Cache-Aligned External Storage
@@ -154,10 +161,12 @@ For DMA or manually aligned payloads, make the external storage contract explici
 - static constructors accept `std::array<T, Capacity>&` or `T (&buffer)[Capacity]`.
 - dynamic constructors accept `(pointer buffer, size_type capacity)`.
 - `attach(...)` binds external storage and clears queue state.
-- `adopt(...)` binds storage and restores a supplied head/tail state.
+- `adopt(...)` binds storage and restores supplied head/tail indices after
+  validating them against the supplied geometry.
 - `reset()` clears head/tail while keeping the current storage attached.
 - `detach()` forgets the storage and resets the queue state.
-- `state()` returns a serializable `{head, tail}` snapshot.
+- `state()` returns a serializable `{head, tail}` index snapshot. Capacity and
+  backing-layout metadata must be saved separately.
 
 Typical restore flow:
 

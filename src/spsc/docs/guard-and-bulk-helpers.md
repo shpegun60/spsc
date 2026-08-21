@@ -158,8 +158,13 @@ auto guard = q.scoped_write(4);
 if (guard) {
     auto* slot = guard.get_next(); // arms auto-publish
     *slot = make_value();
+    guard.mark_written();          // advances the publish count
 }
 ```
+
+`get_next()` selects the current slot and arms auto-publish, but it does not
+advance the written count. Call `mark_written()` after filling that slot.
+`write_next()` and `emplace_next()` advance the count themselves.
 
 ### `write_next()`
 
@@ -258,7 +263,7 @@ if (!ready_for_bulk_consume()) {
 ```cpp
 if (auto guard = q.scoped_write()) {
     auto* raw = guard.get();
-    new (raw) Message(1, "manual");
+    ::new (static_cast<void*>(raw)) Message(1, "manual");
     guard.mark_constructed();
     guard.arm_publish();
 }
@@ -277,7 +282,7 @@ if (auto guard = q.scoped_write()) {
 ```cpp
 if (auto guard = q.scoped_write()) {
     auto* raw = guard.get();
-    new (raw) Message(3, "manual");
+    ::new (static_cast<void*>(raw)) Message(3, "manual");
     guard.mark_constructed();
     guard.commit();
 }
@@ -420,7 +425,7 @@ if (auto guard = q.scoped_write()) {
 ```cpp
 if (auto guard = q.scoped_write()) {
     auto* raw = guard.get();
-    new (raw) Frame{};
+    ::new (static_cast<void*>(raw)) Frame{};
     guard.mark_constructed();
     guard.publish_on_destroy();
 }

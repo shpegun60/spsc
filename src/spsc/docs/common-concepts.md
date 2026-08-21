@@ -73,6 +73,19 @@ Use a view when:
 
 Use an owning container when you want a self-contained object with allocation handled by the library.
 
+### View recovery metadata
+
+`fifo_view::state_t` and `pool_view::state_t` serialize only `{head, tail}`.
+They are index snapshots, not complete storage descriptions. A recovery record
+must also preserve and validate the effective capacity/mask and the identity or
+layout of the backing storage. `pool_view` additionally requires the same slot
+ordering and a compatible `buffer_size`/buffer layout.
+
+`adopt()` validates that the indices are locally legal for the geometry passed
+to that call. It cannot prove that this is the geometry or backing layout from
+which the indices were saved. Perform restore only while both endpoints are
+stopped.
+
 ## 4. Producer Styles
 
 Different containers expose different producer models.
@@ -340,3 +353,26 @@ These are generally **not** safe to call concurrently with producer/consumer tra
 - copy / move / state restore helpers
 
 Treat them as management operations performed while the queue is stopped.
+
+## 11. Assertions And Allocation Failure
+
+`SPSC_ASSERT` is an opt-in diagnostic hook. Unless the application defines it
+before including any `spsc` header, its default expansion is a no-op; the
+library does not automatically map it to the standard `assert()` macro.
+
+```cpp
+#include <cassert>
+#define SPSC_ASSERT(expr) assert(expr)
+#include "fifo.hpp"
+```
+
+Define it consistently for the whole build. Assertions diagnose violated
+preconditions; they are not a replacement for `try_*` methods or `is_valid()`.
+
+The default `SPSC_ENABLE_EXCEPTIONS=0` configuration makes the shipped
+allocators return `nullptr` on allocation failure. Because constructors cannot
+return a status, an allocation-backed constructor may produce an invalid
+object. This applies to runtime-sized containers and to allocation-backed
+static forms such as `queue`. Check `is_valid()` before publishing the object
+to producer/consumer endpoints. Prefer the boolean result of `resize()` or
+`reserve()` when initialization must report failure explicitly.
