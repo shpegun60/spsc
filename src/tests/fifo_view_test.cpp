@@ -2599,6 +2599,45 @@ static void allocator_accounting_suite() {
     QCOMPARE(other.front(), std::uint32_t{1u});
 }
 
+static void state_geometry_is_external_contract_suite() {
+    using Q = spsc::fifo_view<std::uint32_t, 0u, spsc::policy::P>;
+
+    std::array<std::uint32_t, 16u> storage{};
+    Q source(storage.data(), reg{8u});
+    QVERIFY(source.is_valid());
+
+    for (std::uint32_t value = 1u; value <= 8u; ++value) {
+        QVERIFY(source.try_push(value));
+    }
+    for (reg i = 0u; i < 6u; ++i) {
+        source.pop();
+    }
+    QVERIFY(source.try_push(9u));
+    QVERIFY(source.try_push(10u));
+
+    const auto saved = source.state();
+    QCOMPARE(saved.head, reg{10u});
+    QCOMPARE(saved.tail, reg{6u});
+
+    Q matching;
+    QVERIFY(matching.adopt(storage.data(), reg{8u}, saved.head, saved.tail));
+    QCOMPARE(matching.capacity(), reg{8u});
+    QCOMPARE(matching.size(), reg{4u});
+    QCOMPARE(matching[0u], std::uint32_t{7u});
+    QCOMPARE(matching[2u], std::uint32_t{9u});
+
+    // state_t contains only head/tail. The same indices are locally valid for
+    // a different mask, so adopt() cannot diagnose this unsupported restore;
+    // the logical-to-physical mapping is already different after wrap.
+    Q mismatched;
+    QVERIFY(mismatched.adopt(storage.data(), reg{16u}, saved.head, saved.tail));
+    QCOMPARE(mismatched.capacity(), reg{16u});
+    QCOMPARE(mismatched.size(), reg{4u});
+    QCOMPARE(mismatched[0u], std::uint32_t{7u});
+    QCOMPARE(mismatched[2u], std::uint32_t{0u});
+    QVERIFY(mismatched[2u] != matching[2u]);
+}
+
 static void resize_migration_order_suite() {
     using Q = spsc::fifo_view<std::uint32_t, 0u, spsc::policy::P>;
 
@@ -3260,6 +3299,7 @@ private slots:
     void extended_policy_threaded_atomic_like() { extended_policy_threaded_atomic_like_suite(); }
 
     void allocator_accounting() { allocator_accounting_suite(); }
+    void state_restore_geometry_contract() { state_geometry_is_external_contract_suite(); }
 
     void invalid_inputs() {
         spsc::fifo_view<Traced, 0u, spsc::policy::P> q;

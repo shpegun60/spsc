@@ -720,8 +720,9 @@ public:
 
     /*
      * try_push(data, size)
-     * Copies up to 'buffer_size()' bytes if the queue is not full.
-     * Returns false ONLY if the queue is full.
+     * Copies up to 'buffer_size()' bytes.
+     * Returns false if the pool is invalid, a non-empty copy has null data, or
+     * the queue is full.
      */
     [[nodiscard]] RB_FORCEINLINE bool try_push(const void* data, const size_type size) noexcept {
         if (RB_UNLIKELY(!is_valid())) { return false; }

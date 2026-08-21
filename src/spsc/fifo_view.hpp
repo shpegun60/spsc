@@ -161,8 +161,10 @@ public:
 
 
     // ------------------------------------------------------------------------
-    // Serializable head/tail state for IPC / Recovery / Debug.
-    // Use with attach(..., state_t{...}) or state() accessor.
+    // Serializable head/tail indices for IPC / recovery / debug.
+    // This is not a self-contained storage description: capacity/mask and the
+    // backing layout are external recovery metadata. Restore only into the
+    // same effective geometry and a compatible backing buffer.
     // ------------------------------------------------------------------------
     struct state_t {
         size_type head{0u};
@@ -432,7 +434,9 @@ public:
         return true;
     }
 
-    // Restore head/tail from external source (IPC / recovery). Validates invariants.
+    // Restore head/tail from an external source (IPC / recovery). This validates
+    // the indices against the supplied geometry, but cannot prove that it is the
+    // geometry/layout from which the state was saved.
     template<size_type C = Capacity, typename = std::enable_if_t<C == 0>>
     [[nodiscard]] bool adopt(pointer buffer, const size_type buffer_capacity,
                              const size_type initial_head, const size_type initial_tail) noexcept

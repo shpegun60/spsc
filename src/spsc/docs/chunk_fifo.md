@@ -178,7 +178,10 @@ The producer usually:
 
 ### View Variant
 
-`chunk_fifo_view` inherits the `fifo_view`-style attach/adopt/state model, but over externally owned chunk storage.
+`chunk_fifo_view` inherits the `fifo_view`-style attach/adopt/state model, but
+over externally owned chunk storage. Its `state_t` likewise contains only
+head/tail indices; effective geometry and a compatible chunk-storage layout
+must be validated separately during recovery.
 
 ### Disabled Intentionally
 

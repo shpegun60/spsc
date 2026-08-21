@@ -85,6 +85,10 @@ spsc::array_fifo_view<std::uint8_t, 64, 0>::state_t st{savedHead, savedTail};
 q.attach(backing.data(), backing.size(), st);
 ```
 
+This inherits the `fifo_view` indices-only recovery contract. Save and validate
+the same effective capacity/mask and compatible frame-storage layout
+separately before restoring `st`.
+
 ## API Groups
 
 ### Producer

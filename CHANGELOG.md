@@ -45,10 +45,23 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Added deterministic reserve-boundary coverage for `RB_MAX_UNAMBIGUOUS`, the
   first value above it, and `std::numeric_limits<reg>::max()`, including
   allocator-call and state-preservation checks.
+- Added illustrative `fifo_view` and `pool_view` recovery coverage showing why
+  head/tail indices alone cannot validate a different capacity/mask, slot
+  order, or raw-buffer layout.
 - Added standalone trait/SFINAE runtime smoke coverage, including bounded
   array-swap scratch and class-specific placement-new/address regressions for
   static producer paths and dynamic resize/destruction, plus compile-fail gates
   for invalid custom counter and allocator-alignment extensions.
+
+### Documentation
+
+- Clarified that view `state_t` values contain indices only and require
+  separately validated recovery geometry and backing layout.
+- Documented the opt-in/no-op default `SPSC_ASSERT` hook, no-exception
+  allocation-failure validity checks, static `queue::destroy()` lifetime, and
+  the required `mark_written()` step after FIFO bulk-guard `get_next()`.
+- Corrected manual placement-new examples to select global placement new via
+  `void*`, and corrected the raw `pool::try_push()` failure comment.
 
 ## [3.0.0] - 2026-08-20
 

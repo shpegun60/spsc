@@ -78,7 +78,7 @@ struct Header {
 };
 
 if (auto* slot = q.try_claim()) {
-    auto* hdr = ::new (slot) Header{7u, 48u};
+    auto* hdr = ::new (static_cast<void*>(slot)) Header{7u, 48u};
 
     auto* payload = reinterpret_cast<std::byte*>(hdr + 1);
     fill_payload(payload, hdr->payloadSize);

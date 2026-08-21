@@ -59,7 +59,12 @@ spsc::pool_view<0>::state_t st{
 q.attach(slots.data(), slots.size(), bufferSize, st);
 ```
 
-This is useful when the data memory survives longer than the process or object that wraps it.
+This is useful when the data memory survives longer than the process or object
+that wraps it, but `state_t` is only `{head, tail}`. It does not serialize the
+effective capacity/mask, `buffer_size`, slot ordering, or backing-buffer
+layout. Save and validate all of that metadata separately. `adopt()` can reject
+locally impossible indices, but it cannot detect a compatible-looking restore
+into the wrong geometry or slot table.
 
 ## More Example Patterns
 
@@ -172,10 +177,12 @@ The container does not allocate and does not free:
 - static constructors accept slot arrays plus `buffer_size`.
 - dynamic constructors accept `(pointer* slots, depth, buffer_size)`.
 - `attach(...)` binds the slot array and resets queue state.
-- `adopt(...)` binds the slot array and restores supplied head/tail.
+- `adopt(...)` binds the slot array and restores supplied head/tail indices
+  after validating them against the supplied geometry.
 - `reset()` clears head/tail while keeping the current slot array attached.
 - `detach()` clears the view.
-- `state()` returns a serializable `{head, tail}` pair.
+- `state()` returns a serializable `{head, tail}` pair only; geometry,
+  `buffer_size`, slot ordering, and backing-layout metadata remain external.
 
 Remember that the view never allocates buffers and never frees them.
 
@@ -215,14 +222,31 @@ Remember that the view never allocates buffers and never frees them.
 - `write_guard`, `read_guard`
 - `scoped_write()`, `scoped_write(max_count)`, `scoped_read()`, `scoped_read(max_count)`
 
-### Good Restore Pattern
+### Restore Pattern
 
 ```cpp
-spsc::pool_view<0>::state_t st{savedHead, savedTail};
-q.attach(slots.data(), depth, bufferSize, st);
+struct saved_pool_state {
+    spsc::pool_view<0>::state_t indices;
+    reg effective_capacity;
+    reg buffer_size;
+    std::uint32_t layout_version;
+};
+
+spsc::pool_view<0> q{slots.data(), depth, bufferSize};
+if (!q.is_valid() ||
+    q.capacity() != saved.effective_capacity ||
+    q.buffer_size() != saved.buffer_size ||
+    !slot_layout_matches(saved.layout_version)) {
+    q.detach();
+    return false;
+}
+
+return q.adopt(slots.data(), depth, bufferSize,
+               saved.indices.head, saved.indices.tail);
 ```
 
-Use this when the buffers and slot array survive outside the queue wrapper.
+The application-defined layout check must cover slot order and the compatibility
+of every referenced backing buffer.
 
 ## Snippet Catalog
 
