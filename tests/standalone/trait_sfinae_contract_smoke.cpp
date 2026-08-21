@@ -154,10 +154,13 @@ struct swap_scratch_probe {
 };
 
 struct class_specific_new_value {
+    inline static std::size_t destruction_count{0u};
+
     int payload{0};
 
     class_specific_new_value() noexcept = default;
     explicit class_specific_new_value(const int value) noexcept : payload(value) {}
+    ~class_specific_new_value() noexcept { ++destruction_count; }
 
     static void* operator new(std::size_t) = delete;
     class_specific_new_value* operator&() = delete;
@@ -270,6 +273,7 @@ using typed = ::spsc::typed_pool<value, 8u>;
 using move_only_typed = ::spsc::typed_pool<move_only, 8u>;
 using object_queue = ::spsc::queue<value, 8u>;
 using class_new_queue = ::spsc::queue<class_specific_new_value, 8u>;
+using dynamic_class_new_queue = ::spsc::queue<class_specific_new_value, 0u>;
 using raw_latest = ::spsc::latest<void, 0u>;
 
 static_assert(has_emplace<static_latest, int>::value);
@@ -587,7 +591,7 @@ bool verify_value_swap_runtime()
     return bounded_aligned_scratch && swap_scratch_probe::live_count == 0u;
 }
 
-bool verify_queue_placement_new_runtime()
+bool verify_queue_raw_storage_runtime()
 {
     class_new_queue queue;
     if (!queue.try_push(59)) {
@@ -636,7 +640,32 @@ bool verify_queue_placement_new_runtime()
         return false;
     }
     value_ptr = queue.try_front();
-    return value_ptr != nullptr && value_ptr->payload == 83 && queue.try_pop();
+    if (value_ptr == nullptr || value_ptr->payload != 83 || !queue.try_pop()) {
+        return false;
+    }
+
+    const std::size_t destroyed_before_dynamic =
+        class_specific_new_value::destruction_count;
+
+    dynamic_class_new_queue dynamic_queue{4u};
+    if (!dynamic_queue.is_valid()) {
+        return false;
+    }
+
+    dynamic_queue.emplace(89);
+    if (!dynamic_queue.resize(8u)) {
+        return false;
+    }
+
+    value_ptr = dynamic_queue.try_front();
+    if (value_ptr == nullptr || value_ptr->payload != 89) {
+        return false;
+    }
+
+    dynamic_queue.destroy();
+    return !dynamic_queue.is_valid() &&
+           class_specific_new_value::destruction_count ==
+               (destroyed_before_dynamic + 2u);
 }
 
 bool verify_copy_and_swap_runtime()
@@ -801,7 +830,7 @@ bool verify_copy_and_swap_runtime()
 int main()
 {
     return verify_value_swap_runtime() &&
-                   verify_queue_placement_new_runtime() &&
+                   verify_queue_raw_storage_runtime() &&
                    verify_copy_and_swap_runtime()
                ? 0
                : 1;

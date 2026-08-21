@@ -21,9 +21,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Static `latest` no longer advertises move construction, move assignment, or
   swap when its payload cannot support the storage exchange those operations
   perform.
-- Object-queue construction now selects global placement-new explicitly and
-  obtains raw slots without class-specific address lookup, so payload classes
-  with custom allocation or address functions cannot hide those operations.
+- Object-queue construction and dynamic migration now select global
+  placement-new explicitly, while raw-slot migration and destruction use
+  pointer arithmetic instead of class-specific address lookup. Payload classes
+  with custom allocation or address functions can no longer hide those
+  operations.
 - `latest`, `chunk`, `typed_pool`, and object-queue guard helpers now remove
   unsupported `push`/`emplace` calls during overload resolution instead of
   accepting a detection expression and failing only in the function body.
@@ -37,9 +39,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 ### Tests
 
 - Added standalone trait/SFINAE runtime smoke coverage, including bounded
-  array-swap scratch and class-specific placement-new regressions, plus
-  compile-fail gates for invalid custom counter and allocator-alignment
-  extensions.
+  array-swap scratch and class-specific placement-new/address regressions for
+  static producer paths and dynamic resize/destruction, plus compile-fail gates
+  for invalid custom counter and allocator-alignment extensions.
 
 ## [3.0.0] - 2026-08-20
 

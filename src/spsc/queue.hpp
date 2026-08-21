@@ -929,7 +929,8 @@ public:
 
                 const size_type mask = cap - 1u;
                 for (size_type i = 0; i < used; ++i) {
-                    detail::destroy_at(std::launder(&p[(tail + i) & mask]));
+                    detail::destroy_at(
+                        std::launder(p + ((tail + i) & mask)));
                 }
             }
 
@@ -1061,13 +1062,14 @@ public:
         SPSC_TRY {
             for (size_type i = 0; i < old_size; ++i) {
                 pointer src = slot_ptr((old_tail + i) & old_mask);
-                pointer dst = &new_buf[i];
+                pointer dst = new_buf + i;
 
                 if constexpr (std::is_nothrow_move_constructible_v<value_type> ||
                               !std::is_copy_constructible_v<value_type>) {
-                    new (dst) value_type(std::move(*src));
+                    (void)::new (static_cast<void *>(dst))
+                        value_type(std::move(*src));
                 } else {
-                    new (dst) value_type(*src);
+                    (void)::new (static_cast<void *>(dst)) value_type(*src);
                 }
 
                 ++migrated;
@@ -1076,7 +1078,7 @@ public:
         SPSC_CATCH_ALL {
             if constexpr (!std::is_trivially_destructible_v<value_type>) {
                 for (size_type i = 0; i < migrated; ++i) {
-                    detail::destroy_at(&new_buf[i]);
+                    detail::destroy_at(std::launder(new_buf + i));
                 }
             }
             alloc_traits::deallocate(alloc, new_buf, target_cap);
