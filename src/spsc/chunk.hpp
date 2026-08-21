@@ -42,6 +42,7 @@
 #include "basic_types.h"        // reg
 #include "base/spsc_alloc.hpp"
 #include "base/spsc_tools.hpp" // RB_FORCEINLINE, SPSC_ASSERT, macros
+#include "base/spsc_value_swap.hpp"
 
 #if SPSC_HAS_SPAN
 #include <span>
@@ -107,8 +108,10 @@ public:
 #endif
 
 private:
-    std::array<value_type, kCapacity> storage_{}; // Elements are always constructed
-    size_type                         len_ = 0;   // Active count [0..kCapacity]
+    using storage_type = std::array<value_type, kCapacity>;
+
+    storage_type storage_{}; // Elements are always constructed
+    size_type    len_ = 0;   // Active count [0..kCapacity]
 
 public:
     // --------------------------------------------------------------------------
@@ -235,7 +238,10 @@ public:
         return true;
     }
 
-    template<class... Args>
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
     reference emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
@@ -248,7 +254,10 @@ public:
         return slot;
     }
 
-    template<class... Args>
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
     [[nodiscard]] pointer try_emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
@@ -276,9 +285,9 @@ public:
     [[nodiscard]] const_reverse_iterator rend()   const noexcept { return const_reverse_iterator(begin()); }
 
     void swap(chunk& other)
-        noexcept(noexcept(storage_.swap(other.storage_)))
+        noexcept(::spsc::detail::value_swap_noexcept_v<storage_type>)
     {
-        storage_.swap(other.storage_);
+        ::spsc::detail::swap_value(storage_, other.storage_);
 
         using std::swap;
         swap(len_, other.len_);
@@ -590,7 +599,10 @@ public:
         return true;
     }
 
-    template<class... Args>
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
     reference emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
@@ -602,7 +614,10 @@ public:
         return slot;
     }
 
-    template<class... Args>
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
     [[nodiscard]] pointer try_emplace(Args&&... args) noexcept(
         std::is_nothrow_constructible_v<value_type, Args&&...> &&
         std::is_nothrow_assignable_v<reference, value_type>
@@ -617,8 +632,14 @@ public:
     // --------------------------------------------------------------------------
     // STL-style aliases
     // --------------------------------------------------------------------------
-    template<class U> void push_back(U&& v) { push(std::forward<U>(v)); }
-    template<class... Args> void emplace_back(Args&&... args) { (void)emplace(std::forward<Args>(args)...); }
+    template<class U, typename = std::enable_if_t<std::is_assignable_v<reference, U&&>>>
+    void push_back(U&& v) { push(std::forward<U>(v)); }
+
+    template<class... Args,
+             typename = std::enable_if_t<
+                 std::is_constructible_v<value_type, Args&&...> &&
+                 std::is_assignable_v<reference, value_type>>>
+    void emplace_back(Args&&... args) { (void)emplace(std::forward<Args>(args)...); }
 
     // --------------------------------------------------------------------------
     // Iterators & Swap

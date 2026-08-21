@@ -39,6 +39,7 @@
 #include "base/spsc_policy.hpp"
 #include "base/spsc_slot_wrap.hpp"
 #include "base/spsc_tools.hpp"
+#include "base/spsc_value_swap.hpp"
 
 namespace spsc {
 
@@ -147,6 +148,11 @@ public:
     using base_allocator_type = Alloc;
     using buffer_type = std::array<value_type, BufferSize>;
     using stored_buffer_type = detail::cache_aligned_slot_t<buffer_type, policy_type>;
+
+private:
+    using storage_type = std::array<stored_buffer_type, Count>;
+
+public:
     using pointer = value_type*;
     using const_pointer = const value_type*;
 
@@ -176,10 +182,10 @@ public:
     buffer_pool(buffer_pool&&) noexcept(std::is_nothrow_move_constructible_v<stored_buffer_type>) = default;
     buffer_pool& operator=(buffer_pool&&) noexcept(std::is_nothrow_move_assignable_v<stored_buffer_type>) = default;
 
-    void swap(buffer_pool& other) noexcept(noexcept(buffers_.swap(other.buffers_)))
+    void swap(buffer_pool& other) noexcept(::spsc::detail::value_swap_noexcept_v<storage_type>)
     {
         if (this != &other) {
-            buffers_.swap(other.buffers_);
+            ::spsc::detail::swap_value(buffers_, other.buffers_);
         }
     }
 
@@ -215,7 +221,7 @@ private:
     // ------------------------------------------------------------------------------------------
     // Storage
     // ------------------------------------------------------------------------------------------
-    std::array<stored_buffer_type, Count> buffers_{};
+    storage_type buffers_{};
 };
 
 /* =======================================================================

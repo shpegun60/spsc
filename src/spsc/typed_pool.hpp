@@ -81,6 +81,12 @@ class typed_pool : private detail::typed_pool_base<Capacity>,
     static constexpr bool kDynamic = (Capacity == 0);
     using Base = ::spsc::SPSCbase<Capacity, Policy>;
 
+    static constexpr bool kCopyEnabled = std::is_copy_constructible_v<T>;
+    struct disabled_copy_source;
+    using copy_source = std::conditional_t<kCopyEnabled,
+                                           const typed_pool&,
+                                           disabled_copy_source&&>;
+
 public:
     // ------------------------------------------------------------------------------------------
     // Type Definitions
@@ -223,19 +229,29 @@ public:
 
     ~typed_pool() noexcept { destroy(); }
 
-    // Copy semantics
-    typed_pool(const typed_pool &other) : Base() { (void)copy_from(other); }
-
-    typed_pool &operator=(const typed_pool &other) {
-        if (this == &other) {
-            return *this;
+    // Resolve to a real copy signature only when T can support the pool's
+    // deep-copy algorithm.  For non-copyable T, the declared move operations
+    // make the compiler-provided copy operations deleted in C++17.
+    typed_pool(copy_source other) : Base() {
+        if constexpr (kCopyEnabled) {
+            (void)copy_from(other);
+        } else {
+            (void)other;
         }
+    }
 
-        typed_pool tmp(other);
-        if (other.is_valid() && !tmp.is_valid()) {
+    typed_pool &operator=(copy_source other) {
+        if constexpr (!kCopyEnabled) {
+            (void)other;
+        } else if (this == &other) {
             return *this;
+        } else {
+            typed_pool tmp(other);
+            if (other.is_valid() && !tmp.is_valid()) {
+                return *this;
+            }
+            swap(tmp);
         }
-        swap(tmp);
         return *this;
     }
 
@@ -685,9 +701,9 @@ public:
     // Producer Operations
     // ------------------------------------------------------------------------------------------
 
-    template <class... Args> void emplace(Args &&...args) {
-        static_assert(std::is_constructible_v<T, Args &&...>,
-                      "[typed_pool]: T must be constructible from Args...");
+    template <class... Args,
+              typename = std::enable_if_t<std::is_constructible_v<T, Args &&...>>>
+    void emplace(Args &&...args) {
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
 
@@ -698,9 +714,9 @@ public:
         Base::producer_commit_owner(snapshot.owner);
     }
 
-    template <class... Args> [[nodiscard]] bool try_emplace(Args &&...args) {
-        static_assert(std::is_constructible_v<T, Args &&...>,
-                      "[typed_pool]: T must be constructible from Args...");
+    template <class... Args,
+              typename = std::enable_if_t<std::is_constructible_v<T, Args &&...>>>
+    [[nodiscard]] bool try_emplace(Args &&...args) {
         if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
@@ -715,10 +731,24 @@ public:
         return true;
     }
 
+    template<class U = T,
+             std::enable_if_t<std::is_same_v<U, T> &&
+                              std::is_constructible_v<T, const T&>, int> = 0>
     void push(const T &v) { emplace(v); }
+
+    template<class U = T,
+             std::enable_if_t<std::is_same_v<U, T> &&
+                              std::is_constructible_v<T, T&&>, int> = 0>
     void push(T &&v) { emplace(std::move(v)); }
 
+    template<class U = T,
+             std::enable_if_t<std::is_same_v<U, T> &&
+                              std::is_constructible_v<T, const T&>, int> = 0>
     [[nodiscard]] bool try_push(const T &v) { return try_emplace(v); }
+
+    template<class U = T,
+             std::enable_if_t<std::is_same_v<U, T> &&
+                              std::is_constructible_v<T, T&&>, int> = 0>
     [[nodiscard]] bool try_push(T &&v) { return try_emplace(std::move(v)); }
 
     // Manual population: claim returns raw storage pointer (uninitialized).
@@ -1111,10 +1141,9 @@ public:
         [[nodiscard]] size_type constructed() const noexcept { return constructed_; }
         [[nodiscard]] size_type remaining() const noexcept { return regs_.total - constructed_; }
 
-        template <class... Args>
+        template <class... Args,
+                  typename = std::enable_if_t<std::is_constructible_v<T, Args &&...>>>
         [[nodiscard]] pointer emplace_next(Args &&...args) {
-            static_assert(std::is_constructible_v<T, Args &&...>,
-                          "[typed_pool::bulk_write_guard]: T must be constructible from Args...");
             SPSC_ASSERT(p_ != nullptr);
             SPSC_ASSERT(constructed_ < regs_.total);
 
@@ -1308,10 +1337,9 @@ public:
             return (p_ != nullptr) && (ptr_ != nullptr);
         }
 
-        template <class... Args> pointer emplace(Args &&...args) {
-            static_assert(
-                std::is_constructible_v<T, Args &&...>,
-                "[typed_pool::write_guard]: T must be constructible from Args...");
+        template <class... Args,
+                  typename = std::enable_if_t<std::is_constructible_v<T, Args &&...>>>
+        pointer emplace(Args &&...args) {
             SPSC_ASSERT(p_ && ptr_);
             SPSC_ASSERT(!constructed_);
 

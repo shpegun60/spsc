@@ -23,9 +23,9 @@
  *
  *   - For C == 0:
  *       * Stores capacity and mask in Policy::geometry_type.
- *       * geometry_type is assumed to be "counter-like":
- *           - has:  void store(reg)
- *           - has:  load() returning something convertible to reg
+ *       * geometry_type satisfies the no-throw custom counter contract:
+ *           - unsigned integral, reg-compatible value_type
+ *           - store/load/add/inc operations
  *           - typically one of:
  *               PlainCounter<reg>
  *               VolatileCounter<reg>
@@ -188,7 +188,8 @@ class CapacityCtrl<0, Policy>
     using geometry_type = typename Policy::geometry_type;
 
     static_assert(::spsc::policy::detail::is_counter_like_v<geometry_type>,
-        "[CapacityCtrl<0>]: Policy::geometry_type must provide store/load/add/inc");
+        "[CapacityCtrl<0>]: Policy::geometry_type must satisfy the custom "
+        "counter contract");
 
     geometry_type _cap{};   /* runtime capacity (pow2 or 0) */
     geometry_type _mask{};  /* cap - 1 */

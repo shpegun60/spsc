@@ -613,7 +613,8 @@ public:
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
         const auto snapshot = Base::producer_single_owner_snapshot();
-        new (&storage_[snapshot.index]) value_type(std::forward<U>(v));
+        pointer slot = storage_ + snapshot.index;
+        (void)::new (static_cast<void *>(slot)) value_type(std::forward<U>(v));
         Base::producer_commit_owner(snapshot.owner);
     }
 
@@ -627,7 +628,8 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return false;
         }
-        new (&storage_[snapshot.index]) value_type(std::forward<U>(v));
+        pointer slot = storage_ + snapshot.index;
+        (void)::new (static_cast<void *>(slot)) value_type(std::forward<U>(v));
         Base::producer_commit_single(snapshot);
         return true;
     }
@@ -638,7 +640,7 @@ public:
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
         const auto snapshot = Base::producer_single_owner_snapshot();
-        pointer slot = &storage_[snapshot.index];
+        pointer slot = storage_ + snapshot.index;
         slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
         slot = std::launder(slot);
         Base::producer_commit_owner(snapshot.owner);
@@ -655,7 +657,7 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return nullptr;
         }
-        pointer slot = &storage_[snapshot.index];
+        pointer slot = storage_ + snapshot.index;
         slot = ::new (static_cast<void *>(slot)) value_type(std::forward<Args>(args)...);
         slot = std::launder(slot);
         Base::producer_commit_single(snapshot);
@@ -668,7 +670,7 @@ public:
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
         const auto snapshot = Base::producer_single_owner_snapshot();
-        return &storage_[snapshot.index];
+        return storage_ + snapshot.index;
     }
 
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
@@ -676,7 +678,7 @@ public:
             return nullptr;
         }
         const auto snapshot = Base::producer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? storage_ + snapshot.index : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
@@ -927,7 +929,8 @@ public:
 
                 const size_type mask = cap - 1u;
                 for (size_type i = 0; i < used; ++i) {
-                    detail::destroy_at(std::launder(&p[(tail + i) & mask]));
+                    detail::destroy_at(
+                        std::launder(p + ((tail + i) & mask)));
                 }
             }
 
@@ -1059,13 +1062,14 @@ public:
         SPSC_TRY {
             for (size_type i = 0; i < old_size; ++i) {
                 pointer src = slot_ptr((old_tail + i) & old_mask);
-                pointer dst = &new_buf[i];
+                pointer dst = new_buf + i;
 
                 if constexpr (std::is_nothrow_move_constructible_v<value_type> ||
                               !std::is_copy_constructible_v<value_type>) {
-                    new (dst) value_type(std::move(*src));
+                    (void)::new (static_cast<void *>(dst))
+                        value_type(std::move(*src));
                 } else {
-                    new (dst) value_type(*src);
+                    (void)::new (static_cast<void *>(dst)) value_type(*src);
                 }
 
                 ++migrated;
@@ -1074,7 +1078,7 @@ public:
         SPSC_CATCH_ALL {
             if constexpr (!std::is_trivially_destructible_v<value_type>) {
                 for (size_type i = 0; i < migrated; ++i) {
-                    detail::destroy_at(&new_buf[i]);
+                    detail::destroy_at(std::launder(new_buf + i));
                 }
             }
             alloc_traits::deallocate(alloc, new_buf, target_cap);
@@ -1156,7 +1160,9 @@ public:
         [[nodiscard]] size_type constructed() const noexcept { return constructed_; }
         [[nodiscard]] size_type remaining() const noexcept { return regs_.total - constructed_; }
 
-        template <class... Args>
+        template <class... Args,
+                  typename = std::enable_if_t<
+                      std::is_constructible_v<value_type, Args &&...>>>
         [[nodiscard]] pointer emplace_next(Args &&...args) noexcept(
             std::is_nothrow_constructible_v<value_type, Args &&...>) {
             SPSC_ASSERT(q_ != nullptr);
@@ -1322,7 +1328,9 @@ public:
         explicit operator bool() const noexcept { return (q_ != nullptr) && (ptr_ != nullptr); }
 
         // Safe path: construct and arm publishing.
-        template <class... Args>
+        template <class... Args,
+                  typename = std::enable_if_t<
+                      std::is_constructible_v<value_type, Args &&...>>>
         [[nodiscard]] pointer emplace(Args &&...args) noexcept(
             std::is_nothrow_constructible_v<value_type, Args &&...>) {
             SPSC_ASSERT(q_ && ptr_);
@@ -1543,9 +1551,10 @@ private:
    */
     [[nodiscard]] RB_FORCEINLINE pointer
     slot_ptr(size_type index) const noexcept {
-        // &storage_[index] gives T*. std::launder is needed when storage is reused via placement-new;
-        // it does not provide synchronization or memory ordering.
-        return std::launder(&storage_[index]);
+        // std::launder is needed when storage is reused via placement-new; it
+        // does not provide synchronization or memory ordering. Pointer
+        // arithmetic also avoids class-specific operator& lookup.
+        return std::launder(storage_ + index);
     }
 
 private:

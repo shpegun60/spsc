@@ -11,6 +11,7 @@
 #define SPSC_SLOT_WRAP_HPP_
 
 #include "spsc_alloc.hpp"
+#include "spsc_value_swap.hpp"
 
 #include <type_traits>
 #include <utility>
@@ -28,9 +29,34 @@ struct alignas(Align) cache_aligned_slot : T {
     cache_aligned_slot& operator=(const cache_aligned_slot&) = default;
     cache_aligned_slot& operator=(cache_aligned_slot&&) noexcept(std::is_nothrow_move_assignable_v<T>) = default;
 
+    template<class U = T,
+             std::enable_if_t<std::is_same_v<U, T> &&
+                              std::is_constructible_v<T, const T&>, int> = 0>
     cache_aligned_slot(const T& other) : T(other) {}
+
+    template<class U = T,
+             std::enable_if_t<std::is_same_v<U, T> &&
+                              std::is_constructible_v<T, T&&>, int> = 0>
     cache_aligned_slot(T&& other) noexcept(std::is_nothrow_move_constructible_v<T>)
         : T(std::move(other)) {}
+
+    template<bool Enabled = ::spsc::detail::value_swappable_v<T>,
+             std::enable_if_t<Enabled, int> = 0>
+    void swap(cache_aligned_slot& other) noexcept(
+        ::spsc::detail::value_swap_noexcept_v<T>)
+    {
+        ::spsc::detail::swap_value(static_cast<T&>(*this),
+                                   static_cast<T&>(other));
+    }
+
+    template<bool Enabled = ::spsc::detail::value_swappable_v<T>,
+             std::enable_if_t<Enabled, int> = 0>
+    friend void swap(cache_aligned_slot& lhs,
+                     cache_aligned_slot& rhs) noexcept(
+        ::spsc::detail::value_swap_noexcept_v<T>)
+    {
+        lhs.template swap<Enabled>(rhs);
+    }
 };
 
 template <class T, class Policy>

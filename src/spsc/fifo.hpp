@@ -45,6 +45,7 @@
 #include "base/spsc_snapshot.hpp" // ::spsc::snapshot_view, ::spsc::snapshot_traits
 #include "base/spsc_regions.hpp"  // ::spsc::bulk::region, ::spsc::bulk::regions
 #include "base/spsc_tools.hpp"    // RB_FORCEINLINE, RB_UNLIKELY, macros
+#include "base/spsc_value_swap.hpp"
 
 namespace spsc {
 
@@ -65,6 +66,12 @@ class fifo : private ::spsc::SPSCbase<Capacity, Policy> {
     using StaticBuf = std::array<T, Capacity>;
     using DynamicBuf = T *;
     using storage_type = std::conditional_t<kDynamic, DynamicBuf, StaticBuf>;
+
+    static constexpr bool kCopyEnabled = std::is_copy_assignable_v<T>;
+    struct disabled_copy_source;
+    using copy_source = std::conditional_t<kCopyEnabled,
+                                           const fifo&,
+                                           disabled_copy_source&&>;
 
     static constexpr bool kNoThrowMoveOps =
         kDynamic ? true
@@ -197,15 +204,24 @@ public:
 
     ~fifo() noexcept { destroy(); }
 
-    // Copy semantics
-    fifo(const fifo &other) : Base() { copy_from(other); }
-
-    fifo &operator=(const fifo &other) {
-        if (this == &other) {
-            return *this;
+    // In C++17 a constructor template cannot be a copy constructor.  Resolve
+    // this parameter to const fifo& only when the real deep-copy algorithm is
+    // available; otherwise the declared move operations delete the implicit
+    // copy operations.  No callback runs during base construction.
+    fifo(copy_source other) : Base() {
+        if constexpr (kCopyEnabled) {
+            copy_from(other);
+        } else {
+            (void)other;
         }
+    }
 
-        if constexpr (kDynamic) {
+    fifo &operator=(copy_source other) {
+        if constexpr (!kCopyEnabled) {
+            (void)other;
+        } else if (this == &other) {
+            return *this;
+        } else if constexpr (kDynamic) {
             fifo tmp(other);
 
             // If source is valid but tmp couldn't become valid (alloc fail path),
@@ -215,18 +231,14 @@ public:
             }
 
             swap(tmp);
-            return *this;
+        } else if constexpr (::spsc::detail::value_swap_noexcept_v<storage_type>) {
+            fifo tmp(other);
+            swap(tmp);
         } else {
-            if constexpr (std::is_nothrow_swappable_v<storage_type>) {
-                fifo tmp(other);
-                swap(tmp);
-                return *this;
-            } else {
-                // copy_from() already does Base::clear() in static branch.
-                copy_from(other);
-                return *this;
-            }
+            // copy_from() already does Base::clear() in the static branch.
+            copy_from(other);
         }
+        return *this;
     }
 
     // Move semantics
@@ -241,7 +253,7 @@ public:
     }
 
     void swap(fifo &other) noexcept(kDynamic ||
-                                    std::is_nothrow_swappable_v<storage_type>) {
+                                    ::spsc::detail::value_swap_noexcept_v<storage_type>) {
         if (this == &other) {
             return;
         }
@@ -293,7 +305,7 @@ public:
             const size_type b_head = other.Base::head();
             const size_type b_tail = other.Base::tail();
 
-            storage_.swap(other.storage_);
+            ::spsc::detail::swap_value(storage_, other.storage_);
             Base::set_head(b_head);
             Base::set_tail(b_tail);
             Base::sync_cache();

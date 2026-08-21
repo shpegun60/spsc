@@ -6,6 +6,43 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Fixed
+
+- `fifo` and `typed_pool` now report copy construction and copy assignment
+  accurately through standard type traits. Their deep-copy operations are
+  unavailable when the payload cannot support the operation they actually
+  perform.
+- Static value-storage containers now have a valid assignment-based swap
+  fallback for payloads that deliberately omit ADL `swap` but satisfy the
+  container's existing default-construction and assignment requirements.
+  Array and cache-aligned wrapper storage is exchanged element by element,
+  avoiding a whole-storage stack temporary, and the fallback prefers a
+  no-throw copy assignment when move assignment may throw.
+- Static `latest` no longer advertises move construction, move assignment, or
+  swap when its payload cannot support the storage exchange those operations
+  perform.
+- Object-queue construction and dynamic migration now select global
+  placement-new explicitly, while raw-slot migration and destruction use
+  pointer arithmetic instead of class-specific address lookup. Payload classes
+  with custom allocation or address functions can no longer hide those
+  operations.
+- `latest`, `chunk`, `typed_pool`, and object-queue guard helpers now remove
+  unsupported `push`/`emplace` calls during overload resolution instead of
+  accepting a detection expression and failing only in the function body.
+- `cache_aligned_slot` no longer advertises construction from `const T&` or
+  `T&&` when the wrapped type cannot perform that construction.
+- Custom counter backends are validated against the real no-throw
+  `value_type`/`store`/`load`/`add`/`inc` contract, including an optional
+  `load_relaxed()`. Custom `Policy::allocator_alignment` values must now be
+  positive, `std::size_t`-representable integral or enum powers of two.
+
+### Tests
+
+- Added standalone trait/SFINAE runtime smoke coverage, including bounded
+  array-swap scratch and class-specific placement-new/address regressions for
+  static producer paths and dynamic resize/destruction, plus compile-fail gates
+  for invalid custom counter and allocator-alignment extensions.
+
 ## [3.0.0] - 2026-08-20
 
 This major release changes the implicit `default_policy` for bare containers.

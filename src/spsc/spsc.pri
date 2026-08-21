@@ -23,6 +23,7 @@ HEADERS += \
     $$PWD/base/spsc_slot_wrap.hpp \
     $$PWD/base/spsc_snapshot.hpp \
     $$PWD/base/spsc_tools.hpp \
+    $$PWD/base/spsc_value_swap.hpp \
     $$PWD/buffer_pool.hpp \
     $$PWD/chunk.hpp \
     $$PWD/chunk_fifo.hpp \

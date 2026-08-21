@@ -243,6 +243,30 @@ single-context execution model.
 
 For task/ISR guidance and policy selection under RTOS-style concurrency, read [Concurrency and FreeRTOS](concurrency-and-freertos.md).
 
+### Custom policy and counter backends
+
+The full `Policy<Cnt, Geo>` spelling is an advanced extension point. A custom
+counter backend is checked at the policy boundary and must provide:
+
+- an unsigned integral `value_type` compatible with `reg`;
+- a non-throwing default constructor;
+- non-throwing `store(value_type)`, `load()`, `add(value_type)`, and `inc()`;
+- an optional `load_relaxed()` only when it is non-throwing and returns a value
+  convertible to the same `value_type`.
+
+The concrete container can impose additional width requirements for its index
+domain. For example, its `counter_type::value_type` must be at least as wide
+as `reg`. Invalid backends are rejected when `Policy` is instantiated instead
+of failing later in an unrelated container template.
+
+`Policy::allocator_alignment` is optional; omitting it means `1`. When a
+custom policy supplies it, the value must be a positive integral or enum
+constant, fit in `std::size_t`, and be a power of two. The allocator and
+cache-span helpers deliberately use power-of-two rounding, so a
+value such as `24` is rejected rather than producing a silently incorrect
+stride. Use `CP`, `CFA<>`, `CA<>`, or another explicit `CacheAligned<>` form
+for the normal cache-line cases.
+
 ## 7. Alignment and Cache-Line Notes
 
 When shadows are enabled for an eligible atomic-backed policy, `SPSCbase`
