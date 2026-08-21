@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-08-21
+
+This patch release closes the remaining multi-axis management and generic C++
+edge cases from the post-v3 audit, and adds genuine 32-bit reserve plus
+Cortex-M7 toolchain gates. It does not change the v3 default-policy model or
+public state layouts.
+
 ### Fixed
 
 - Dynamic raw `latest` now treats depth and slot bytes as independent
@@ -378,7 +385,8 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
-[Unreleased]: https://github.com/shpegun60/spsc/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v3.0.2...HEAD
+[3.0.2]: https://github.com/shpegun60/spsc/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/shpegun60/spsc/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/shpegun60/spsc/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/shpegun60/spsc/compare/v2.0.3...v2.1.0
