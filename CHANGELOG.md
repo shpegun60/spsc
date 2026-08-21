@@ -8,6 +8,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Fixed
 
+- Dynamic `fifo`, `queue`, and typed/raw `latest` reserve operations now reject
+  requests above `RB_MAX_UNAMBIGUOUS` instead of silently forwarding them to a
+  clamping resize path. Whenever `reserve(n)` succeeds, the resulting ring
+  capacity is now guaranteed to be at least `n`.
 - `fifo` and `typed_pool` now report copy construction and copy assignment
   accurately through standard type traits. Their deep-copy operations are
   unavailable when the payload cannot support the operation they actually
@@ -38,6 +42,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Tests
 
+- Added deterministic reserve-boundary coverage for `RB_MAX_UNAMBIGUOUS`, the
+  first value above it, and `std::numeric_limits<reg>::max()`, including
+  allocator-call and state-preservation checks.
 - Added standalone trait/SFINAE runtime smoke coverage, including bounded
   array-swap scratch and class-specific placement-new/address regressions for
   static producer paths and dynamic resize/destruction, plus compile-fail gates

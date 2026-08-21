@@ -455,6 +455,11 @@ dyn.reserve(64);
 dyn.resize(128);
 ```
 
+On the dynamic form, a successful `reserve(min_capacity)` guarantees
+`capacity() >= min_capacity`. Requests above
+`spsc::cap::RB_MAX_UNAMBIGUOUS` return `false` without allocating or changing
+the current queue.
+
 ### `clear()`, `destroy()`
 
 ```cpp

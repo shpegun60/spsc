@@ -988,8 +988,13 @@ public:
     // ------------------------------------------------------------------------------------------
     // Dynamic-only API (Resize)
     // ------------------------------------------------------------------------------------------
+    // A true result guarantees capacity() >= min_capacity. Requests above the
+    // unambiguous ring limit are rejected instead of being clamped by resize().
     template <size_type C = Capacity, typename = std::enable_if_t<C == 0>>
     [[nodiscard]] bool reserve(size_type min_capacity) {
+        if (RB_UNLIKELY(min_capacity > ::spsc::cap::RB_MAX_UNAMBIGUOUS)) {
+            return false;
+        }
         if (is_valid() && capacity() >= min_capacity) {
             return true;
         }

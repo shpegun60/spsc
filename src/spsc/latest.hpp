@@ -297,8 +297,14 @@ public:
     // ------------------------------------------------------------------------------------------
     // Capacity management
     // ------------------------------------------------------------------------------------------
-    /* Dynamic-only: reserve/grow (no shrink). */
+    /* Dynamic-only: reserve/grow (no shrink).
+     * A true result guarantees depth() >= min_depth. Requests above the
+     * unambiguous ring limit are rejected instead of being clamped by resize().
+     */
     [[nodiscard]] bool reserve(const size_type min_depth, const size_type min_bytes_per_slot) {
+        if (RB_UNLIKELY(min_depth > ::spsc::cap::RB_MAX_UNAMBIGUOUS)) {
+            return false;
+        }
         if (is_valid()) {
             if (depth() >= min_depth && buffer_size() >= min_bytes_per_slot) {
                 return true;
@@ -958,7 +964,12 @@ public:
     // Convenience: init == resize().
     [[nodiscard]] RB_FORCEINLINE bool init(const size_type depth_req) { return resize(depth_req); }
 
+    // A true result guarantees depth() >= min_depth. Requests above the
+    // unambiguous ring limit are rejected instead of being clamped by resize().
     [[nodiscard]] bool reserve(const size_type min_depth) {
+        if (RB_UNLIKELY(min_depth > ::spsc::cap::RB_MAX_UNAMBIGUOUS)) {
+            return false;
+        }
         if (is_valid() && depth() >= min_depth) {
             return true;
         }

@@ -419,6 +419,13 @@ dynRaw.reserve(16, 128);
 dynRaw.resize(32, 128);
 ```
 
+For the dynamic typed form, a successful `reserve(min_depth)` guarantees
+`depth() >= min_depth`. For the dynamic raw form, a successful
+`reserve(min_depth, min_bytes_per_slot)` also guarantees
+`buffer_size() >= min_bytes_per_slot`. A depth request above
+`spsc::cap::RB_MAX_UNAMBIGUOUS` returns `false` without allocating or changing
+the current object.
+
 ### `destroy()`
 
 ```cpp
