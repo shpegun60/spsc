@@ -46,6 +46,7 @@
 #endif
 
 #include "test_policy_matrix.hpp"
+#include "test_reserve_allocator.hpp"
 
 #include "latest.hpp"
 
@@ -2283,6 +2284,87 @@ static void reserve_resize_edge_cases_raw_dynamic() {
     QCOMPARE(q.bytes_per_slot(), reg{0u});
 }
 
+static void reserve_limit_contract_dynamic() {
+    using Alloc = spsc::test::reserve_probe_allocator<std::byte>;
+    using Typed = spsc::latest<Blob, 0u, spsc::policy::P, Alloc>;
+    using Raw = spsc::latest<void, 0u, spsc::policy::P, Alloc>;
+
+    constexpr reg kLimit = ::spsc::cap::RB_MAX_UNAMBIGUOUS;
+    constexpr reg kAboveLimit = static_cast<reg>(kLimit + reg{1u});
+    constexpr reg kRegMax = std::numeric_limits<reg>::max();
+    constexpr reg kRawBytes = static_cast<reg>(sizeof(std::uint32_t));
+    static_assert(kAboveLimit > kLimit);
+    static_assert(kRegMax > kLimit);
+
+    Typed typed;
+    const bool typed_ordinary_ok = typed.reserve(17u);
+    QVERIFY(typed_ordinary_ok);
+    if (typed_ordinary_ok) {
+        QVERIFY(typed.capacity() >= 17u);
+    }
+    QVERIFY(typed.try_push(Blob{0xA5A55A5Au}));
+    const reg typed_capacity_before = typed.capacity();
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!typed.reserve(kLimit));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{1u});
+    QCOMPARE(spsc::test::reserve_allocator_stats::last_allocation_count,
+             static_cast<std::size_t>(kLimit));
+    QCOMPARE(typed.capacity(), typed_capacity_before);
+    QCOMPARE(typed.front().seq, std::uint32_t{0xA5A55A5Au});
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!typed.reserve(kAboveLimit));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{0u});
+    QCOMPARE(typed.capacity(), typed_capacity_before);
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!typed.reserve(kRegMax));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{0u});
+    QCOMPARE(typed.capacity(), typed_capacity_before);
+    QCOMPARE(typed.front().seq, std::uint32_t{0xA5A55A5Au});
+
+    Raw raw;
+    const bool raw_ordinary_ok = raw.reserve(17u, kRawBytes);
+    QVERIFY(raw_ordinary_ok);
+    if (raw_ordinary_ok) {
+        QVERIFY(raw.capacity() >= 17u);
+    }
+    const std::uint32_t raw_value = 0x5A5AA5A5u;
+    QVERIFY(raw.try_push(raw_value));
+    const reg raw_capacity_before = raw.capacity();
+    const reg raw_bytes_before = raw.bytes_per_slot();
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!raw.reserve(kLimit, raw_bytes_before));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{1u});
+    QCOMPARE(spsc::test::reserve_allocator_stats::last_allocation_count,
+             static_cast<std::size_t>(kLimit));
+    QCOMPARE(raw.capacity(), raw_capacity_before);
+    QCOMPARE(raw.bytes_per_slot(), raw_bytes_before);
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!raw.reserve(kAboveLimit, raw_bytes_before));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{0u});
+    QCOMPARE(raw.capacity(), raw_capacity_before);
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!raw.reserve(kRegMax, raw_bytes_before));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{0u});
+    QCOMPARE(raw.capacity(), raw_capacity_before);
+    QCOMPARE(raw.bytes_per_slot(), raw_bytes_before);
+
+    std::uint32_t raw_out{};
+    std::memcpy(&raw_out, raw.front(), sizeof(raw_out));
+    QCOMPARE(raw_out, raw_value);
+}
+
 template <class Q>
 static void consume_all_and_clear_contract_typed(Q& q) {
     using T = typename Q::value_type;
@@ -2621,6 +2703,8 @@ private slots:
         reserve_resize_edge_cases_raw_dynamic<spsc::policy::P>();
         reserve_resize_edge_cases_raw_dynamic<spsc::policy::A<>>();
         reserve_resize_edge_cases_raw_dynamic<spsc::policy::CA<>>();
+
+        reserve_limit_contract_dynamic();
     }
 
     void consume_all_clear_contract() {

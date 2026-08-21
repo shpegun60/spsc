@@ -621,6 +621,11 @@ spsc::fifo<int, 0> dyn;
 dyn.reserve(256);
 ```
 
+`reserve(min_capacity)` is available only on the dynamic form. If it returns
+`true`, `capacity() >= min_capacity`. Requests above
+`spsc::cap::RB_MAX_UNAMBIGUOUS` return `false` without allocating or changing
+the current queue.
+
 ### `resize()`
 
 ```cpp

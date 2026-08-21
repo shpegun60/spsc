@@ -49,6 +49,7 @@
 #endif
 
 #include "test_policy_matrix.hpp"
+#include "test_reserve_allocator.hpp"
 
 #include "queue.hpp"
 
@@ -1775,6 +1776,53 @@ static void reserve_resize_edge_cases_suite() {
     QVERIFY(!q.is_valid());
 }
 
+static void reserve_limit_contract_suite() {
+    using Alloc = spsc::test::reserve_probe_allocator<std::byte>;
+    using Q = spsc::queue<Blob, 0u, spsc::policy::P, Alloc>;
+
+    constexpr reg kLimit = ::spsc::cap::RB_MAX_UNAMBIGUOUS;
+    constexpr reg kAboveLimit = static_cast<reg>(kLimit + reg{1u});
+    constexpr reg kRegMax = std::numeric_limits<reg>::max();
+    static_assert(kAboveLimit > kLimit);
+    static_assert(kRegMax > kLimit);
+
+    Q q;
+    const bool ordinary_ok = q.reserve(17u);
+    QVERIFY(ordinary_ok);
+    if (ordinary_ok) {
+        QVERIFY(q.capacity() >= 17u);
+    }
+    QVERIFY(q.try_push(Blob{0xA5A55A5Au}));
+
+    const reg capacity_before = q.capacity();
+    const reg size_before = q.size();
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!q.reserve(kLimit));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{1u});
+    QCOMPARE(spsc::test::reserve_allocator_stats::last_allocation_count,
+             static_cast<std::size_t>(kLimit));
+    QCOMPARE(q.capacity(), capacity_before);
+    QCOMPARE(q.size(), size_before);
+    QCOMPARE(q.front().seq, std::uint32_t{0xA5A55A5Au});
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!q.reserve(kAboveLimit));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{0u});
+    QCOMPARE(q.capacity(), capacity_before);
+    QCOMPARE(q.size(), size_before);
+
+    spsc::test::reserve_allocator_stats::reset();
+    QVERIFY(!q.reserve(kRegMax));
+    QCOMPARE(spsc::test::reserve_allocator_stats::allocation_calls,
+             std::size_t{0u});
+    QCOMPARE(q.capacity(), capacity_before);
+    QCOMPARE(q.size(), size_before);
+    QCOMPARE(q.front().seq, std::uint32_t{0xA5A55A5Au});
+}
+
 
 static void dynamic_capacity_sweep_suite() {
     using Q = spsc::queue<Blob, 0, spsc::policy::P>;
@@ -2620,6 +2668,7 @@ private slots:
 
     void reserve_resize_edge_cases_dynamic() {
         reserve_resize_edge_cases_suite();
+        reserve_limit_contract_suite();
     }
 
     void snapshot_consume_contract() {
