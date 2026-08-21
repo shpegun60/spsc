@@ -16,6 +16,7 @@
 #include <memory>      // std::allocator_traits
 #include <new>         // std::nothrow, std::align_val_t
 #include <type_traits> // std::true_type, std::false_type
+#include <utility>     // std::declval
 
 #include "basic_types.h"        // reg
 #include "spsc_tools.hpp"
@@ -507,6 +508,50 @@ struct policy_allocator_alignment<Policy, std::void_t<decltype(Policy::allocator
 
 template<class Alloc, class T>
 using rebind_alloc_t = typename std::allocator_traits<Alloc>::template rebind_alloc<T>;
+
+template<class Alloc, class = void>
+struct allocator_size_covers_reg : std::false_type {};
+
+template<class Alloc>
+struct allocator_size_covers_reg<
+    Alloc,
+    std::void_t<typename std::allocator_traits<Alloc>::size_type>>
+    : std::bool_constant<
+          std::is_integral_v<
+              typename std::allocator_traits<Alloc>::size_type> &&
+          std::is_unsigned_v<
+              typename std::allocator_traits<Alloc>::size_type> &&
+          (std::numeric_limits<
+               typename std::allocator_traits<Alloc>::size_type>::digits >=
+           std::numeric_limits<reg>::digits)> {};
+
+template<class Alloc>
+inline constexpr bool allocator_size_covers_reg_v =
+    allocator_size_covers_reg<Alloc>::value;
+
+// std::allocator_traits<Alloc>::allocate() is not conditionally noexcept in
+// C++17, even when Alloc::allocate() is.  Inspect the allocator operation that
+// the standard allocator contract actually requires so the no-exceptions
+// configuration accepts the shipped null-returning allocators while rejecting
+// throwing custom allocators such as std::allocator.
+template<class Alloc, class = void>
+struct allocator_allocate_noexcept : std::false_type {};
+
+template<class Alloc>
+struct allocator_allocate_noexcept<
+    Alloc,
+    std::void_t<
+        typename std::allocator_traits<Alloc>::size_type,
+        decltype(std::declval<Alloc&>().allocate(
+            std::declval<
+                typename std::allocator_traits<Alloc>::size_type>()))>>
+    : std::bool_constant<noexcept(std::declval<Alloc&>().allocate(
+          std::declval<
+              typename std::allocator_traits<Alloc>::size_type>()))> {};
+
+template<class Alloc>
+inline constexpr bool allocator_allocate_noexcept_v =
+    allocator_allocate_noexcept<Alloc>::value;
 
 template<class Alloc, class T, class = void>
 struct allocator_min_alignment : std::integral_constant<std::size_t, object_alignment<T>::value> {};

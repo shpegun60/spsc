@@ -127,8 +127,8 @@ public:
     using geometry_value = typename geometry_type::value_type;
 
     // Allocation noexcept detection (important for not lying in signatures).
-    static constexpr bool kNoexceptAllocate = noexcept(alloc_traits::allocate(
-        std::declval<allocator_type &>(), alloc_size_type{1}));
+    static constexpr bool kNoexceptAllocate =
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<allocator_type>;
 
     // ------------------------------------------------------------------------------------------
     // Static Assertions
@@ -136,6 +136,8 @@ public:
     static_assert(
         !std::is_const_v<value_type>,
         "[spsc::queue]: const T does not make sense for a writable queue.");
+    static_assert(std::is_nothrow_destructible_v<value_type>,
+                  "[spsc::queue]: value_type destructor must be noexcept.");
     static_assert(std::numeric_limits<counter_value>::digits >= 2,
                   "[spsc::queue]: counter type is too narrow.");
     static_assert(
@@ -156,8 +158,16 @@ public:
                   "[spsc::queue]: allocator must be stateless (is_always_equal) "
                   "because the queue"
                   " default-constructs allocators for allocate/deallocate.");
-    static_assert(std::is_default_constructible_v<allocator_type>,
-                  "[spsc::queue]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "[spsc::queue]: allocator must be nothrow default-constructible.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        kNoexceptAllocate,
+        "[spsc::queue]: no-exceptions mode requires allocator::allocate(size_type) "
+        "to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(::spsc::alloc::detail::allocator_size_covers_reg_v<allocator_type>,
+                  "[spsc::queue]: allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<alloc_pointer, pointer>,
                   "[spsc::queue]: allocator pointer type must be raw T*.");
     static_assert(kDynamic || (Capacity >= 2u),
@@ -477,12 +487,28 @@ public:
             return;
         }
 
+        // Bound this operation to the prefix visible at one fresh consumer
+        // snapshot.  A producer may publish more elements while destructors
+        // run; those later publications belong to the next consumer pass.
+        const auto owner = Base::consumer_single_owner_snapshot();
+        const size_type head = Base::head();
+        const size_type count = static_cast<size_type>(head - owner.owner);
+        const size_type cap = Base::capacity();
+
+        if (RB_UNLIKELY(count > cap)) {
+            return;
+        }
+
         if constexpr (!std::is_trivially_destructible_v<value_type>) {
-            while (!consumer_empty_cached_()) {
-                pop();
+            const size_type mask = Base::mask();
+            for (size_type i = 0u; i < count; ++i) {
+                detail::destroy_at(
+                    slot_ptr(static_cast<size_type>((owner.owner + i) & mask)));
             }
-        } else {
-            Base::sync_tail_to_head();
+        }
+
+        if (count != 0u) {
+            Base::consumer_commit_from_owner(owner.owner, count);
         }
     }
 
@@ -1056,6 +1082,20 @@ public:
             return true;
         }
 
+        constexpr bool kCanRelocate =
+            std::is_move_constructible_v<value_type> ||
+            std::is_copy_constructible_v<value_type>;
+
+        // An empty dynamic queue does not need value_type relocation and may
+        // therefore acquire or grow its storage even for an immovable T.  A
+        // non-empty queue must fail before allocation when no legal
+        // relocation operation exists.
+        if constexpr (!kCanRelocate) {
+            if (old_size != 0u) {
+                return false;
+            }
+        }
+
         allocator_type alloc{};
         pointer new_buf = alloc_traits::allocate(alloc, target_cap);
         if (RB_UNLIKELY(new_buf == nullptr)) {
@@ -1064,30 +1104,32 @@ public:
 
         size_type migrated = 0u;
 
-        SPSC_TRY {
-            for (size_type i = 0; i < old_size; ++i) {
-                pointer src = slot_ptr((old_tail + i) & old_mask);
-                pointer dst = new_buf + i;
+        if constexpr (kCanRelocate) {
+            SPSC_TRY {
+                for (size_type i = 0; i < old_size; ++i) {
+                    pointer src = slot_ptr((old_tail + i) & old_mask);
+                    pointer dst = new_buf + i;
 
-                if constexpr (std::is_nothrow_move_constructible_v<value_type> ||
-                              !std::is_copy_constructible_v<value_type>) {
-                    (void)::new (static_cast<void *>(dst))
-                        value_type(std::move(*src));
-                } else {
-                    (void)::new (static_cast<void *>(dst)) value_type(*src);
-                }
+                    if constexpr (std::is_nothrow_move_constructible_v<value_type> ||
+                                  !std::is_copy_constructible_v<value_type>) {
+                        (void)::new (static_cast<void *>(dst))
+                            value_type(std::move(*src));
+                    } else {
+                        (void)::new (static_cast<void *>(dst)) value_type(*src);
+                    }
 
-                ++migrated;
-            }
-        }
-        SPSC_CATCH_ALL {
-            if constexpr (!std::is_trivially_destructible_v<value_type>) {
-                for (size_type i = 0; i < migrated; ++i) {
-                    detail::destroy_at(std::launder(new_buf + i));
+                    ++migrated;
                 }
             }
-            alloc_traits::deallocate(alloc, new_buf, target_cap);
-            SPSC_RETHROW;
+            SPSC_CATCH_ALL {
+                if constexpr (!std::is_trivially_destructible_v<value_type>) {
+                    for (size_type i = 0; i < migrated; ++i) {
+                        detail::destroy_at(std::launder(new_buf + i));
+                    }
+                }
+                alloc_traits::deallocate(alloc, new_buf, target_cap);
+                SPSC_RETHROW;
+            }
         }
 
         // Destroy and release old storage only after successful migration.

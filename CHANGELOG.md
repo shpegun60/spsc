@@ -6,6 +6,56 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Fixed
+
+- `queue::consume_all()` and `typed_pool::consume_all()` now consume exactly
+  the prefix visible in one fresh consumer snapshot, so a concurrently active
+  producer cannot make the operation unbounded and later publications survive
+  for the next consumer pass.
+- Static `fifo`/`latest` move and `chunk` construction traits now include the
+  destination operations their bodies actually perform. Lifetime-owning
+  containers reject throwing destructors, and allocators constructed from
+  `noexcept` paths must have no-throw default constructors.
+- Raw typed overlays in `pool`, `pool_view`, and `latest<void>` now bypass
+  class-specific address operators, participate only for trivially-copyable
+  types, reject cv-qualified outputs, and fail closed on oversized or invalid
+  guarded writes without advancing publication state.
+- `CachelineCounter` validates its underlying counter directly. Allocator
+  `size_type` domains must represent `reg`, and an empty dynamic `queue` can
+  resize for an immovable payload while a non-empty one rejects growth without
+  changing state.
+- `fifo_view` no longer imposes owning-container construction, destruction, or
+  assignment requirements on externally owned payloads. Typed `latest` can use
+  claim/publish-only payloads that are default-constructible but non-assignable.
+- No-exceptions builds now reject throwing custom allocators on every owning
+  storage path that actually allocates. `fifo` and `typed_pool` deep-copy
+  traits likewise require the copy operation used by their implementation to
+  be `noexcept`, and static `fifo` move prefers an available no-throw copy over
+  a potentially throwing move assignment. Dynamic `chunk` now owns eager slot
+  construction directly instead of delegating lifetime control to a custom
+  `Alloc::construct()` hook.
+
+### Tests
+
+- Added active-producer bounded-consume regressions, hostile exception and raw
+  overlay smokes, immovable-queue coverage, and compile-fail checks for invalid
+  counter, allocator-domain, allocator-construction, and destructor contracts.
+- Added mode-0 compile-fail coverage for throwing allocators across all owning
+  allocation shapes, copy-trait regressions, static-fifo move-selection checks,
+  exception-mode multi-allocation rollback verification, and a hostile
+  allocator regression proving that `chunk` never calls `Alloc::construct()`.
+
+### CI
+
+- Added exception-enabled runtime and ASan+UBSan coverage plus Cortex-M7 object
+  code generation with symbol/disassembly checks for unwanted runtime helpers.
+
+### Documentation
+
+- Clarified C++17 view-state recovery syntax, empty `buffer_pool` validity, and
+  RAII guard side effects during exception unwinding; added the missing SPDX
+  header to the internal value-swap helper.
+
 ## [3.0.2] - 2026-08-21
 
 This patch release closes the remaining multi-axis management and generic C++

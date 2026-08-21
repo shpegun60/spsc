@@ -242,7 +242,10 @@ This gives a better default for metadata and starting storage alignment. For DMA
 
 - `fifo()` creates an empty queue.
 - `fifo(requested_capacity)` exists only for dynamic `fifo<T, 0, ...>`.
-- copy and move are supported.
+- copy is available when `T` is copy-assignable; in
+  `SPSC_ENABLE_EXCEPTIONS=0` mode that assignment must also be `noexcept`.
+- move is supported and prefers a no-throw copy assignment when static storage
+  has a potentially throwing move assignment.
 - `swap(other)` exchanges storage and queue state. Use only when the queue is stopped.
 
 Example:

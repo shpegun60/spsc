@@ -49,6 +49,7 @@
 #endif
 
 #include "test_policy_matrix.hpp"
+#include "test_bounded_consume.hpp"
 #include "test_reserve_allocator.hpp"
 
 #include "queue.hpp"
@@ -2734,6 +2735,11 @@ private slots:
         }
         QCOMPARE(Tracked::live.load(), 0);
         QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+
+        using ConcurrentQueue =
+            spsc::queue<spsc::test::bounded_consume_value, 4,
+                        spsc::policy::FA<>>;
+        QVERIFY(spsc::test::bounded_consume_snapshot_contract<ConcurrentQueue>());
     }
 
     void threaded_bulk_regions_atomic_A()  { run_threaded_bulk_regions_suite<spsc::policy::A<>>("threaded_queue_bulk_atomic"); }

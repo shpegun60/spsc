@@ -160,6 +160,7 @@ jobs:
           ./scripts/test_cacheline_config_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
           ./scripts/test_default_policy_config_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
           ./scripts/test_policy_extension_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
+          ./scripts/test_container_extension_compile_fail.ps1 -Compiler '${{ matrix.compiler }}'
       - name: Compile trait and callable-SFINAE contract smoke in all default-policy modes
         run: |
           compile_trait() {
@@ -252,6 +253,12 @@ jobs:
             -o "$RUNNER_TEMP/trait_sfinae_contract_smoke_exceptions" \
             tests/standalone/trait_sfinae_contract_smoke.cpp
           "$RUNNER_TEMP/trait_sfinae_contract_smoke_exceptions"
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic-errors \
+            -DSPSC_ENABLE_EXCEPTIONS=1 \
+            -I. -Isrc/spsc \
+            -o "$RUNNER_TEMP/v303_exception_runtime_smoke" \
+            tests/standalone/v303_exception_runtime_smoke.cpp
+          "$RUNNER_TEMP/v303_exception_runtime_smoke"
       - name: Build dashboard and one runner from a clean directory
         run: |
           bash scripts/run_h7_matrix.sh \
@@ -347,21 +354,42 @@ jobs:
             -pedantic-errors
             -I.
             -Isrc/spsc
-            -fsyntax-only
           )
+          syntax_flags=("${common_flags[@]}" -fsyntax-only)
           arm-none-eabi-g++ --version
-          arm-none-eabi-g++ "${common_flags[@]}" \
+          arm-none-eabi-g++ "${syntax_flags[@]}" \
             -DSPSC_TEST_FREESTANDING_ALLOCATOR=1 \
             tests/standalone/h7_header_smoke.cpp
-          arm-none-eabi-g++ "${common_flags[@]}" \
+          arm-none-eabi-g++ "${syntax_flags[@]}" \
             -DSPSC_TEST_FREESTANDING_ALLOCATOR=1 \
             -DSPSC_ENABLE_SHADOW_INDICES=1 \
             -DSPSC_SHADOW_ALLOW_32BIT=1 \
             tests/standalone/h7_header_smoke.cpp
-          arm-none-eabi-g++ "${common_flags[@]}" \
+          arm-none-eabi-g++ "${syntax_flags[@]}" \
             tests/standalone/stm32h7_buffer_pool_smoke.cpp
-          arm-none-eabi-g++ "${common_flags[@]}" \
+          arm-none-eabi-g++ "${syntax_flags[@]}" \
             tests/standalone/trait_sfinae_contract_smoke.cpp
+          codegen_object="$RUNNER_TEMP/stm32_fast_alias_probe.o"
+          disassembly="$RUNNER_TEMP/stm32_fast_alias_probe.txt"
+          arm-none-eabi-g++ "${common_flags[@]}" \
+            -O2 -DNDEBUG -fno-unwind-tables -fno-asynchronous-unwind-tables \
+            -Isrc -c benchmarks/stm32_fast_alias_probe.cpp \
+            -o "$codegen_object"
+          undefined_symbols="$(arm-none-eabi-nm -u "$codegen_object")"
+          if [[ -n "$undefined_symbols" ]]; then
+            echo 'Unexpected Cortex-M7 runtime dependencies:' >&2
+            printf '%s\n' "$undefined_symbols" >&2
+            exit 1
+          fi
+          arm-none-eabi-objdump -d "$codegen_object" > "$disassembly"
+          for symbol in \
+            h10_fast_fifo_push h10_fast_fifo_pop \
+            h10_fast_queue_push h10_fast_queue_pop; do
+            grep -q "<$symbol>:" "$disassembly" || {
+              echo "Missing Cortex-M7 code-generation symbol: $symbol" >&2
+              exit 1
+            }
+          done
 
   windows-mingw-header-smoke:
     name: Windows MinGW header smoke
@@ -438,7 +466,7 @@ jobs:
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_cacheline_config_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_default_policy_config_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_policy_extension_compile_fail.ps1 -Compiler cl"
+          $command = "call `"$vcvars`" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\check_h8_hotpath_asm.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_relaxed_publication_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_cacheline_config_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_default_policy_config_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_policy_extension_compile_fail.ps1 -Compiler cl && powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_container_extension_compile_fail.ps1 -Compiler cl"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify MSVC H0R benchmark protocol

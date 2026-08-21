@@ -113,23 +113,8 @@ public:
     // ------------------------------------------------------------------------------------------
     // Static Assertions
     // ------------------------------------------------------------------------------------------
-    static_assert(std::is_default_constructible_v<value_type>,
-                  "[spsc::fifo_view]: value_type must be default-constructible.");
     static_assert(!std::is_const_v<value_type>,
                   "[spsc::fifo_view]: const T does not make sense for a writable FIFO.");
-
-#if (SPSC_ENABLE_EXCEPTIONS == 0)
-    static_assert(std::is_nothrow_default_constructible_v<value_type>,
-                  "[spsc::fifo_view]: no-exceptions mode requires noexcept default constructor.");
-    static_assert(std::is_nothrow_destructible_v<value_type>,
-                  "[spsc::fifo_view]: no-exceptions mode requires noexcept destructor.");
-    static_assert(
-        std::is_array_v<value_type> ||
-        std::is_nothrow_move_assignable_v<value_type> ||
-        std::is_nothrow_copy_assignable_v<value_type>,
-        "[spsc::fifo_view]: no-exceptions mode requires noexcept assignment (move or copy), "
-        "or an array type used via claim/publish APIs.");
-#endif /* (SPSC_ENABLE_EXCEPTIONS == 0) */
 
     static_assert(std::is_trivially_copyable_v<counter_value>,
                   "[spsc::fifo_view]: counter_value must be trivially copyable (atomic-friendly).");
@@ -137,12 +122,6 @@ public:
                   "[spsc::fifo_view]: static Capacity must be power-of-two (mask-based indexing).");
     static_assert(Capacity == 0 || Capacity >= 2,
                   "[spsc::fifo_view]: Capacity must be >= 2 (or 0 for dynamic).");
-    static_assert(
-        std::is_array_v<value_type> ||
-        std::is_move_assignable_v<value_type> ||
-        std::is_copy_assignable_v<value_type>,
-        "[spsc::fifo_view]: value_type must be move- or copy-assignable, "
-        "or an array type used via claim/publish APIs.");
     static_assert(std::numeric_limits<counter_value>::digits >= 2,
                   "[spsc::fifo_view]: counter type is too narrow.");
     static_assert(::spsc::cap::RB_MAX_UNAMBIGUOUS <= (counter_value(1) << (std::numeric_limits<counter_value>::digits - 1)),

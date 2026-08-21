@@ -51,6 +51,12 @@ $scenarios = @(
         defines = @('SPSC_TEST_THROWING_RELAXED_CONVERSION=1')
     },
     @{
+        name = 'CachelineCounter with a throwing underlying counter'
+        source = Join-Path $repoRoot 'tests\compile_fail\counter_contract_invalid.cpp'
+        expected = 'CachelineCounter: underlying counter must satisfy the custom counter contract'
+        defines = @('SPSC_TEST_CACHELINE_UNDERLYING_COUNTER=1')
+    },
+    @{
         name = 'direct custom policy with an incomplete counter contract'
         source = Join-Path $repoRoot 'tests\compile_fail\counter_contract_invalid.cpp'
         expected = '[SPSCbase]: PolicyT::counter_type must satisfy the custom counter contract'

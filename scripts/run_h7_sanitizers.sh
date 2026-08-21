@@ -53,6 +53,7 @@ esac
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source_path="$repo_root/tests/standalone/h7_atomic_observer_stress.cpp"
+exception_source_path="$repo_root/tests/standalone/v303_exception_runtime_smoke.cpp"
 temp_root="$(cd -- "${TMPDIR:-/tmp}" && pwd)"
 work_dir="$(mktemp -d "$temp_root/spsc-h7-sanitize.XXXXXXXX")"
 
@@ -90,6 +91,14 @@ else
     ASAN_OPTIONS="detect_leaks=1:halt_on_error=1" \
     UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
     "$executable"
+
+    exception_executable="$work_dir/v303_exception_runtime_smoke"
+    "$compiler" "${compile_flags[@]}" \
+        -DSPSC_ENABLE_EXCEPTIONS=1 \
+        "$exception_source_path" -o "$exception_executable"
+    ASAN_OPTIONS="detect_leaks=1:halt_on_error=1" \
+    UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" \
+    "$exception_executable"
 fi
 
 echo "PASS: H7 $sanitizer observer sanitizer smoke"

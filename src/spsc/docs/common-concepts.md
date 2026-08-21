@@ -354,6 +354,13 @@ These are generally **not** safe to call concurrently with producer/consumer tra
 
 Treat them as management operations performed while the queue is stopped.
 
+RAII guard destructors still run during exception unwinding. Depending on the
+guard state, scope exit can publish an armed write prefix or consume an active
+read region; it is not an automatic rollback boundary. If guarded work may
+throw, catch while the guard is still alive and call `cancel()` (or disarm
+publication where that is the intended contract) before rethrowing. See
+[Guard And Bulk Helpers](guard-and-bulk-helpers.md#exception-unwinding-and-raii-side-effects).
+
 ## 11. Assertions And Allocation Failure
 
 `SPSC_ASSERT` is an opt-in diagnostic hook. Unless the application defines it
@@ -371,8 +378,23 @@ preconditions; they are not a replacement for `try_*` methods or `is_valid()`.
 
 The default `SPSC_ENABLE_EXCEPTIONS=0` configuration makes the shipped
 allocators return `nullptr` on allocation failure. Because constructors cannot
-return a status, an allocation-backed constructor may produce an invalid
+return a status, most allocation-backed constructors may produce an invalid
 object. This applies to runtime-sized containers and to allocation-backed
 static forms such as `queue`. Check `is_valid()` before publishing the object
 to producer/consumer endpoints. Prefer the boolean result of `resize()` or
 `reserve()` when initialization must report failure explicitly.
+
+A custom allocator used by an allocation-backed form in this mode must expose
+`allocate(size_type) noexcept`. Throwing allocators, including
+`std::allocator`, are rejected at compile time because mode `0` deliberately
+does not build exception rollback handlers. This requirement applies to every
+rebound allocator that actually allocates (for example, both slot and payload
+allocators in a dynamic pool). It does not constrain an allocator template
+argument that remains unused by wholly embedded static storage. Define
+`SPSC_ENABLE_EXCEPTIONS=1` build-wide when a throwing allocator is required.
+
+Runtime-shaped `buffer_pool` specializations are the deliberate exception: a
+zero count or zero buffer size is a coherent empty shape, so `is_valid()` can
+remain `true` after constructor allocation failure. When a non-empty pool is
+required, use the boolean `resize()` result and verify the resulting
+`count()`/`size()` against the requested shape.

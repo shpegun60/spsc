@@ -67,17 +67,27 @@ class fifo : private ::spsc::SPSCbase<Capacity, Policy> {
     using DynamicBuf = T *;
     using storage_type = std::conditional_t<kDynamic, DynamicBuf, StaticBuf>;
 
-    static constexpr bool kCopyEnabled = std::is_copy_assignable_v<T>;
+    static constexpr bool kCopyEnabled =
+        std::is_copy_assignable_v<T> &&
+        ((SPSC_ENABLE_EXCEPTIONS != 0) ||
+         std::is_nothrow_copy_assignable_v<T>);
     struct disabled_copy_source;
     using copy_source = std::conditional_t<kCopyEnabled,
                                            const fifo&,
                                            disabled_copy_source&&>;
 
-    static constexpr bool kNoThrowMoveOps =
+    static constexpr bool kUseMoveStorageAssignment =
+        std::is_move_assignable_v<storage_type> &&
+        (std::is_nothrow_move_assignable_v<storage_type> ||
+         !std::is_copy_assignable_v<storage_type>);
+    static constexpr bool kNoThrowStorageAssignment =
         kDynamic ? true
-                 : (std::is_move_assignable_v<storage_type>
+                 : (kUseMoveStorageAssignment
                         ? std::is_nothrow_move_assignable_v<storage_type>
                         : std::is_nothrow_copy_assignable_v<storage_type>);
+    static constexpr bool kNoThrowMoveConstruction =
+        kDynamic || (std::is_nothrow_default_constructible_v<storage_type> &&
+                     kNoThrowStorageAssignment);
 
 public:
     // ------------------------------------------------------------------------------------------
@@ -140,18 +150,22 @@ public:
     static_assert(
         !std::is_const_v<value_type>,
         "[spsc::fifo]: const T does not make sense for a writable FIFO.");
+    static_assert(std::is_nothrow_destructible_v<value_type>,
+                  "[spsc::fifo]: value_type destructor must be noexcept.");
 
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<value_type>,
                   "[spsc::fifo]: no-exceptions mode requires noexcept default "
                   "constructor.");
-    static_assert(
-        std::is_nothrow_destructible_v<value_type>,
-        "[spsc::fifo]: no-exceptions mode requires noexcept destructor.");
     static_assert(std::is_nothrow_move_assignable_v<value_type> ||
                       std::is_nothrow_copy_assignable_v<value_type>,
                   "[spsc::fifo]: no-exceptions mode requires noexcept assignment "
                   "(move or copy).");
+    static_assert(
+        !kDynamic ||
+            ::spsc::alloc::detail::allocator_allocate_noexcept_v<allocator_type>,
+        "[spsc::fifo]: no-exceptions mode requires allocator::allocate(size_type) "
+        "to be noexcept.");
 #endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
 
     static_assert(std::is_trivially_copyable_v<counter_value>,
@@ -175,8 +189,11 @@ public:
                   "[spsc::fifo]: policy counter/geometry value type must be unsigned.");
     static_assert(sizeof(counter_value) >= sizeof(size_type),
                   "[spsc::fifo]: counter_type::value_type must be at least as wide as reg.");
-    static_assert(std::is_default_constructible_v<allocator_type>,
-                  "[spsc::fifo]: allocator must be default-constructible (used by get_allocator()).");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "[spsc::fifo]: allocator must be nothrow default-constructible.");
+    static_assert(!kDynamic ||
+                      ::spsc::alloc::detail::allocator_size_covers_reg_v<allocator_type>,
+                  "[spsc::fifo]: allocator size_type must represent the reg domain.");
     // Extra compile-time hardening (keeps parity with pool)
     static_assert(std::is_unsigned_v<size_type>,
                   "[spsc::fifo]: reg (size_type) must be unsigned.");
@@ -242,9 +259,11 @@ public:
     }
 
     // Move semantics
-    fifo(fifo &&other) noexcept(kNoThrowMoveOps) : Base() { move_from(std::move(other)); }
+    fifo(fifo &&other) noexcept(kNoThrowMoveConstruction) : Base() {
+        move_from(std::move(other));
+    }
 
-    fifo &operator=(fifo &&other) noexcept(kNoThrowMoveOps) {
+    fifo &operator=(fifo &&other) noexcept(kNoThrowStorageAssignment) {
         if (this != &other) {
             destroy();
             move_from(std::move(other));
@@ -1553,7 +1572,7 @@ private:
         Base::sync_cache();
     }
 
-    void move_from(fifo &&other) noexcept(kNoThrowMoveOps) {
+    void move_from(fifo &&other) noexcept(kNoThrowStorageAssignment) {
         if constexpr (kDynamic) {
             const size_type cap = other.Base::capacity();
             const size_type head = other.Base::head();
@@ -1592,7 +1611,7 @@ private:
                 return;
             }
 
-            if constexpr (std::is_move_assignable_v<storage_type>) {
+            if constexpr (kUseMoveStorageAssignment) {
                 storage_ = std::move(other.storage_);
             } else {
                 storage_ = other.storage_;

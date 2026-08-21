@@ -51,10 +51,7 @@ q.attach(slots.data(), slots.size(), bufferSize);
 `pool_view` supports attach/adopt with saved state.
 
 ```cpp
-spsc::pool_view<0>::state_t st{
-    .head = savedHead,
-    .tail = savedTail,
-};
+spsc::pool_view<0>::state_t st{savedHead, savedTail};
 
 q.attach(slots.data(), slots.size(), bufferSize, st);
 ```

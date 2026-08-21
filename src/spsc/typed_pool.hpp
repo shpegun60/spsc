@@ -81,7 +81,10 @@ class typed_pool : private detail::typed_pool_base<Capacity>,
     static constexpr bool kDynamic = (Capacity == 0);
     using Base = ::spsc::SPSCbase<Capacity, Policy>;
 
-    static constexpr bool kCopyEnabled = std::is_copy_constructible_v<T>;
+    static constexpr bool kCopyEnabled =
+        std::is_copy_constructible_v<T> &&
+        ((SPSC_ENABLE_EXCEPTIONS != 0) ||
+         std::is_nothrow_copy_constructible_v<T>);
     struct disabled_copy_source;
     using copy_source = std::conditional_t<kCopyEnabled,
                                            const typed_pool&,
@@ -152,16 +155,18 @@ public:
     // ------------------------------------------------------------------------------------------
     // Static Assertions
     // ------------------------------------------------------------------------------------------
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[spsc::typed_pool]: allocator must be default-constructible "
-                  "(used by get_allocator()).");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[spsc::typed_pool]: base allocator must be nothrow default-constructible.");
     static_assert(!kDynamic || slot_alloc_traits::is_always_equal::value,
                   "[spsc::typed_pool]: dynamic typed_pool requires always_equal "
                   "allocator (stateless).");
     static_assert(!kDynamic ||
-                      std::is_default_constructible_v<slot_allocator_type>,
+                      std::is_nothrow_default_constructible_v<slot_allocator_type>,
                   "[spsc::typed_pool]: dynamic typed_pool requires "
-                  "default-constructible allocator.");
+                  "nothrow default-constructible slot allocator.");
+    static_assert(!kDynamic ||
+                      ::spsc::alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
+                  "[spsc::typed_pool]: slot allocator size_type must represent the reg domain.");
     static_assert(!kDynamic || std::is_same_v<slot_pointer, pointer *>,
                   "[spsc::typed_pool]: dynamic typed_pool requires allocator "
                   "pointer type T** (raw).");
@@ -197,8 +202,23 @@ public:
         object_alloc_traits::is_always_equal::value,
         "[spsc::typed_pool]: object allocator must be always_equal (stateless).");
     static_assert(
-        std::is_default_constructible_v<object_allocator_type>,
-        "[spsc::typed_pool]: object allocator must be default-constructible.");
+        std::is_nothrow_default_constructible_v<object_allocator_type>,
+        "[spsc::typed_pool]: object allocator must be nothrow default-constructible.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        !kDynamic ||
+            ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+                slot_allocator_type>,
+        "[spsc::typed_pool]: no-exceptions mode requires slot "
+        "allocator::allocate(size_type) to be noexcept.");
+    static_assert(
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+            object_allocator_type>,
+        "[spsc::typed_pool]: no-exceptions mode requires object "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(std::is_nothrow_destructible_v<object_type>,
+                  "[spsc::typed_pool]: object_type destructor must be noexcept.");
     static_assert(std::is_same_v<value_type, pointer>,
                   "[spsc::typed_pool]: value_type must match pointer.");
     static_assert(std::is_trivially_copyable_v<pointer>,
@@ -567,12 +587,29 @@ public:
             return;
         }
 
+        // Retire exactly the prefix visible at one fresh consumer snapshot.
+        // Publications that happen while destructors run remain queued for a
+        // later consumer pass, and runtime is bounded by capacity.
+        const auto owner = Base::consumer_single_owner_snapshot();
+        const size_type head = Base::head();
+        const size_type count = static_cast<size_type>(head - owner.owner);
+        const size_type cap = Base::capacity();
+
+        if (RB_UNLIKELY(count > cap)) {
+            return;
+        }
+
         if constexpr (!std::is_trivially_destructible_v<object_type>) {
-            while (!consumer_empty_cached_()) {
-                pop();
+            const size_type mask = Base::mask();
+            for (size_type i = 0u; i < count; ++i) {
+                pointer p = object_ptr(
+                    static_cast<size_type>((owner.owner + i) & mask));
+                detail::destroy_at(p);
             }
-        } else {
-            Base::sync_tail_to_head();
+        }
+
+        if (count != 0u) {
+            Base::consumer_commit_from_owner(owner.owner, count);
         }
     }
 

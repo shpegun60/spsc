@@ -129,11 +129,11 @@ class buffer_pool
                   "[buffer_pool]: static buffers require copy-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: static buffers require copy-assignable T.");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
-    static_assert(std::is_nothrow_destructible_v<T>,
-                  "[buffer_pool]: no-exceptions mode requires noexcept destructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
 #endif
@@ -163,8 +163,8 @@ public:
                   "[buffer_pool]: static buffer slot alignment must honor the policy storage alignment.");
     static_assert((sizeof(stored_buffer_type) % alignof(stored_buffer_type)) == 0u,
                   "[buffer_pool]: static buffer slot size must be a multiple of its alignment.");
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[buffer_pool]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[buffer_pool]: allocator must be nothrow default-constructible.");
     static_assert(std::is_unsigned_v<size_type>,
                   "[buffer_pool]: reg (size_type) must be unsigned.");
     static_assert(sizeof(buffer_type) <= (std::numeric_limits<size_type>::max)(),
@@ -239,11 +239,11 @@ class buffer_pool<T, BufferSize, 0u, Policy, Alloc>
                   "[buffer_pool]: fixed-size buffers require default-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: fixed-size buffers require copy-assignable T.");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
-    static_assert(std::is_nothrow_destructible_v<T>,
-                  "[buffer_pool]: no-exceptions mode requires noexcept destructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
 #endif
@@ -266,12 +266,20 @@ public:
     static constexpr size_type static_count = 0u;
     static constexpr size_type static_buffer_size = BufferSize;
 
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[buffer_pool]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[buffer_pool]: base allocator must be nothrow default-constructible.");
     static_assert(alloc_traits::is_always_equal::value,
                   "[buffer_pool]: dynamic buffer count requires always_equal allocator.");
-    static_assert(std::is_default_constructible_v<allocator_type>,
-                  "[buffer_pool]: dynamic buffer count requires default-constructible allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "[buffer_pool]: dynamic buffer count requires nothrow default-constructible allocator.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(alloc::detail::allocator_size_covers_reg_v<allocator_type>,
+                  "[buffer_pool]: allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<typename alloc_traits::pointer, stored_buffer_type*>,
                   "[buffer_pool]: dynamic buffer count requires allocator pointer type stored_buffer_type*.");
     static_assert(detail::allocator_supports_slot_alignment_v<base_allocator_type, stored_buffer_type>,
@@ -289,7 +297,7 @@ public:
                   "[buffer_pool]: effective fixed-buffer byte size must fit in reg.");
 
     static constexpr bool kNoexceptAllocate =
-        noexcept(alloc_traits::allocate(std::declval<allocator_type&>(), typename alloc_traits::size_type{1}));
+        alloc::detail::allocator_allocate_noexcept_v<allocator_type>;
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Assignment
@@ -574,11 +582,11 @@ class buffer_pool<T, 0u, Count, Policy, Alloc>
                   "[buffer_pool]: dynamic-size buffers require default-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: dynamic-size buffers require copy-assignable T.");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
-    static_assert(std::is_nothrow_destructible_v<T>,
-                  "[buffer_pool]: no-exceptions mode requires noexcept destructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
 #endif
@@ -601,12 +609,20 @@ public:
     static constexpr size_type static_count = Count;
     static constexpr size_type static_buffer_size = 0u;
 
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[buffer_pool]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[buffer_pool]: base allocator must be nothrow default-constructible.");
     static_assert(byte_alloc_traits::is_always_equal::value,
                   "[buffer_pool]: dynamic buffer size requires always_equal allocator.");
-    static_assert(std::is_default_constructible_v<byte_allocator_type>,
-                  "[buffer_pool]: dynamic buffer size requires default-constructible allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<byte_allocator_type>,
+                  "[buffer_pool]: dynamic buffer size requires nothrow default-constructible allocator.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires byte "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(alloc::detail::allocator_size_covers_reg_v<byte_allocator_type>,
+                  "[buffer_pool]: byte allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<byte_pointer, byte_type*>,
                   "[buffer_pool]: dynamic buffer size requires allocator pointer type std::byte*.");
     static_assert(alloc::rebind_allocator_min_alignment_v<base_allocator_type, byte_type> >=
@@ -616,7 +632,7 @@ public:
                   "[buffer_pool]: reg (size_type) must be unsigned.");
 
     static constexpr bool kNoexceptAllocate =
-        noexcept(byte_alloc_traits::allocate(std::declval<byte_allocator_type&>(), typename byte_alloc_traits::size_type{1}));
+        alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>;
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Assignment
@@ -973,11 +989,11 @@ class buffer_pool<T, 0u, 0u, Policy, Alloc>
                   "[buffer_pool]: dynamic buffers require default-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: dynamic buffers require copy-assignable T.");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
-    static_assert(std::is_nothrow_destructible_v<T>,
-                  "[buffer_pool]: no-exceptions mode requires noexcept destructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
 #endif
@@ -1002,16 +1018,30 @@ public:
     static constexpr size_type static_count = 0u;
     static constexpr size_type static_buffer_size = 0u;
 
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[buffer_pool]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[buffer_pool]: base allocator must be nothrow default-constructible.");
     static_assert(slot_alloc_traits::is_always_equal::value,
                   "[buffer_pool]: dynamic count requires always_equal slot allocator.");
     static_assert(byte_alloc_traits::is_always_equal::value,
                   "[buffer_pool]: dynamic buffer size requires always_equal object allocator.");
-    static_assert(std::is_default_constructible_v<slot_allocator_type>,
-                  "[buffer_pool]: dynamic count requires default-constructible slot allocator.");
-    static_assert(std::is_default_constructible_v<byte_allocator_type>,
-                  "[buffer_pool]: dynamic buffer size requires default-constructible object allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<slot_allocator_type>,
+                  "[buffer_pool]: dynamic count requires nothrow default-constructible slot allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<byte_allocator_type>,
+                  "[buffer_pool]: dynamic buffer size requires nothrow default-constructible object allocator.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<slot_allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires slot "
+        "allocator::allocate(size_type) to be noexcept.");
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires byte "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
+                  "[buffer_pool]: slot allocator size_type must represent the reg domain.");
+    static_assert(alloc::detail::allocator_size_covers_reg_v<byte_allocator_type>,
+                  "[buffer_pool]: byte allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<typename slot_alloc_traits::pointer, pointer*>,
                   "[buffer_pool]: dynamic count requires slot allocator pointer type T**.");
     static_assert(std::is_same_v<byte_pointer, byte_type*>,
@@ -1023,9 +1053,9 @@ public:
                   "[buffer_pool]: reg (size_type) must be unsigned.");
 
     static constexpr bool kNoexceptAllocateSlots =
-        noexcept(slot_alloc_traits::allocate(std::declval<slot_allocator_type&>(), typename slot_alloc_traits::size_type{1}));
+        alloc::detail::allocator_allocate_noexcept_v<slot_allocator_type>;
     static constexpr bool kNoexceptAllocateObjects =
-        noexcept(byte_alloc_traits::allocate(std::declval<byte_allocator_type&>(), typename byte_alloc_traits::size_type{1}));
+        alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>;
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Assignment

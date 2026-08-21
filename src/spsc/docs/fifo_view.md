@@ -44,10 +44,7 @@ q.attach(storage.data(), storage.size());
 This is useful for shared memory or restart/recovery flows.
 
 ```cpp
-spsc::fifo_view<int, 0>::state_t st{
-    .head = savedHead,
-    .tail = savedTail,
-};
+spsc::fifo_view<int, 0>::state_t st{savedHead, savedTail};
 
 q.attach(storage.data(), storage.size(), st);
 ```

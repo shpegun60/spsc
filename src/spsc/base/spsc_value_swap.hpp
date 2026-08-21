@@ -1,6 +1,9 @@
 /*
  * spsc_value_swap.hpp
  *
+ * Copyright (c) 2026 Shpegun60
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * Internal value-storage swap helper.
  *
  * Some static SPSC containers require default construction and assignment but

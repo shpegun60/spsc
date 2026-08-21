@@ -26,6 +26,7 @@
 #include <cstring>      // std::memcpy
 #include <iterator>     // std::reverse_iterator
 #include <limits>
+#include <memory>       // std::addressof
 #include <type_traits>
 #include <utility>      // std::swap, std::move
 
@@ -747,9 +748,11 @@ public:
     // ------------------------------------------------------------------------------------------
     // Producer Operations
     // ------------------------------------------------------------------------------------------
-    template<class U>
+    template<class U,
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                     !std::is_volatile_v<U>, int> = 0>
     RB_FORCEINLINE void push(const U& v) noexcept {
-        static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
         if (RB_UNLIKELY(!is_valid())) { SPSC_ASSERT(is_valid()); return; }
         if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { SPSC_ASSERT(sizeof(U) <= bufferSize_.load()); return; }
 
@@ -757,13 +760,15 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) { SPSC_ASSERT(snapshot.available); return; }
         pointer dst = slots_[snapshot.index];
         if (RB_UNLIKELY(dst == nullptr)) { SPSC_ASSERT(dst != nullptr); return; }
-        std::memcpy(dst, &v, sizeof(U));
+        std::memcpy(dst, std::addressof(v), sizeof(U));
         Base::producer_commit_single(snapshot);
     }
 
-    template<class U>
+    template<class U,
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                     !std::is_volatile_v<U>, int> = 0>
     [[nodiscard]] RB_FORCEINLINE bool try_push(const U& v) noexcept {
-        static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
         if (RB_UNLIKELY(!is_valid())) { return false; }
         if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { return false; }
 
@@ -771,7 +776,7 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) { return false; }
         pointer dst = slots_[snapshot.index];
         if (RB_UNLIKELY(dst == nullptr)) { return false; }
-        std::memcpy(dst, &v, sizeof(U));
+        std::memcpy(dst, std::addressof(v), sizeof(U));
         Base::producer_commit_single(snapshot);
         return true;
     }
@@ -794,9 +799,10 @@ public:
         return p;
     }
 
-    template<class U>
+    template<class U,
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>>, int> = 0>
     [[nodiscard]] RB_FORCEINLINE U* claim_as() noexcept {
-        static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
         pointer p = try_claim();
         if (RB_UNLIKELY(!p)) { return nullptr; }
         if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { return nullptr; }
@@ -804,19 +810,25 @@ public:
         return static_cast<U*>(p);
     }
 
-    template<class U>
+    template<class U,
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                     !std::is_const_v<U> && !std::is_volatile_v<U>,
+                 int> = 0>
     [[nodiscard]] bool try_peek(U& out) const noexcept {
-        static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
         const_pointer p = try_front();
         if (!p) return false;
         if (sizeof(U) > buffer_size()) return false;
 
         // memcpy is the only universal "no UB" bridge for raw storage
-        std::memcpy(&out, p, sizeof(U));
+        std::memcpy(std::addressof(out), p, sizeof(U));
         return true;
     }
 
-    template<class U>
+    template<class U,
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                     !std::is_volatile_v<U>, int> = 0>
     [[nodiscard]] bool try_write(const U& v) noexcept {
         return try_push(v);
     }
@@ -944,9 +956,10 @@ public:
         return p;
     }
 
-    template<class U>
+    template<class U,
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>>, int> = 0>
     [[nodiscard]] RB_FORCEINLINE U* front_as() noexcept {
-        static_assert(std::is_trivially_copyable_v<U>, "[pool_view]: U must be trivially copyable");
         pointer p = try_front();
         if (RB_UNLIKELY(!p)) { return nullptr; }
         if (RB_UNLIKELY(sizeof(U) > bufferSize_.load())) { return nullptr; }
@@ -1075,15 +1088,19 @@ public:
 
         [[nodiscard]] pointer get_next() const noexcept { return peek_next(); }
 
-        template<class U>
+        template<class U,
+                 std::enable_if_t<
+                     std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                         !std::is_volatile_v<U>, int> = 0>
         [[nodiscard]] pointer emplace_next(const U& v) noexcept {
             return write_next(v);
         }
 
-        template<class U>
+        template<class U,
+                 std::enable_if_t<
+                     std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                         !std::is_volatile_v<U>, int> = 0>
         [[nodiscard]] pointer write_next(const U& v) noexcept {
-            static_assert(std::is_trivially_copyable_v<U>, "[pool_view::bulk_write_guard]: U must be trivially copyable");
-
             if (RB_UNLIKELY(p_ == nullptr)) { SPSC_ASSERT(p_ != nullptr); return nullptr; }
             if (RB_UNLIKELY(written_ >= regs_.total)) { SPSC_ASSERT(written_ < regs_.total); return nullptr; }
             SPSC_ASSERT(sizeof(U) <= p_->buffer_size());
@@ -1091,7 +1108,7 @@ public:
 
             pointer dst = slot_ptr_at_(written_);
             if (RB_UNLIKELY(dst == nullptr)) { return nullptr; }
-            std::memcpy(dst, &v, sizeof(U));
+            std::memcpy(dst, std::addressof(v), sizeof(U));
             ++written_;
             publish_on_destroy_ = true;
             return dst;
@@ -1106,8 +1123,8 @@ public:
             const size_type bs = p_->buffer_size();
             const size_type n = (size < bs) ? size : bs;
             SPSC_ASSERT((n == 0u) || (src != nullptr));
-            if (RB_UNLIKELY((n != 0u) && (src == nullptr))) { return nullptr; }
             if (n != 0u) {
+                if (RB_UNLIKELY(src == nullptr)) { return nullptr; }
                 std::memcpy(dst, src, n);
             }
             ++written_;
@@ -1283,10 +1300,11 @@ public:
         [[nodiscard]] pointer peek() const noexcept { return ptr_; }
         explicit operator bool() const noexcept { return (p_ != nullptr) && (ptr_ != nullptr); }
 
-        template<class U>
+        template<class U,
+                 std::enable_if_t<
+                     std::is_trivially_copyable_v<std::remove_cv_t<U>>, int> = 0>
         [[nodiscard]] U* as() const noexcept {
             if (RB_UNLIKELY(!ptr_ || !p_)) { return nullptr; }
-            static_assert(std::is_trivially_copyable_v<U>, "[pool_view::guard]: U must be trivially copyable");
             if (RB_UNLIKELY(sizeof(U) > p_->buffer_size())) { return nullptr; }
             if (RB_UNLIKELY((reinterpret_cast<std::uintptr_t>(ptr_) % alignof(U)) != 0u)) { return nullptr; }
             // If typed view is usable, assume caller intends to write.
@@ -1350,10 +1368,11 @@ public:
         [[nodiscard]] pointer get() const noexcept { return ptr_; }
         explicit operator bool() const noexcept { return active_; }
 
-        template<class U>
+        template<class U,
+                 std::enable_if_t<
+                     std::is_trivially_copyable_v<std::remove_cv_t<U>>, int> = 0>
         [[nodiscard]] U* as() const noexcept {
             if (RB_UNLIKELY(!ptr_ || !p_)) { return nullptr; }
-            static_assert(std::is_trivially_copyable_v<U>, "[pool_view::guard]: U must be trivially copyable");
             if (RB_UNLIKELY(sizeof(U) > p_->buffer_size())) { return nullptr; }
             if (RB_UNLIKELY((reinterpret_cast<std::uintptr_t>(ptr_) % alignof(U)) != 0u)) { return nullptr; }
             return static_cast<U*>(ptr_);

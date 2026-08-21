@@ -451,9 +451,16 @@ if (!guard.first().empty()) {
 }
 ```
 
-### Exception unwinding and constructed prefixes
+### Exception unwinding and RAII side effects
 
-With exceptions enabled, each successful `queue` or `typed_pool`
+Guard destructors run during exception unwinding just as they do on ordinary
+scope exit. An active read guard consumes its item or claimed region. An armed
+write guard publishes its completed item or prefix. Accessors such as a single
+write guard's `get()`/`ref()` and successful bulk write helpers can arm that
+publication, so leaving scope because unrelated user code throws is not an
+automatic rollback.
+
+For `queue` and `typed_pool`, each successful
 `bulk_write_guard::emplace_next()` arms publication of the constructed prefix.
 If a later construction throws, guard destruction publishes that already
 constructed prefix; the throwing element itself is not counted. This is safe
@@ -474,6 +481,11 @@ try {
     throw;
 }
 ```
+
+Apply the same nested-catch pattern to read guards when an exception must leave
+the item available: call `cancel()` before rethrowing. For manual write access,
+use non-arming inspection where available or explicitly disarm/cancel while the
+guard is alive. Never assume stack unwinding itself cancels an RAII guard.
 
 ## 8. Practical Guidance
 

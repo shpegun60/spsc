@@ -64,6 +64,11 @@ dynamicShape.resize(8, 1500);
   allocator may happen to provide.
 - `data(i)` returns `nullptr` when `i` is outside the valid buffer range.
 - `operator[](i)` is the assert-style indexed form for valid indices.
+- A zero count or zero buffer size is a coherent empty shape for runtime-shaped
+  variants. Consequently, `is_valid()` alone cannot distinguish deliberate
+  emptiness from a constructor allocation failure. If a non-empty shape is
+  required, call `resize()`, check its boolean result, and verify the exact
+  `count()` and `size()` requested.
 
 Cache-aligned policies can align storage and round the physical span reported by
 `cache_span_bytes()`. Runtime-sized variants allocate each payload separately,
