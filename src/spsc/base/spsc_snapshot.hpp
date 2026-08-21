@@ -58,7 +58,7 @@ public:
     {}
 
     reference operator*() const noexcept {
-        return *std::launder(&storage_[index_ & mask_]);
+        return *std::launder(storage_ + (index_ & mask_));
     }
 
     pointer operator->() const noexcept {

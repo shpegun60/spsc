@@ -23,6 +23,7 @@
 #include <cstdint>  // std::uintptr_t      // std::ptrdiff_t
 #include <iterator>     // std::reverse_iterator
 #include <limits>
+#include <memory>       // std::addressof
 #include <type_traits>
 #include <utility>      // std::swap, std::move
 
@@ -401,9 +402,16 @@ public:
     // Attach / Reset API (no ctor needed)
     // NOTE: These are NOT concurrent with producer/consumer ops.
 
-    template<size_type C = Capacity, typename = std::enable_if_t<(C != 0u)>>
-    [[nodiscard]] bool attach(pointer buffer) noexcept
+    template<
+        class Buf,
+        size_type C = Capacity,
+        typename = std::enable_if_t<
+            (C != 0u) &&
+            std::is_convertible_v<Buf, pointer> &&
+            !std::is_array_v<std::remove_reference_t<Buf>>>>
+    [[nodiscard]] bool attach(Buf&& buffer_arg) noexcept
     {
+        pointer buffer = static_cast<pointer>(buffer_arg);
         if (RB_UNLIKELY(!is_storage_aligned(buffer))) { detach(); return false; }
         storage_ = buffer;
         Base::clear();
@@ -419,7 +427,7 @@ public:
     template<reg N, size_type C = Capacity, typename = std::enable_if_t<(C != 0u) && (N == C)>>
     [[nodiscard]] bool attach(value_type (&arr)[N]) noexcept
     {
-        return attach(&arr[0]);
+        return attach(std::addressof(arr[0]));
     }
 
     template<size_type C = Capacity, typename = std::enable_if_t<C == 0>>
@@ -481,8 +489,14 @@ public:
         return adopt(buffer, buffer_capacity, st.head, st.tail);
     }
 
-    [[nodiscard]] bool attach(pointer buffer, const state_t st) noexcept
+    template<
+        class Buf,
+        typename = std::enable_if_t<
+            std::is_convertible_v<Buf, pointer> &&
+            !std::is_array_v<std::remove_reference_t<Buf>>>>
+    [[nodiscard]] bool attach(Buf&& buffer_arg, const state_t st) noexcept
     {
+        pointer buffer = static_cast<pointer>(buffer_arg);
         if constexpr (Capacity == 0u) {
             // Dynamic view requires an explicit capacity.
             (void)buffer;
@@ -503,7 +517,7 @@ public:
     template<reg N, size_type C = Capacity, typename = std::enable_if_t<(C != 0u) && (N == C)>>
     [[nodiscard]] bool attach(value_type (&arr)[N], const state_t st) noexcept
     {
-        return attach(&arr[0], st);
+        return attach(std::addressof(arr[0]), st);
     }
 
     // Reset indices to empty while keeping the attachment (if any).
@@ -832,7 +846,7 @@ public:
         reference slot = storage_[snapshot.index];
         slot = value_type(std::forward<Args>(args)...);
         Base::producer_commit_single(snapshot);
-        return &slot;
+        return std::addressof(slot);
     }
 
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
@@ -845,7 +859,7 @@ public:
     [[nodiscard]] RB_FORCEINLINE pointer try_claim() noexcept {
         if (RB_UNLIKELY(!is_valid())) { return nullptr; }
         const auto snapshot = Base::producer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? storage_ + snapshot.index : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
@@ -896,13 +910,13 @@ public:
     [[nodiscard]] RB_FORCEINLINE pointer try_front() noexcept {
         if (RB_UNLIKELY(!is_valid())) { return nullptr; }
         const auto snapshot = Base::consumer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? storage_ + snapshot.index : nullptr;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
         if (RB_UNLIKELY(!is_valid())) { return nullptr; }
         const auto snapshot = Base::consumer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? storage_ + snapshot.index : nullptr;
     }
 
     RB_FORCEINLINE void pop() noexcept {

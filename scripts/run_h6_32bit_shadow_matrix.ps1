@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $repoRoot 'tests\standalone\h6_32bit_shadow_matrix.cpp'
+$reserveSource = Join-Path $repoRoot 'tests\standalone\reserve_32bit_smoke.cpp'
 $includeDir = Join-Path $repoRoot 'src\spsc'
 $compilerCommand = Get-Command -Name $Compiler -ErrorAction Stop
 $compilerPath = $compilerCommand.Source
@@ -16,6 +17,59 @@ $workDir = Join-Path ([IO.Path]::GetTempPath()) ("spsc-h6-32bit-" + [Guid]::NewG
 New-Item -ItemType Directory -Path $workDir -ErrorAction Stop | Out-Null
 
 try {
+    $reserveExe = Join-Path $workDir 'reserve_32bit_smoke.exe'
+
+    if ($isMsvc) {
+        $reserveArguments = @(
+            '/nologo',
+            '/std:c++17',
+            '/EHsc',
+            "/I$repoRoot",
+            "/I$includeDir",
+            $reserveSource,
+            "/Fe$reserveExe"
+        )
+    } else {
+        $reserveArguments = @(
+            '-m32',
+            '-std=c++17',
+            '-Wall',
+            '-Wextra',
+            '-Werror',
+            '-pedantic',
+            "-I$repoRoot",
+            "-I$includeDir",
+            $reserveSource,
+            '-o',
+            $reserveExe
+        )
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $reserveBuildOutput = & $compilerPath @reserveArguments 2>&1
+        $reserveBuildExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($reserveBuildExitCode -ne 0) {
+        throw "32-bit reserve smoke build failed:`n$reserveBuildOutput"
+    }
+
+    $ErrorActionPreference = 'Continue'
+    try {
+        $reserveRunOutput = & $reserveExe 2>&1
+        $reserveRunExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($reserveRunExitCode -ne 0) {
+        throw "32-bit reserve smoke runtime failed:`n$reserveRunOutput"
+    }
+
+    Write-Output 'PASS: genuine 32-bit reserve boundary contract'
+
     foreach ($allow32Bit in 0, 1) {
         $exe = Join-Path $workDir "shadow_allow_32bit_$allow32Bit.exe"
 

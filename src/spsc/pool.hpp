@@ -1323,6 +1323,13 @@ private:
             return false;
         }
 
+        // resize() is grow-only on every non-zero axis. When depth grows,
+        // retain the current slot width instead of silently truncating the
+        // migrated payload prefix to a smaller second argument.
+        if (is_valid() && requested_buffer_size < old_bs) {
+            requested_buffer_size = old_bs;
+        }
+
         // Normalize depth and enforce pow2 geometry
         size_type target_depth = requested_depth;
 

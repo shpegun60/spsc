@@ -737,7 +737,7 @@ public:
         reference slot = storage_[snapshot.index];
         slot = value_type(std::forward<Args>(args)...);
         Base::producer_commit_single(snapshot);
-        return &slot;
+        return std::addressof(slot);
     }
 
     [[nodiscard]] RB_FORCEINLINE reference claim() noexcept {
@@ -752,7 +752,7 @@ public:
             return nullptr;
         }
         const auto snapshot = Base::producer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? data() + snapshot.index : nullptr;
     }
 
     RB_FORCEINLINE void publish() noexcept {
@@ -811,7 +811,7 @@ public:
             return nullptr;
         }
         const auto snapshot = Base::consumer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? data() + snapshot.index : nullptr;
     }
 
     [[nodiscard]] RB_FORCEINLINE const_pointer try_front() const noexcept {
@@ -819,7 +819,7 @@ public:
             return nullptr;
         }
         const auto snapshot = Base::consumer_single_snapshot();
-        return snapshot.available ? &storage_[snapshot.index] : nullptr;
+        return snapshot.available ? data() + snapshot.index : nullptr;
     }
 
     RB_FORCEINLINE void pop() noexcept {

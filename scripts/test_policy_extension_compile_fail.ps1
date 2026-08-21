@@ -39,6 +39,18 @@ $scenarios = @(
         defines = @()
     },
     @{
+        name = 'custom counter with a throwing load conversion'
+        source = Join-Path $repoRoot 'tests\compile_fail\counter_contract_invalid.cpp'
+        expected = '[Policy]: counter_type must satisfy the custom counter contract'
+        defines = @('SPSC_TEST_THROWING_LOAD_CONVERSION=1')
+    },
+    @{
+        name = 'custom counter with a throwing relaxed-load conversion'
+        source = Join-Path $repoRoot 'tests\compile_fail\counter_contract_invalid.cpp'
+        expected = '[Policy]: counter_type must satisfy the custom counter contract'
+        defines = @('SPSC_TEST_THROWING_RELAXED_CONVERSION=1')
+    },
+    @{
         name = 'direct custom policy with an incomplete counter contract'
         source = Join-Path $repoRoot 'tests\compile_fail\counter_contract_invalid.cpp'
         expected = '[SPSCbase]: PolicyT::counter_type must satisfy the custom counter contract'

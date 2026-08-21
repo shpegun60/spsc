@@ -59,6 +59,12 @@ then restore only when both still match. A different runtime capacity can make
 the same indices locally valid while mapping wrapped elements to different
 physical slots; `adopt()` cannot detect that mismatch.
 
+`state_t` uses the library's platform-sized `size_type`. It is an index
+snapshot for a matching build, not a portable disk, shared-protocol, or wire
+format. Cross-build persistence must encode fixed-width fields explicitly,
+choose a byte order and format version, range-check on decode, and still
+validate the effective geometry and backing-layout identity before `adopt()`.
+
 ## More Example Patterns
 
 ### Cache-Aligned External Storage
@@ -128,7 +134,7 @@ So the migration path between `fifo` and `fifo_view` is usually straightforward.
 - `attach`
 - `adopt`
 - `detach`
-- serialized `state_t`
+- index-only `state_t` snapshot
 
 ## Alignment Rules
 

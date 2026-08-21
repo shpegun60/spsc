@@ -3,6 +3,7 @@
 #include "src/spsc/chunk.hpp"
 #include "src/spsc/chunk_fifo.hpp"
 #include "src/spsc/fifo.hpp"
+#include "src/spsc/fifo_view.hpp"
 #include "src/spsc/latest.hpp"
 #include "src/spsc/queue.hpp"
 #include "src/spsc/typed_pool.hpp"
@@ -167,6 +168,23 @@ struct class_specific_new_value {
     const class_specific_new_value* operator&() const = delete;
 };
 
+struct hostile_address_value {
+    int payload{0};
+
+    hostile_address_value() noexcept = default;
+    explicit hostile_address_value(const int value) noexcept : payload(value) {}
+    hostile_address_value(const hostile_address_value&) noexcept = default;
+    hostile_address_value(hostile_address_value&&) noexcept = default;
+    hostile_address_value&
+    operator=(const hostile_address_value&) noexcept = default;
+    hostile_address_value&
+    operator=(hostile_address_value&&) noexcept = default;
+    ~hostile_address_value() noexcept = default;
+
+    hostile_address_value* operator&() = delete;
+    const hostile_address_value* operator&() const = delete;
+};
+
 struct non_assignable_latest_value {
     non_assignable_latest_value() = default;
     non_assignable_latest_value(const non_assignable_latest_value&) = default;
@@ -275,6 +293,18 @@ using object_queue = ::spsc::queue<value, 8u>;
 using class_new_queue = ::spsc::queue<class_specific_new_value, 8u>;
 using dynamic_class_new_queue = ::spsc::queue<class_specific_new_value, 0u>;
 using raw_latest = ::spsc::latest<void, 0u>;
+using hostile_fifo =
+    ::spsc::fifo<hostile_address_value, 8u, ::spsc::policy::P>;
+using hostile_fifo_view =
+    ::spsc::fifo_view<hostile_address_value, 8u, ::spsc::policy::P>;
+using hostile_latest =
+    ::spsc::latest<hostile_address_value, 8u, ::spsc::policy::P>;
+using hostile_dynamic_latest =
+    ::spsc::latest<hostile_address_value, 0u, ::spsc::policy::P>;
+using hostile_chunk = ::spsc::chunk<hostile_address_value, 8u>;
+using hostile_dynamic_chunk = ::spsc::chunk<hostile_address_value, 0u>;
+using hostile_queue =
+    ::spsc::queue<hostile_address_value, 8u, ::spsc::policy::P>;
 
 static_assert(has_emplace<static_latest, int>::value);
 static_assert(has_try_emplace<static_latest, int>::value);
@@ -482,6 +512,63 @@ struct signed_counter {
     void inc() noexcept {}
 };
 
+struct throwing_conversion_proxy {
+    operator reg() const noexcept(false) { return 0u; }
+};
+
+struct throwing_load_conversion_counter {
+    using value_type = reg;
+
+    throwing_load_conversion_counter() noexcept = default;
+    void store(const value_type) noexcept {}
+    [[nodiscard]] throwing_conversion_proxy load() const noexcept { return {}; }
+    [[nodiscard]] value_type load_relaxed() const noexcept { return 0u; }
+    void add(const value_type) noexcept {}
+    void inc() noexcept {}
+};
+
+struct throwing_relaxed_conversion_counter {
+    using value_type = reg;
+
+    throwing_relaxed_conversion_counter() noexcept = default;
+    void store(const value_type) noexcept {}
+    [[nodiscard]] value_type load() const noexcept { return 0u; }
+    [[nodiscard]] throwing_conversion_proxy load_relaxed() const noexcept {
+        return {};
+    }
+    void add(const value_type) noexcept {}
+    void inc() noexcept {}
+};
+
+struct split_conversion_proxy {
+    operator std::uint16_t() const noexcept { return 0u; }
+    operator reg() const noexcept(false) { return 0u; }
+};
+
+struct throwing_reg_load_conversion_counter {
+    using value_type = std::uint16_t;
+
+    throwing_reg_load_conversion_counter() noexcept = default;
+    void store(const value_type) noexcept {}
+    [[nodiscard]] split_conversion_proxy load() const noexcept { return {}; }
+    [[nodiscard]] value_type load_relaxed() const noexcept { return 0u; }
+    void add(const value_type) noexcept {}
+    void inc() noexcept {}
+};
+
+struct throwing_reg_relaxed_conversion_counter {
+    using value_type = std::uint16_t;
+
+    throwing_reg_relaxed_conversion_counter() noexcept = default;
+    void store(const value_type) noexcept {}
+    [[nodiscard]] value_type load() const noexcept { return 0u; }
+    [[nodiscard]] split_conversion_proxy load_relaxed() const noexcept {
+        return {};
+    }
+    void add(const value_type) noexcept {}
+    void inc() noexcept {}
+};
+
 using custom_policy = ::spsc::policy::Policy<custom_counter>;
 using custom_policy_without_relaxed_load =
     ::spsc::policy::Policy<custom_counter_without_relaxed_load>;
@@ -506,6 +593,14 @@ static_assert(!::spsc::policy::detail::is_counter_like_v<no_value_counter>);
 static_assert(!::spsc::policy::detail::is_counter_like_v<throwing_counter>);
 static_assert(!::spsc::policy::detail::is_counter_like_v<wrong_relaxed_counter>);
 static_assert(!::spsc::policy::detail::is_counter_like_v<signed_counter>);
+static_assert(!::spsc::policy::detail::is_counter_like_v<
+              throwing_load_conversion_counter>);
+static_assert(!::spsc::policy::detail::is_counter_like_v<
+              throwing_relaxed_conversion_counter>);
+static_assert(!::spsc::policy::detail::is_counter_like_v<
+              throwing_reg_load_conversion_counter>);
+static_assert(!::spsc::policy::detail::is_counter_like_v<
+              throwing_reg_relaxed_conversion_counter>);
 static_assert(::spsc::alloc::policy_allocator_alignment_v<custom_aligned_policy> == 32u);
 static_assert(::spsc::alloc::policy_allocator_alignment_v<
                   custom_enum_aligned_policy> == 32u);
@@ -666,6 +761,123 @@ bool verify_queue_raw_storage_runtime()
     return !dynamic_queue.is_valid() &&
            class_specific_new_value::destruction_count ==
                (destroyed_before_dynamic + 2u);
+}
+
+bool verify_address_of_hygiene_runtime()
+{
+    hostile_fifo fifo;
+    hostile_address_value* ptr = fifo.try_emplace(11);
+    if (ptr == nullptr || ptr->payload != 11 || fifo.try_front() == nullptr ||
+        fifo.try_front()->payload != 11) {
+        return false;
+    }
+    const hostile_fifo& const_fifo = fifo;
+    if (const_fifo.try_front() == nullptr ||
+        const_fifo.try_front()->payload != 11) {
+        return false;
+    }
+    const auto fifo_snapshot = fifo.make_snapshot();
+    if (fifo_snapshot.empty() || fifo_snapshot.begin()->payload != 11 ||
+        !fifo.try_pop()) {
+        return false;
+    }
+    ptr = fifo.try_claim();
+    if (ptr == nullptr) {
+        return false;
+    }
+    *ptr = hostile_address_value{12};
+    if (!fifo.try_publish() || fifo.try_front() == nullptr ||
+        fifo.try_front()->payload != 12 || !fifo.try_pop()) {
+        return false;
+    }
+
+    hostile_address_value view_storage[8]{};
+    hostile_fifo_view view{view_storage};
+    ptr = view.try_emplace(21);
+    if (!view.is_valid() || ptr == nullptr || ptr->payload != 21 ||
+        view.try_front() == nullptr || view.try_front()->payload != 21) {
+        return false;
+    }
+    const hostile_fifo_view& const_view = view;
+    if (const_view.try_front() == nullptr ||
+        const_view.try_front()->payload != 21 || !view.try_pop()) {
+        return false;
+    }
+    view.detach();
+    if (!view.attach(view_storage)) {
+        return false;
+    }
+    const hostile_fifo_view::state_t empty_state{};
+    view.detach();
+    if (!view.attach(view_storage, empty_state)) {
+        return false;
+    }
+
+    hostile_latest latest;
+    ptr = latest.try_emplace(31);
+    if (ptr == nullptr || latest.try_front() == nullptr ||
+        latest.try_front()->payload != 31 || !latest.try_pop()) {
+        return false;
+    }
+    ptr = latest.try_claim();
+    if (ptr == nullptr) {
+        return false;
+    }
+    *ptr = hostile_address_value{32};
+    if (!latest.try_publish() || !latest.try_pop()) {
+        return false;
+    }
+
+    hostile_dynamic_latest dynamic_latest{8u};
+    ptr = dynamic_latest.try_emplace(33);
+    if (ptr == nullptr || dynamic_latest.try_front() == nullptr ||
+        dynamic_latest.try_front()->payload != 33 ||
+        !dynamic_latest.try_pop()) {
+        return false;
+    }
+    ptr = dynamic_latest.try_claim();
+    if (ptr == nullptr) {
+        return false;
+    }
+    *ptr = hostile_address_value{34};
+    if (!dynamic_latest.try_publish() || !dynamic_latest.try_pop()) {
+        return false;
+    }
+
+    hostile_chunk chunk;
+    ptr = chunk.try_emplace(41);
+    const hostile_chunk& const_chunk = chunk;
+    if (ptr == nullptr || chunk.try_front() == nullptr ||
+        chunk.try_back() == nullptr || const_chunk.try_front() == nullptr ||
+        const_chunk.try_back() == nullptr || ptr->payload != 41) {
+        return false;
+    }
+
+    hostile_dynamic_chunk dynamic_chunk;
+    if (!dynamic_chunk.reserve(8u)) {
+        return false;
+    }
+    ptr = dynamic_chunk.try_emplace(42);
+    const hostile_dynamic_chunk& const_dynamic_chunk = dynamic_chunk;
+    if (ptr == nullptr || dynamic_chunk.try_front() == nullptr ||
+        dynamic_chunk.try_back() == nullptr ||
+        const_dynamic_chunk.try_front() == nullptr ||
+        const_dynamic_chunk.try_back() == nullptr || ptr->payload != 42) {
+        return false;
+    }
+
+    hostile_queue queue;
+    ptr = queue.try_emplace(51);
+    if (ptr == nullptr || ptr->payload != 51) {
+        return false;
+    }
+    const auto queue_snapshot = queue.make_snapshot();
+    if (queue_snapshot.empty() || queue_snapshot.begin()->payload != 51 ||
+        !queue.try_pop()) {
+        return false;
+    }
+
+    return true;
 }
 
 bool verify_copy_and_swap_runtime()
@@ -831,6 +1043,7 @@ int main()
 {
     return verify_value_swap_runtime() &&
                    verify_queue_raw_storage_runtime() &&
+                   verify_address_of_hygiene_runtime() &&
                    verify_copy_and_swap_runtime()
                ? 0
                : 1;

@@ -746,6 +746,11 @@ The `{head, tail}` state is not a self-contained geometry record. For
 `pool_view`, also persist and validate `buffer_size`, slot ordering, and backing
 buffer layout.
 
+Do not write `state_t` bytes directly to disk or a shared protocol. Its fields
+use platform-sized `reg`, so width, ABI layout, and byte order can differ.
+Serialize into an application-owned fixed-width, versioned format and validate
+the decoded values before constructing `state_t` for a matching geometry.
+
 ## 23. Drain One Container Into Another
 
 ```cpp

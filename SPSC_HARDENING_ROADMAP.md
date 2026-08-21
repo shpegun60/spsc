@@ -657,8 +657,9 @@ do not silently treat a skipped sanitizer or runtime job as a pass.
   Cortex-M4 and Cortex-M7 with `-mthumb -fno-exceptions -fno-rtti` and a forced
   32-byte cache line. Cortex-M0 is rejected by the default lock-free atomic gate
   and passes when `SPSC_REQUIRE_LOCK_FREE=0`; that is a pre-existing toolchain/
-  policy limitation, not an H8 regression. CI still automates AArch64 rather
-  than `arm-none-eabi`, so Cortex-M automation remains an explicit follow-up.
+  policy limitation, not an H8 regression. The v3.0.2 stabilization gate adds
+  actual `arm-none-eabi-g++ -mcpu=cortex-m7 -mthumb` CI alongside the existing
+  AArch64 portability smoke.
 
 ## H8 - Fused Monolithic Single-Item Operations
 
