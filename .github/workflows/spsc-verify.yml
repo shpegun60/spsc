@@ -351,8 +351,10 @@ jobs:
           )
           arm-none-eabi-g++ --version
           arm-none-eabi-g++ "${common_flags[@]}" \
+            -DSPSC_TEST_FREESTANDING_ALLOCATOR=1 \
             tests/standalone/h7_header_smoke.cpp
           arm-none-eabi-g++ "${common_flags[@]}" \
+            -DSPSC_TEST_FREESTANDING_ALLOCATOR=1 \
             -DSPSC_ENABLE_SHADOW_INDICES=1 \
             -DSPSC_SHADOW_ALLOW_32BIT=1 \
             tests/standalone/h7_header_smoke.cpp

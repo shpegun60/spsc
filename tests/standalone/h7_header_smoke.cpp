@@ -149,8 +149,15 @@ static_assert(std::is_same_v<
               "fast_queue must remain the explicit CFA alias");
 
 using alias_value_type = std::uint32_t;
+#if defined(SPSC_TEST_FREESTANDING_ALLOCATOR)
+using alias_value_alloc = ::spsc::alloc::basic_allocator<
+    alias_value_type, ::spsc::alloc::fail_mode::returns_null>;
+using alias_byte_alloc = ::spsc::alloc::basic_allocator<
+    std::byte, ::spsc::alloc::fail_mode::returns_null>;
+#else
 using alias_value_alloc = std::allocator<alias_value_type>;
 using alias_byte_alloc = std::allocator<std::byte>;
+#endif
 
 using bare_default_fifo = ::spsc::fifo<alias_value_type, 8u>;
 using explicit_default_fifo =
