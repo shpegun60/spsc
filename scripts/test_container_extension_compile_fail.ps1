@@ -61,7 +61,7 @@ $scenarios = @(
         defines = @('SPSC_TEST_THROWING_ALLOCATOR_DYNAMIC_TYPED_POOL=1')
     },
     @{
-        name = 'throwing allocator in raw latest no-exceptions mode'
+        name = 'throwing slot allocator in raw latest no-exceptions mode'
         expected = '[spsc::latest<void,0>]: no-exceptions mode requires slot allocator::allocate(size_type) to be noexcept.'
         defines = @('SPSC_TEST_THROWING_ALLOCATOR_RAW_LATEST=1')
     },
@@ -81,7 +81,7 @@ $scenarios = @(
         defines = @('SPSC_TEST_THROWING_ALLOCATOR_BUFFER_SIZE=1')
     },
     @{
-        name = 'throwing allocator in fully dynamic buffer_pool no-exceptions mode'
+        name = 'throwing slot allocator in fully dynamic buffer_pool no-exceptions mode'
         expected = '[spsc::buffer_pool]: no-exceptions mode requires slot allocator::allocate(size_type) to be noexcept.'
         defines = @('SPSC_TEST_THROWING_ALLOCATOR_BUFFER_SHAPE=1')
     },

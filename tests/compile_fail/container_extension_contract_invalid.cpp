@@ -74,6 +74,35 @@ struct throwing_allocate_allocator {
     void deallocate(pointer, size_type) noexcept {}
 };
 
+// Multi-rebind containers use role-specific allocators so each negative test
+// violates exactly one allocation contract.
+template<class T, class ThrowingValue>
+struct throwing_value_allocate_allocator {
+    using value_type = T;
+    using pointer = T*;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using is_always_equal = std::true_type;
+
+    template<class U>
+    struct rebind {
+        using other = throwing_value_allocate_allocator<U, ThrowingValue>;
+    };
+
+    throwing_value_allocate_allocator() noexcept = default;
+
+    template<class U>
+    throwing_value_allocate_allocator(
+        const throwing_value_allocate_allocator<U, ThrowingValue>&) noexcept {}
+
+    [[nodiscard]] pointer allocate(size_type) noexcept(
+        !std::is_same_v<value_type, ThrowingValue>) {
+        return nullptr;
+    }
+
+    void deallocate(pointer, size_type) noexcept {}
+};
+
 template<class T>
 struct throwing_pointer_table_allocator {
     using value_type = T;
@@ -117,23 +146,23 @@ using rejected_container =
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_STATIC_POOL)
 using rejected_container =
     spsc::pool<8u, spsc::policy::P,
-               throwing_allocate_allocator<std::byte>>;
+               throwing_value_allocate_allocator<std::byte, std::byte>>;
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_DYNAMIC_POOL)
 using rejected_container =
     spsc::pool<0u, spsc::policy::P,
-               throwing_allocate_allocator<std::byte>>;
+               throwing_pointer_table_allocator<std::byte>>;
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_STATIC_TYPED_POOL)
 using rejected_container =
     spsc::typed_pool<int, 8u, spsc::policy::P,
-                     throwing_allocate_allocator<std::byte>>;
+                     throwing_value_allocate_allocator<std::byte, int>>;
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_DYNAMIC_TYPED_POOL)
 using rejected_container =
     spsc::typed_pool<int, 0u, spsc::policy::P,
-                     throwing_allocate_allocator<std::byte>>;
+                     throwing_pointer_table_allocator<std::byte>>;
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_RAW_LATEST)
 using rejected_container =
     spsc::latest<void, 0u, spsc::policy::P,
-                 throwing_allocate_allocator<std::byte>>;
+                 throwing_pointer_table_allocator<std::byte>>;
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_TYPED_LATEST)
 using rejected_container =
     spsc::latest<int, 0u, spsc::policy::P,
@@ -144,12 +173,12 @@ using rejected_container =
                       throwing_allocate_allocator<std::byte>>;
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_BUFFER_SIZE)
 using rejected_container =
-    spsc::buffer_pool<int, 0u, 4u, spsc::policy::P,
-                      throwing_allocate_allocator<std::byte>>;
+    spsc::buffer_pool<std::byte, 0u, 4u, spsc::policy::P,
+                      throwing_value_allocate_allocator<std::byte, std::byte>>;
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_BUFFER_SHAPE)
 using rejected_container =
-    spsc::buffer_pool<int, 0u, 0u, spsc::policy::P,
-                      throwing_allocate_allocator<std::byte>>;
+    spsc::buffer_pool<std::byte, 0u, 0u, spsc::policy::P,
+                      throwing_pointer_table_allocator<std::byte>>;
 #elif defined(SPSC_TEST_THROWING_POINTER_TABLE_STATIC_POOL)
 using rejected_container =
     spsc::pool<8u, spsc::policy::P,
