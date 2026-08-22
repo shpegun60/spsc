@@ -14,6 +14,38 @@ $compilerPath = $compilerCommand.Source
 $compilerFileName = [IO.Path]::GetFileName($compilerPath)
 $isMsvc = $compilerFileName -in @('cl', 'cl.exe', 'clang-cl', 'clang-cl.exe')
 
+function Get-UniqueLibraryContractMessages {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DiagnosticText
+    )
+
+    $messages = @()
+    foreach ($line in ($DiagnosticText -split "\r?\n")) {
+        $plainLine = [regex]::Replace(
+            $line,
+            "\x1B\[[0-?]*[ -/]*[@-~]",
+            '')
+
+        if ($plainLine -notmatch '(?i)(static assertion failed|static_assert failed)') {
+            continue
+        }
+
+        $contractMatch = [regex]::Match(
+            $plainLine,
+            '\[(?:spsc::)?[A-Za-z_][^\]]*\]:\s*.+$')
+        if (-not $contractMatch.Success) {
+            continue
+        }
+
+        $message = $contractMatch.Value.Trim()
+        $message = $message.TrimEnd([char[]]@([char]0x27, [char]0x22))
+        $messages += $message
+    }
+
+    return @($messages | Sort-Object -Unique)
+}
+
 $scenarios = @(
     @{
         name = 'allocator size_type narrower than reg'
@@ -146,7 +178,20 @@ foreach ($scenario in $scenarios) {
     if ($diagnosticText -notmatch [regex]::Escape($scenario.expected)) {
         throw "$($scenario.name) failed for an unexpected reason:`n$diagnosticText"
     }
+
+    $contractMessages = @(Get-UniqueLibraryContractMessages $diagnosticText)
+    if (($contractMessages.Count -ne 1) -or
+        ($contractMessages[0] -cne $scenario.expected)) {
+        $found = if ($contractMessages.Count -eq 0) {
+            '<none>'
+        } else {
+            $contractMessages -join [Environment]::NewLine
+        }
+        throw "$($scenario.name) emitted ambiguous library contract diagnostics. " +
+              "Expected exactly:`n$($scenario.expected)`nFound:`n$found`n" +
+              "Full compiler output:`n$diagnosticText"
+    }
 }
 
-Write-Output "PASS: invalid container extension contracts were rejected by $compilerPath"
+Write-Output "PASS: invalid container extension contracts were rejected unambiguously by $compilerPath"
 exit 0

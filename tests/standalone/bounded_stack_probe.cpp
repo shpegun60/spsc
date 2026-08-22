@@ -31,6 +31,10 @@ using wrapped_array_fifo =
     ::spsc::array_fifo<std::uint16_t, 32u, 128u, ::spsc::policy::P>;
 using wrapped_chunk_fifo =
     ::spsc::chunk_fifo<std::uint16_t, 32u, 128u, ::spsc::policy::P>;
+using large_inner_array_fifo =
+    ::spsc::array_fifo<std::byte, kLargeCount, 2u, ::spsc::policy::P>;
+using large_inner_chunk_fifo =
+    ::spsc::chunk_fifo<std::byte, kLargeCount, 2u, ::spsc::policy::P>;
 using large_pool =
     ::spsc::pool<kLargeCount, ::spsc::policy::P>;
 using large_typed_pool =
@@ -41,6 +45,8 @@ using large_fixed_count_buffers =
 
 static_assert(std::is_copy_constructible_v<large_fifo>);
 static_assert(std::is_copy_assignable_v<large_fifo>);
+static_assert(std::is_copy_assignable_v<large_inner_array_fifo>);
+static_assert(std::is_copy_assignable_v<large_inner_chunk_fifo>);
 static_assert(std::is_copy_constructible_v<large_pool>);
 static_assert(std::is_copy_assignable_v<large_pool>);
 static_assert(std::is_copy_constructible_v<large_typed_pool>);
@@ -64,6 +70,20 @@ spsc_stack_array_fifo_assign(wrapped_array_fifo& destination,
 SPSC_STACK_NOINLINE void
 spsc_stack_chunk_fifo_assign(wrapped_chunk_fifo& destination,
                              const wrapped_chunk_fifo& source) {
+    destination = source;
+}
+
+SPSC_STACK_NOINLINE void
+spsc_stack_large_inner_array_fifo_assign(
+    large_inner_array_fifo& destination,
+    const large_inner_array_fifo& source) {
+    destination = source;
+}
+
+SPSC_STACK_NOINLINE void
+spsc_stack_large_inner_chunk_fifo_assign(
+    large_inner_chunk_fifo& destination,
+    const large_inner_chunk_fifo& source) {
     destination = source;
 }
 

@@ -57,7 +57,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   fixed-count `buffer_pool` copy/resize transactions now keep their temporary
   pointer tables in allocator-backed storage, bounding management stack use
   independently of compile-time `Capacity`/`Count` without changing persistent
-  container layout.
+  container layout. Custom allocators for those forms must therefore support
+  the documented raw pointer-table rebind, including no-throw allocation in
+  no-exceptions builds.
 
 ### Tests
 
@@ -77,6 +79,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   checked-path setup.
 - Added allocation-failure/state-preservation regressions for transient static
   management tables and an exception-mode static-`fifo` basic-guarantee test.
+- Compile-fail verification now requires exactly one unique library contract
+  diagnostic per negative scenario, and bounded-stack wrapper probes cover
+  both large outer FIFO capacity and large inner array/chunk capacity.
 
 ### CI
 
@@ -84,7 +89,8 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   code generation with symbol/disassembly checks for unwanted runtime helpers.
 - Added host (both exception modes) and Cortex-M7 `-fstack-usage` gates that
   reject static management frames above 512 bytes, using
-  `Capacity`/`Count == 4096` probes.
+  `Capacity`/`Count == 4096` probes plus `array_fifo`/`chunk_fifo` inner
+  dimensions of 4096.
 
 ### Documentation
 
