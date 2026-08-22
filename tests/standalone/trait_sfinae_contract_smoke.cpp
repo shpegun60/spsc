@@ -246,8 +246,8 @@ struct hostile_construct_allocator {
 };
 
 struct relocation_probe_state {
-    static inline std::size_t allocation_calls{0u};
-    static inline std::size_t live_blocks{0u};
+    [[maybe_unused]] static inline std::size_t allocation_calls{0u};
+    [[maybe_unused]] static inline std::size_t live_blocks{0u};
 };
 
 template<class T>
