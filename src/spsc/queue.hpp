@@ -477,7 +477,8 @@ public:
             }
         }
 
-        pop(snap_used);
+        destroy_prefix_(snap_used);
+        Base::advance_tail_checked(snap_used);
         return true;
     }
 
@@ -801,14 +802,7 @@ public:
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(consumer_can_read_cached_(n));
-
-        if constexpr (!std::is_trivially_destructible_v<value_type>) {
-            size_type idx = Base::tail();
-            const size_type mask = Base::mask();
-            for (size_type i = 0; i < n; ++i) {
-                detail::destroy_at(slot_ptr((idx + i) & mask));
-            }
-        }
+        destroy_prefix_(n);
         Base::advance_tail_unchecked(n);
     }
     // Guard against accidental overload selection when passing a value variable
@@ -827,7 +821,8 @@ public:
         if (RB_UNLIKELY(!consumer_can_read_cached_(n))) {
             return false;
         }
-        pop(n);
+        destroy_prefix_(n);
+        Base::advance_tail_checked(n);
         return true;
     }
     // Same trap as pop(U&): prevent q.try_pop(out) from accidentally binding to
@@ -1524,6 +1519,16 @@ private:
     [[nodiscard]] RB_FORCEINLINE bool
     consumer_can_read_cached_(const size_type n = 1u) const noexcept {
         return is_valid() && Base::consumer_can_read_cached(n);
+    }
+
+    RB_FORCEINLINE void destroy_prefix_(const size_type n) noexcept {
+        if constexpr (!std::is_trivially_destructible_v<value_type>) {
+            const size_type tail = Base::tail();
+            const size_type mask = Base::mask();
+            for (size_type i = 0u; i < n; ++i) {
+                detail::destroy_at(slot_ptr((tail + i) & mask));
+            }
+        }
     }
 
     void allocate_static_() noexcept(kNoexceptAllocate) {

@@ -2,6 +2,7 @@
 #include <limits>
 
 #include "fifo.hpp"
+#include "queue.hpp"
 
 static_assert(sizeof(reg) == 4u,
               "H6 32-bit matrix must be compiled for a genuine 32-bit reg domain");
@@ -19,6 +20,36 @@ static_assert(spsc::detail::rb_use_shadow_v<h6_strict_policy> ==
 
 namespace {
 
+template<bool SingleWriter>
+class counting_atomic_counter
+{
+public:
+    static constexpr bool is_atomic = true;
+    static constexpr bool is_single_writer = SingleWriter;
+    using value_type = reg;
+
+    static inline reg synchronized_loads = 0u;
+
+    static void reset_load_count() noexcept { synchronized_loads = 0u; }
+
+    void store(const value_type value) noexcept { value_ = value; }
+    [[nodiscard]] value_type load() const noexcept
+    {
+        ++synchronized_loads;
+        return value_;
+    }
+    [[nodiscard]] value_type load_relaxed() const noexcept { return value_; }
+    void add(const value_type value) noexcept { value_ += value; }
+    void inc() noexcept { ++value_; }
+
+private:
+    value_type value_{0u};
+};
+
+template<bool SingleWriter>
+using counting_policy = spsc::policy::Policy<
+    counting_atomic_counter<SingleWriter>, spsc::policy::PlainCounter<reg>>;
+
 template<reg Capacity, class Policy>
 class shadow_alias_probe final
     : private spsc::SPSCbase<Capacity, Policy>
@@ -28,11 +59,17 @@ class shadow_alias_probe final
     static constexpr reg kCapacity = 8u;
     static constexpr reg kMax = std::numeric_limits<reg>::max();
 
-    void prepare(const reg head, const reg tail) noexcept
+    void prepare_stale(const reg head, const reg tail) noexcept
     {
         Base::clear(); // keep both endpoint-owned shadows ancient at zero
         Base::set_head(head);
         Base::set_tail(tail);
+    }
+
+    void prepare_synced(const reg head, const reg tail) noexcept
+    {
+        prepare_stale(head, tail);
+        Base::sync_cache();
     }
 
 public:
@@ -47,7 +84,7 @@ public:
     [[nodiscard]] bool unchecked_single_producer_refreshes() noexcept
     {
         const reg tail = static_cast<reg>(kMax - 4u); // 0xFFFF'FFFB
-        prepare(2u, tail);                            // used == 7
+        prepare_stale(2u, tail);                      // used == 7
         Base::producer_commit_owner(2u);              // head == 3, full
         return Base::producer_full_cached();
     }
@@ -56,7 +93,7 @@ public:
     {
         const reg head = static_cast<reg>(kMax - 3u); // 0xFFFF'FFFC
         const reg tail = static_cast<reg>(kMax - 4u); // one readable slot
-        prepare(head, tail);
+        prepare_stale(head, tail);
         Base::consumer_commit_owner(tail);            // tail == head, empty
         return Base::consumer_empty_cached();
     }
@@ -64,7 +101,7 @@ public:
     [[nodiscard]] bool unchecked_bulk_producer_refreshes() noexcept
     {
         const reg tail = static_cast<reg>(kMax - 4u);
-        prepare(1u, tail);                            // used == 6
+        prepare_stale(1u, tail);                      // used == 6
         Base::advance_head_unchecked(2u);             // head == 3, full
         return Base::producer_full_cached();
     }
@@ -73,7 +110,7 @@ public:
     {
         const reg head = static_cast<reg>(kMax - 3u);
         const reg tail = static_cast<reg>(kMax - 5u); // two readable slots
-        prepare(head, tail);
+        prepare_stale(head, tail);
         Base::advance_tail_unchecked(2u);             // tail == head, empty
         return Base::consumer_empty_cached();
     }
@@ -81,7 +118,7 @@ public:
     [[nodiscard]] bool checked_paths_remain_valid() noexcept
     {
         const reg full_tail = static_cast<reg>(kMax - 4u);
-        prepare(2u, full_tail);                       // used == 7
+        prepare_synced(2u, full_tail);                // used == 7
         const auto write = Base::producer_single_snapshot();
         if (!write.available) {
             return false;
@@ -93,7 +130,7 @@ public:
 
         const reg empty_head = static_cast<reg>(kMax - 3u);
         const reg empty_tail = static_cast<reg>(kMax - 4u);
-        prepare(empty_head, empty_tail);              // one readable slot
+        prepare_synced(empty_head, empty_tail);       // one readable slot
         const auto read = Base::consumer_single_snapshot();
         if (!read.available) {
             return false;
@@ -103,7 +140,7 @@ public:
             return false;
         }
 
-        prepare(1u, full_tail);                       // six occupied slots
+        prepare_synced(1u, full_tail);                // six occupied slots
         if (!Base::producer_can_write_cached(2u)) {
             return false;
         }
@@ -113,7 +150,7 @@ public:
         }
 
         const reg two_tail = static_cast<reg>(kMax - 5u);
-        prepare(empty_head, two_tail);                // two readable slots
+        prepare_synced(empty_head, two_tail);         // two readable slots
         if (!Base::consumer_can_read_cached(2u)) {
             return false;
         }
@@ -177,6 +214,54 @@ bool fifo_round_trip() noexcept
     return q.empty() && q.size() == 0u && q.free() == q.capacity();
 }
 
+template<bool SingleWriter>
+bool checked_queue_paths_preserve_shadow() noexcept
+{
+    using policy_type = counting_policy<SingleWriter>;
+    using counter_type = typename policy_type::counter_type;
+    spsc::queue<std::uint32_t, 8u, policy_type> q;
+
+    if (!q.is_valid() || !q.try_push(10u) || !q.try_push(11u) ||
+        !q.try_push(12u) || !q.try_pop(2u)) {
+        return false;
+    }
+
+    counter_type::reset_load_count();
+    const auto* remaining = q.try_front();
+    if (!remaining || *remaining != 12u) {
+        return false;
+    }
+    if constexpr (spsc::detail::rb_use_shadow_v<policy_type>) {
+        if (counter_type::synchronized_loads != 0u) {
+            return false;
+        }
+    }
+    if (!q.try_pop()) {
+        return false;
+    }
+
+    if (!q.try_push(20u) || !q.try_push(21u)) {
+        return false;
+    }
+    const auto snapshot = q.make_snapshot();
+    if (!q.try_push(22u) || !q.try_consume(snapshot)) {
+        return false;
+    }
+
+    counter_type::reset_load_count();
+    const auto* after_snapshot = q.try_front();
+    if (!after_snapshot || *after_snapshot != 22u) {
+        return false;
+    }
+    if constexpr (spsc::detail::rb_use_shadow_v<policy_type>) {
+        if (counter_type::synchronized_loads != 0u) {
+            return false;
+        }
+    }
+
+    return q.try_pop() && q.empty();
+}
+
 } // namespace
 
 int main()
@@ -186,7 +271,9 @@ int main()
                    hostile_shadow_alias_suite<8u, h6_fast_policy>() &&
                    hostile_shadow_alias_suite<0u, h6_fast_policy>() &&
                    hostile_shadow_alias_suite<8u, h6_strict_policy>() &&
-                   hostile_shadow_alias_suite<0u, h6_strict_policy>()
+                   hostile_shadow_alias_suite<0u, h6_strict_policy>() &&
+                   checked_queue_paths_preserve_shadow<true>() &&
+                   checked_queue_paths_preserve_shadow<false>()
                ? 0
                : 1;
 }

@@ -39,6 +39,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   full-period alias that could otherwise overwrite unread data or expose an
   empty slot. Checked commits retain their cached fast path, and 64-bit H8 code
   is unchanged.
+- Validated `queue::try_pop(n)` and `queue::try_consume(snapshot)` operations
+  now share prefix destruction with their unchecked counterparts but advance
+  through the checked consumer path, preserving a proven consumer shadow.
 - In no-exceptions mode, a non-empty dynamic `queue` rejects growth before
   allocation unless its live values have a no-throw move or copy construction
   path. Empty queues can still grow for immovable or throwing-relocation types.
@@ -62,8 +65,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Added deterministic static/dynamic genuine-32-bit stale-shadow wrap probes
   for strict-RMW and single-writer atomic policies, mode-0 queue
   relocation/state-preservation coverage, hostile non-zero counter/geometry
-  construction checks, and hostile allocator regressions for all four dynamic
-  pointer-table allocation paths.
+  construction checks, hostile allocator regressions for all four dynamic
+  pointer-table allocation paths, and checked queue-path shadow-preservation
+  coverage. Hostile stale-shadow setup is kept separate from synchronized
+  checked-path setup.
 
 ### CI
 
