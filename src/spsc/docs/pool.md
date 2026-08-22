@@ -211,6 +211,11 @@ outside the container.
 - `destroy()` frees the slot array and backing buffers
 - `swap(other)` exchanges storage and queue state
 
+Static-depth copy and non-zero resize use an allocator-backed transient pointer
+table. Their stack usage does not grow with `Capacity`, and the table is not a
+persistent field. If that temporary allocation returns `nullptr`, assignment
+keeps the previous destination state and `resize()` returns `false`.
+
 ### State And Introspection
 
 - `is_valid()`

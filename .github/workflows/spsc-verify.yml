@@ -125,6 +125,17 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y ${{ matrix.package }}
       - name: Verify owner-load counts in the single-item FIFO and queue probes
         run: bash scripts/check_h8_hotpath_asm.sh --compiler '${{ matrix.compiler }}'
+      - name: Verify bounded static-management stack usage
+        run: |
+          bash scripts/check_bounded_stack_usage.sh \
+            --compiler '${{ matrix.compiler }}' \
+            --limit 512 \
+            --work-dir "$RUNNER_TEMP/bounded-stack-${{ matrix.compiler }}-mode0"
+          bash scripts/check_bounded_stack_usage.sh \
+            --compiler '${{ matrix.compiler }}' \
+            --limit 512 \
+            --work-dir "$RUNNER_TEMP/bounded-stack-${{ matrix.compiler }}-exceptions" \
+            --flag=-DSPSC_ENABLE_EXCEPTIONS=1
       - name: Verify H0R benchmark protocol and JSON classification
         run: |
           extra_flags=()
@@ -259,6 +270,19 @@ jobs:
             -o "$RUNNER_TEMP/v303_exception_runtime_smoke" \
             tests/standalone/v303_exception_runtime_smoke.cpp
           "$RUNNER_TEMP/v303_exception_runtime_smoke"
+      - name: Verify bounded static-container management
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic-errors \
+            -I. -Isrc/spsc \
+            -o "$RUNNER_TEMP/bounded_management_runtime_smoke" \
+            tests/standalone/bounded_management_runtime_smoke.cpp
+          "$RUNNER_TEMP/bounded_management_runtime_smoke"
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic-errors \
+            -DSPSC_ENABLE_EXCEPTIONS=1 \
+            -I. -Isrc/spsc \
+            -o "$RUNNER_TEMP/bounded_management_runtime_smoke_exceptions" \
+            tests/standalone/bounded_management_runtime_smoke.cpp
+          "$RUNNER_TEMP/bounded_management_runtime_smoke_exceptions"
       - name: Build dashboard and one runner from a clean directory
         run: |
           bash scripts/run_h7_matrix.sh \
@@ -369,6 +393,18 @@ jobs:
             tests/standalone/stm32h7_buffer_pool_smoke.cpp
           arm-none-eabi-g++ "${syntax_flags[@]}" \
             tests/standalone/trait_sfinae_contract_smoke.cpp
+          bash scripts/check_bounded_stack_usage.sh \
+            --compiler arm-none-eabi-g++ \
+            --limit 512 \
+            --work-dir "$RUNNER_TEMP/bounded-stack-cortex-m7" \
+            --flag=-mcpu=cortex-m7 \
+            --flag=-mthumb \
+            --flag=-mfloat-abi=soft \
+            --flag=-ffreestanding \
+            --flag=-fno-exceptions \
+            --flag=-fno-rtti \
+            --flag=-fno-unwind-tables \
+            --flag=-fno-asynchronous-unwind-tables
           codegen_object="$RUNNER_TEMP/stm32_fast_alias_probe.o"
           disassembly="$RUNNER_TEMP/stm32_fast_alias_probe.txt"
           arm-none-eabi-g++ "${common_flags[@]}" \
@@ -429,6 +465,16 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
             -DSPSC_ENABLE_EXCEPTIONS=1 \
             -I. -Isrc/spsc -fsyntax-only tests/standalone/trait_sfinae_contract_smoke.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -I. -Isrc/spsc -fsyntax-only \
+            tests/standalone/bounded_management_runtime_smoke.cpp
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -DSPSC_ENABLE_EXCEPTIONS=1 \
+            -I. -Isrc/spsc -fsyntax-only \
+            tests/standalone/bounded_management_runtime_smoke.cpp
+          g++ -std=c++17 -O2 -DNDEBUG -Wall -Wextra -Werror -pedantic \
+            -I. -Isrc/spsc -fsyntax-only \
+            tests/standalone/bounded_stack_probe.cpp
 
   windows-msvc-header-smoke:
     name: Windows MSVC header smoke
@@ -445,7 +491,7 @@ jobs:
             -property installationPath
           if ([string]::IsNullOrWhiteSpace($installPath)) { throw 'MSVC build tools were not found.' }
           $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
-          $command = "call `"$vcvars`" && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_DEFAULT_POLICY_ATOMIC=0 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_DEFAULT_POLICY_ATOMIC=1 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_ENABLE_EXCEPTIONS=1 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 /DSPSC_DEFAULT_POLICY_ATOMIC=0 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 /DSPSC_DEFAULT_POLICY_ATOMIC=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++20 /W4 /WX /EHsc /DSPSC_HAS_SPAN=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp"
+          $command = "call `"$vcvars`" && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_DEFAULT_POLICY_ATOMIC=0 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_DEFAULT_POLICY_ATOMIC=1 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_ENABLE_EXCEPTIONS=1 /I. /Isrc\spsc /Zs tests\standalone\trait_sfinae_contract_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\bounded_management_runtime_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_ENABLE_EXCEPTIONS=1 /I. /Isrc\spsc /Zs tests\standalone\bounded_management_runtime_smoke.cpp && cl /nologo /std:c++17 /O2 /DNDEBUG /W4 /WX /EHsc /I. /Isrc\spsc /Zs tests\standalone\bounded_stack_probe.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 /DSPSC_DEFAULT_POLICY_ATOMIC=0 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++17 /W4 /WX /EHsc /DSPSC_TEST_LEGACY_DEFAULT_POLICY=1 /DSPSC_DEFAULT_POLICY_ATOMIC=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp && cl /nologo /std:c++20 /W4 /WX /EHsc /DSPSC_HAS_SPAN=1 /I. /Isrc\spsc /Zs tests\standalone\h7_header_smoke.cpp"
           cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

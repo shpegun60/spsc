@@ -248,11 +248,12 @@ public:
             }
 
             swap(tmp);
-        } else if constexpr (::spsc::detail::value_swap_noexcept_v<storage_type>) {
-            fifo tmp(other);
-            swap(tmp);
         } else {
-            // copy_from() already does Base::clear() in the static branch.
+            // Static storage is embedded in the container.  A copy-and-swap
+            // temporary would therefore put Capacity * sizeof(T) bytes on the
+            // caller's stack.  Copy in place instead.  If a payload assignment
+            // throws, copy_from() leaves the destination logically empty and
+            // valid (basic guarantee); no proportional scratch is materialized.
             copy_from(other);
         }
         return *this;

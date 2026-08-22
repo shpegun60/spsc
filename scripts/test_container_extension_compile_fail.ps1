@@ -86,6 +86,21 @@ $scenarios = @(
         defines = @('SPSC_TEST_THROWING_ALLOCATOR_BUFFER_SHAPE=1')
     },
     @{
+        name = 'throwing transient table allocator in static-depth pool no-exceptions mode'
+        expected = '[spsc::pool]: no-exceptions mode requires slot allocator::allocate(size_type) to be noexcept.'
+        defines = @('SPSC_TEST_THROWING_POINTER_TABLE_STATIC_POOL=1')
+    },
+    @{
+        name = 'throwing transient table allocator in static typed_pool no-exceptions mode'
+        expected = '[spsc::typed_pool]: no-exceptions mode requires slot allocator::allocate(size_type) to be noexcept.'
+        defines = @('SPSC_TEST_THROWING_POINTER_TABLE_STATIC_TYPED_POOL=1')
+    },
+    @{
+        name = 'throwing transient table allocator in fixed-count buffer_pool no-exceptions mode'
+        expected = '[spsc::buffer_pool]: no-exceptions mode requires pointer-table allocator::allocate(size_type) to be noexcept.'
+        defines = @('SPSC_TEST_THROWING_POINTER_TABLE_FIXED_COUNT_BUFFER_POOL=1')
+    },
+    @{
         name = 'throwing value destructor'
         expected = '[spsc::queue]: value_type destructor must be noexcept.'
         defines = @('SPSC_TEST_THROWING_DESTRUCTOR=1')

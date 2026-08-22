@@ -132,15 +132,15 @@ public:
     // ------------------------------------------------------------------------------------------
     static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
                   "[spsc::pool]: base allocator must be nothrow default-constructible.");
-    static_assert(!kDynamic || slot_alloc_traits::is_always_equal::value,
-                  "[spsc::pool]: dynamic pool requires always_equal allocator (stateless).");
-    static_assert(!kDynamic || std::is_nothrow_default_constructible_v<slot_allocator_type>,
-                  "[spsc::pool]: dynamic pool requires nothrow default-constructible slot allocator.");
-    static_assert(!kDynamic ||
-                      ::spsc::alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
+    static_assert(slot_alloc_traits::is_always_equal::value,
+                  "[spsc::pool]: slot allocator must be always_equal (stateless).");
+    static_assert(std::is_nothrow_default_constructible_v<slot_allocator_type>,
+                  "[spsc::pool]: slot allocator must be nothrow default-constructible.");
+    static_assert(
+        ::spsc::alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
                   "[spsc::pool]: slot allocator size_type must represent the reg domain.");
-    static_assert(!kDynamic || std::is_same_v<slot_pointer, pointer*>,
-                  "[spsc::pool]: dynamic pool requires allocator pointer type void** (raw).");
+    static_assert(std::is_same_v<slot_pointer, pointer*>,
+                  "[spsc::pool]: slot allocator pointer type must be void** (raw).");
     static_assert(std::is_same_v<byte_pointer, std::byte*>,
                   "[spsc::pool]: requires byte allocator pointer type std::byte* (raw).");
     static_assert(std::numeric_limits<counter_value>::digits >= 2,
@@ -159,9 +159,8 @@ public:
                   "[spsc::pool]: byte allocator must be nothrow default-constructible.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(
-        !kDynamic ||
-            ::spsc::alloc::detail::allocator_allocate_noexcept_v<
-                slot_allocator_type>,
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+            slot_allocator_type>,
         "[spsc::pool]: no-exceptions mode requires slot "
         "allocator::allocate(size_type) to be noexcept.");
     static_assert(
@@ -227,10 +226,17 @@ public:
     pool& operator=(const pool& other) {
         if (this == &other) { return *this; }
 
-        // Strong-ish guarantee: if 'other' is valid but we can't allocate, keep *this unchanged.
-        pool tmp(other);
-        if (other.is_valid() && !tmp.is_valid()) { return *this; }
-        swap(tmp);
+        if constexpr (kDynamic) {
+            // Dynamic pool objects are O(1); copy-and-swap does not create a
+            // Capacity-sized automatic object.
+            pool tmp(other);
+            if (other.is_valid() && !tmp.is_valid()) { return *this; }
+            swap(tmp);
+        } else {
+            // copy_from() builds the replacement behind an allocator-backed
+            // transient pointer table and commits only after it is complete.
+            (void)copy_from(other);
+        }
         return *this;
     }
 
@@ -1319,6 +1325,10 @@ public:
     }
 
 private:
+    using scratch_table_type =
+        ::spsc::alloc::detail::pointer_table_scratch<
+            pointer, base_allocator_type>;
+
     [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
         return !is_valid() || Base::producer_full_cached();
     }
@@ -1416,7 +1426,7 @@ private:
         }
 
         pointer* new_slots = nullptr;
-        static_slots new_static{};
+        scratch_table_type static_scratch{};
 
         byte_allocator_type ba{};
         size_type allocated = 0u;
@@ -1433,8 +1443,9 @@ private:
                     }
                 }
             } else {
-                new_static.fill(nullptr);
-                new_slots = new_static.data();
+                if (static_scratch.allocate(target_depth)) {
+                    new_slots = static_scratch.data();
+                }
             }
 
             if (RB_LIKELY(new_slots != nullptr)) {
@@ -1511,7 +1522,9 @@ private:
                 return false;
             }
         } else {
-            slots_ = new_static;
+            for (size_type i = 0u; i < target_depth; ++i) {
+                slots_[i] = new_slots[i];
+            }
             // Non-concurrent commit: restore state via Base::init() (tail=0, head=migrated).
             const bool ok = Base::init(migrated, 0u);
             SPSC_ASSERT(ok);
@@ -1521,52 +1534,122 @@ private:
         return true;
     }
 
+    [[nodiscard]] bool copy_from_static_(const pool& other) {
+        static_assert(!kDynamic,
+                      "copy_from_static_() is for static Capacity only");
+
+        const size_type target_buffer_size = other.buffer_size();
+        const size_type observed_size = other.size();
+        const size_type copy_size =
+            (observed_size <= Capacity) ? observed_size : 0u;
+
+        scratch_table_type scratch{};
+        pointer* new_slots = nullptr;
+        size_type allocated = 0u;
+        byte_allocator_type ba{};
+
+        SPSC_TRY {
+            if (scratch.allocate(Capacity)) {
+                new_slots = scratch.data();
+            }
+
+            if (new_slots != nullptr) {
+                for (; allocated < Capacity; ++allocated) {
+                    auto* buf = byte_alloc_traits::allocate(
+                        ba, target_buffer_size);
+                    if (RB_UNLIKELY(buf == nullptr)) {
+                        break;
+                    }
+                    new_slots[allocated] = static_cast<pointer>(buf);
+                }
+            }
+        } SPSC_CATCH_ALL {
+            free_buffers(new_slots, allocated, target_buffer_size);
+            SPSC_RETHROW;
+        }
+
+        if (RB_UNLIKELY(new_slots == nullptr) ||
+            RB_UNLIKELY(allocated != Capacity)) {
+            free_buffers(new_slots, allocated, target_buffer_size);
+            return false;
+        }
+
+        if (copy_size != 0u) {
+            const size_type mask = other.Base::mask();
+            const size_type tail = other.Base::tail();
+            for (size_type k = 0u; k < copy_size; ++k) {
+                std::memcpy(new_slots[k],
+                            other.data()[(tail + k) & mask],
+                            target_buffer_size);
+            }
+        }
+
+        // Allocation and payload copy are complete.  Only now replace the old
+        // state, keeping allocation failure non-mutating without an embedded
+        // Capacity-sized automatic object.
+        destroy();
+        for (size_type i = 0u; i < Capacity; ++i) {
+            slots_[i] = new_slots[i];
+        }
+        bufferSize_.store(target_buffer_size);
+
+        const bool ok = Base::init(copy_size, 0u);
+        SPSC_ASSERT(ok);
+        (void)ok;
+        return true;
+    }
+
     [[nodiscard]] bool copy_from(const pool& other) {
         if (!other.is_valid()) {
             destroy();
             return true;
         }
 
-        // Allocate using other's geometry and buffer size
-        if constexpr (kDynamic) {
-            if (!reallocate_impl(other.capacity(), other.buffer_size())) { destroy(); return false; }
+        if constexpr (!kDynamic) {
+            return copy_from_static_(other);
         } else {
-            if (!reallocate_impl(Capacity, other.buffer_size())) { destroy(); return false; }
-        }
-
-        if (!is_valid()) { destroy(); return false; }
-
-        const size_type sz = other.size();
-        if (sz == 0u) { Base::clear(); return true; }
-
-        const size_type cap = Base::capacity();
-        if (RB_UNLIKELY(sz > cap)) { Base::clear(); return true; }
-
-        const size_type m = other.Base::mask();
-        const size_type t = other.Base::tail();
-
-        const size_type bufferSize = bufferSize_.load();
-        const size_type copy_len = (bufferSize < other.buffer_size()) ? bufferSize : other.buffer_size();
-
-        // Copy queued buffers into 0..sz-1 (linearized)
-        for (size_type k = 0; k < sz; ++k) {
-            pointer src = other.data()[(t + k) & m];
-            pointer dst = slots_[k];
-            if (copy_len > 0u) {
-                std::memcpy(dst, src, copy_len);
+            if (!reallocate_impl(other.capacity(), other.buffer_size())) {
+                destroy();
+                return false;
             }
-        }
+            if (!is_valid()) {
+                destroy();
+                return false;
+            }
 
-        // Non-concurrent commit: restore state via Base::init() (tail=0, head=sz).
-        bool ok = false;
-        if constexpr (kDynamic) {
-            ok = Base::init(Base::capacity(), sz, 0u);
-        } else {
-            ok = Base::init(sz, 0u);
+            const size_type sz = other.size();
+            if (sz == 0u) {
+                Base::clear();
+                return true;
+            }
+
+            const size_type cap = Base::capacity();
+            if (RB_UNLIKELY(sz > cap)) {
+                Base::clear();
+                return true;
+            }
+
+            const size_type m = other.Base::mask();
+            const size_type t = other.Base::tail();
+            const size_type bufferSize = bufferSize_.load();
+            const size_type copy_len =
+                (bufferSize < other.buffer_size())
+                    ? bufferSize
+                    : other.buffer_size();
+
+            for (size_type k = 0; k < sz; ++k) {
+                pointer src = other.data()[(t + k) & m];
+                pointer dst = slots_[k];
+                if (copy_len > 0u) {
+                    std::memcpy(dst, src, copy_len);
+                }
+            }
+
+            const bool ok = Base::init(Base::capacity(), sz, 0u);
+            SPSC_ASSERT(ok);
+            (void)ok;
+            return true;
         }
-        SPSC_ASSERT(ok);
-        (void)ok;
-        return true;
     }
 
     void move_from(pool&& other) noexcept {

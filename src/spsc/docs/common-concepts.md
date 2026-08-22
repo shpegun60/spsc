@@ -375,12 +375,17 @@ These are generally **not** safe to call concurrently with producer/consumer tra
 
 Treat them as management operations performed while the queue is stopped.
 
-Management is not universally constant-stack. Some static `pool` resize/copy
-paths and fixed-count runtime-sized `buffer_pool` paths use a temporary pointer
-array proportional to compile-time `Capacity`/`Count`. This is outside the hot
-producer/consumer path, but embedded builds with large static shapes must budget
-that stack or avoid those management operations. A dedicated stack-usage audit
-remains separate from correctness of the SPSC hot path.
+Management stack usage is bounded independently of compile-time
+`Capacity`/`Count`. Static `fifo` copy assignment works in place instead of
+materializing a second full container. If a payload copy assignment throws, the
+destination remains valid and logically empty (basic guarantee).
+
+Static `pool` and `typed_pool`, plus `buffer_pool<T, 0, Count>`, use an
+allocator-backed transient pointer table for transactional copy/resize work.
+This does not add persistent fields or change container `sizeof`/`alignof`, but
+the management operation performs one additional temporary allocation. A null
+allocation result leaves the old destination unchanged; boolean `resize()`
+reports `false`. These rules apply only while endpoints are stopped, as above.
 
 RAII guard destructors still run during exception unwinding. Depending on the
 guard state, scope exit can publish an armed write prefix or consume an active
@@ -418,7 +423,10 @@ A custom allocator used by an allocation-backed form in this mode must expose
 does not build exception rollback handlers. This requirement applies to every
 rebound allocator that actually allocates (for example, both slot and payload
 allocators in a dynamic pool). It does not constrain an allocator template
-argument that remains unused by wholly embedded static storage. Define
+argument that remains unused by wholly embedded storage, such as static
+`fifo`, static typed `latest`, static `chunk`, or fully static `buffer_pool`.
+Static `pool`, static `typed_pool`, and runtime-sized fixed-count `buffer_pool`
+do use rebound allocators for payloads and transient management tables. Define
 `SPSC_ENABLE_EXCEPTIONS=1` build-wide when a throwing allocator is required.
 
 Runtime-shaped `buffer_pool` specializations are the deliberate exception: a

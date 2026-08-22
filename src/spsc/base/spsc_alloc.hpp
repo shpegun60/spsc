@@ -553,6 +553,104 @@ template<class Alloc>
 inline constexpr bool allocator_allocate_noexcept_v =
     allocator_allocate_noexcept<Alloc>::value;
 
+// Allocator-backed transient pointer table used by stopped-queue management
+// operations.  Keeping the table out of automatic storage bounds stack usage
+// independently of a container's compile-time Capacity/Count.  The pointed-to
+// objects are never owned by this helper; only the temporary table allocation
+// is released on scope exit.
+template<class Pointer, class BaseAlloc>
+class pointer_table_scratch {
+    static_assert(std::is_pointer_v<Pointer>,
+                  "pointer_table_scratch requires a pointer value type");
+
+public:
+    using value_type = Pointer;
+    using allocator_type =
+        typename std::allocator_traits<BaseAlloc>::template rebind_alloc<value_type>;
+    using alloc_traits = std::allocator_traits<allocator_type>;
+    using alloc_pointer = typename alloc_traits::pointer;
+    using alloc_size_type = typename alloc_traits::size_type;
+
+    static_assert(alloc_traits::is_always_equal::value,
+                  "pointer-table allocator must be always_equal");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "pointer-table allocator must be nothrow default-constructible");
+    static_assert(std::is_same_v<alloc_pointer, value_type*>,
+                  "pointer-table allocator must expose a raw pointer");
+    static_assert(allocator_size_covers_reg_v<allocator_type>,
+                  "pointer-table allocator size_type must represent reg");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(allocator_allocate_noexcept_v<allocator_type>,
+                  "no-exceptions mode requires noexcept pointer-table allocation");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+
+    pointer_table_scratch() noexcept = default;
+    pointer_table_scratch(const pointer_table_scratch&) = delete;
+    pointer_table_scratch& operator=(const pointer_table_scratch&) = delete;
+    pointer_table_scratch(pointer_table_scratch&&) = delete;
+    pointer_table_scratch& operator=(pointer_table_scratch&&) = delete;
+
+    ~pointer_table_scratch() noexcept { reset(); }
+
+    [[nodiscard]] bool allocate(const reg count) noexcept(
+        allocator_allocate_noexcept_v<allocator_type>)
+    {
+        SPSC_ASSERT(data_ == nullptr);
+        if (RB_UNLIKELY(data_ != nullptr)) {
+            return false;
+        }
+        if (count == 0u) {
+            return true;
+        }
+
+        allocator_type alloc{};
+        data_ = alloc_traits::allocate(
+            alloc, static_cast<alloc_size_type>(count));
+        if (RB_UNLIKELY(data_ == nullptr)) {
+            return false;
+        }
+
+        count_ = count;
+        for (reg i = 0u; i < count_; ++i) {
+            (void)::new (static_cast<void*>(data_ + i)) value_type(nullptr);
+        }
+        return true;
+    }
+
+    void reset() noexcept {
+        if (data_ == nullptr) {
+            count_ = 0u;
+            return;
+        }
+
+        allocator_type alloc{};
+        alloc_traits::deallocate(
+            alloc, data_, static_cast<alloc_size_type>(count_));
+        data_ = nullptr;
+        count_ = 0u;
+    }
+
+    [[nodiscard]] value_type* data() noexcept { return data_; }
+    [[nodiscard]] const value_type* data() const noexcept { return data_; }
+    [[nodiscard]] reg size() const noexcept { return count_; }
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return data_ != nullptr;
+    }
+
+    [[nodiscard]] value_type& operator[](const reg index) noexcept {
+        SPSC_ASSERT(index < count_);
+        return data_[index];
+    }
+    [[nodiscard]] const value_type& operator[](const reg index) const noexcept {
+        SPSC_ASSERT(index < count_);
+        return data_[index];
+    }
+
+private:
+    value_type* data_{nullptr};
+    reg count_{0u};
+};
+
 template<class Alloc, class T, class = void>
 struct allocator_min_alignment : std::integral_constant<std::size_t, object_alignment<T>::value> {};
 

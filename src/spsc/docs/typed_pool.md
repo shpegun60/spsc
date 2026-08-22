@@ -160,6 +160,11 @@ q.consume(snap);
 - `swap(other)` exchanges pool state
 - `destroy()` frees slot storage
 
+Static deep copy builds its replacement behind an allocator-backed transient
+pointer table. Stack use is independent of `Capacity`, no persistent layout is
+added, and allocation or element-copy failure leaves an existing assignment
+destination unchanged.
+
 ### State And Introspection
 
 - `is_valid()`

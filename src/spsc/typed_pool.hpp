@@ -157,18 +157,17 @@ public:
     // ------------------------------------------------------------------------------------------
     static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
                   "[spsc::typed_pool]: base allocator must be nothrow default-constructible.");
-    static_assert(!kDynamic || slot_alloc_traits::is_always_equal::value,
-                  "[spsc::typed_pool]: dynamic typed_pool requires always_equal "
-                  "allocator (stateless).");
-    static_assert(!kDynamic ||
-                      std::is_nothrow_default_constructible_v<slot_allocator_type>,
-                  "[spsc::typed_pool]: dynamic typed_pool requires "
-                  "nothrow default-constructible slot allocator.");
-    static_assert(!kDynamic ||
-                      ::spsc::alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
+    static_assert(slot_alloc_traits::is_always_equal::value,
+                  "[spsc::typed_pool]: slot allocator must be always_equal "
+                  "(stateless).");
+    static_assert(std::is_nothrow_default_constructible_v<slot_allocator_type>,
+                  "[spsc::typed_pool]: slot allocator must be nothrow "
+                  "default-constructible.");
+    static_assert(
+        ::spsc::alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
                   "[spsc::typed_pool]: slot allocator size_type must represent the reg domain.");
-    static_assert(!kDynamic || std::is_same_v<slot_pointer, pointer *>,
-                  "[spsc::typed_pool]: dynamic typed_pool requires allocator "
+    static_assert(std::is_same_v<slot_pointer, pointer *>,
+                  "[spsc::typed_pool]: typed_pool requires allocator "
                   "pointer type T** (raw).");
     static_assert(
         std::is_same_v<object_pointer, pointer>,
@@ -206,9 +205,8 @@ public:
         "[spsc::typed_pool]: object allocator must be nothrow default-constructible.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(
-        !kDynamic ||
-            ::spsc::alloc::detail::allocator_allocate_noexcept_v<
-                slot_allocator_type>,
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+            slot_allocator_type>,
         "[spsc::typed_pool]: no-exceptions mode requires slot "
         "allocator::allocate(size_type) to be noexcept.");
     static_assert(
@@ -265,12 +263,17 @@ public:
             (void)other;
         } else if (this == &other) {
             return *this;
-        } else {
+        } else if constexpr (kDynamic) {
             typed_pool tmp(other);
             if (other.is_valid() && !tmp.is_valid()) {
                 return *this;
             }
             swap(tmp);
+        } else {
+            // Build the replacement behind an allocator-backed transient
+            // pointer table.  Do not place another Capacity-sized typed_pool
+            // object (or pointer table) on the caller's stack.
+            (void)copy_from(other);
         }
         return *this;
     }
@@ -1508,6 +1511,10 @@ public:
     }
 
 private:
+    using scratch_table_type =
+        ::spsc::alloc::detail::pointer_table_scratch<
+            pointer, base_allocator_type>;
+
     [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
         return !is_valid() || Base::producer_full_cached();
     }
@@ -1770,6 +1777,86 @@ private:
         return true;
     }
 
+    static void release_fresh_storage_(pointer* const fresh_slots,
+                                       const size_type allocated,
+                                       const size_type constructed) noexcept {
+        if (fresh_slots == nullptr) {
+            return;
+        }
+
+        for (size_type i = 0u; i < constructed; ++i) {
+            detail::destroy_at(std::launder(fresh_slots[i]));
+        }
+        for (size_type i = 0u; i < allocated; ++i) {
+            free_one(fresh_slots[i]);
+            fresh_slots[i] = nullptr;
+        }
+    }
+
+    [[nodiscard]] bool copy_from_static_(const typed_pool& other) {
+        static_assert(!kDynamic,
+                      "copy_from_static_() is for static Capacity only");
+
+        const size_type observed_size = other.size();
+        const size_type copy_size =
+            (observed_size <= Capacity) ? observed_size : 0u;
+
+        scratch_table_type scratch{};
+        pointer* fresh = nullptr;
+        size_type allocated = 0u;
+        size_type constructed = 0u;
+
+        SPSC_TRY {
+            if (scratch.allocate(Capacity)) {
+                fresh = scratch.data();
+            }
+
+            if (fresh != nullptr) {
+                for (; allocated < Capacity; ++allocated) {
+                    pointer p = alloc_one();
+                    if (RB_UNLIKELY(p == nullptr)) {
+                        break;
+                    }
+                    fresh[allocated] = p;
+                }
+            }
+
+            if (allocated == Capacity) {
+                const size_type mask = other.Base::mask();
+                const size_type tail = other.Base::tail();
+                for (; constructed < copy_size; ++constructed) {
+                    pointer src = other.object_ptr(
+                        static_cast<size_type>((tail + constructed) & mask));
+                    (void)::new (static_cast<void*>(fresh[constructed]))
+                        T(*src);
+                }
+            }
+        }
+        SPSC_CATCH_ALL {
+            release_fresh_storage_(fresh, allocated, constructed);
+            SPSC_RETHROW;
+        }
+
+        if (RB_UNLIKELY(fresh == nullptr) ||
+            RB_UNLIKELY(allocated != Capacity)) {
+            release_fresh_storage_(fresh, allocated, constructed);
+            return false;
+        }
+
+        // The replacement is complete.  Allocation failure and payload-copy
+        // failure above leave the destination untouched.
+        destroy();
+        for (size_type i = 0u; i < Capacity; ++i) {
+            slots_[i] = fresh[i];
+        }
+        this->isAllocated_ = true;
+
+        const bool ok = Base::init(copy_size, 0u);
+        SPSC_ASSERT(ok);
+        (void)ok;
+        return true;
+    }
+
     [[nodiscard]] bool copy_from(const typed_pool &other) {
         static_assert(std::is_copy_constructible_v<T>,
                       "[typed_pool]: T must be copy-constructible for copying");
@@ -1779,67 +1866,63 @@ private:
             return true;
         }
 
-        const size_type target_depth = other.capacity();
+        if constexpr (!kDynamic) {
+            return copy_from_static_(other);
+        } else {
+            const size_type target_depth = other.capacity();
 
-        // Allocate fresh storage (do not reuse old pointers).
-        typed_pool tmp;
+            // Allocate fresh storage (do not reuse old pointers).
+            typed_pool tmp;
 
-        if constexpr (kDynamic) {
             if (!tmp.resize(target_depth)) {
                 destroy();
                 return false;
             }
-        } else {
-            (void)target_depth;
-            if (!tmp.is_valid() && !tmp.allocate_static_storage()) {
+
+            if (!tmp.is_valid()) {
                 destroy();
                 return false;
             }
-        }
 
-        if (!tmp.is_valid()) {
-            destroy();
-            return false;
-        }
+            const size_type sz = other.size();
+            const size_type cap = tmp.capacity();
+            if (RB_UNLIKELY(sz > cap)) {
+                // Corrupted other state: keep tmp empty.
+                tmp.Base::clear();
+                swap(tmp);
+                return true;
+            }
 
-        const size_type sz = other.size();
-        const size_type cap = tmp.capacity();
-        if (RB_UNLIKELY(sz > cap)) {
-            // Corrupted other state: keep tmp empty.
+            // Copy-construct live objects into tmp[0..sz-1]
+            size_type constructed = 0u;
+            SPSC_TRY {
+                const size_type m = other.Base::mask();
+                const size_type t = other.Base::tail();
+
+                for (; constructed < sz; ++constructed) {
+                    // Must use object_ptr() on source to launder the pointer
+                    pointer src = other.object_ptr((t + constructed) & m);
+                    pointer dst = tmp.data()[constructed];
+                    ::new (static_cast<void *>(dst)) T(*src);
+                }
+            }
+            SPSC_CATCH_ALL {
+                for (size_type k = 0; k < constructed; ++k) {
+                    detail::destroy_at(tmp.data()[k]);
+                }
+                // tmp will free memory in its destructor.
+                SPSC_RETHROW;
+            }
+
+            // Set geometry: [0..sz-1] live, tail=0
             tmp.Base::clear();
+            tmp.Base::set_tail(0u);
+            tmp.Base::set_head(sz);
+            tmp.Base::sync_cache();
+
             swap(tmp);
             return true;
         }
-
-        // Copy-construct live objects into tmp[0..sz-1]
-        size_type constructed = 0u;
-        SPSC_TRY {
-            const size_type m = other.Base::mask();
-            const size_type t = other.Base::tail();
-
-            for (; constructed < sz; ++constructed) {
-                // Must use object_ptr() on source to launder the pointer
-                pointer src = other.object_ptr((t + constructed) & m);
-                pointer dst = tmp.data()[constructed];
-                ::new (static_cast<void *>(dst)) T(*src);
-            }
-        }
-        SPSC_CATCH_ALL {
-            for (size_type k = 0; k < constructed; ++k) {
-                detail::destroy_at(tmp.data()[k]);
-            }
-            // tmp will free memory in its destructor.
-            SPSC_RETHROW;
-        }
-
-        // Set geometry: [0..sz-1] live, tail=0
-        tmp.Base::clear();
-        tmp.Base::set_tail(0u);
-        tmp.Base::set_head(sz);
-        tmp.Base::sync_cache();
-
-        swap(tmp);
-        return true;
     }
 
     void move_from(typed_pool &&other) noexcept {

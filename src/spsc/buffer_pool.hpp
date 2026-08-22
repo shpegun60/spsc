@@ -605,6 +605,9 @@ public:
     using pointer = value_type*;
     using const_pointer = const value_type*;
     using byte_pointer = typename byte_alloc_traits::pointer;
+    using table_allocator_type = typename std::allocator_traits<base_allocator_type>::template rebind_alloc<pointer>;
+    using table_alloc_traits = std::allocator_traits<table_allocator_type>;
+    using table_pointer = typename table_alloc_traits::pointer;
 
     static constexpr size_type static_count = Count;
     static constexpr size_type static_buffer_size = 0u;
@@ -624,15 +627,33 @@ public:
     static_assert(alloc::detail::allocator_size_covers_reg_v<byte_allocator_type>,
                   "[buffer_pool]: byte allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<byte_pointer, byte_type*>,
-                  "[buffer_pool]: dynamic buffer size requires allocator pointer type std::byte*.");
+                   "[buffer_pool]: dynamic buffer size requires allocator pointer type std::byte*.");
+    static_assert(table_alloc_traits::is_always_equal::value,
+                  "[buffer_pool]: pointer-table allocator must be always_equal.");
+    static_assert(std::is_nothrow_default_constructible_v<table_allocator_type>,
+                  "[buffer_pool]: pointer-table allocator must be nothrow default-constructible.");
+    static_assert(alloc::detail::allocator_size_covers_reg_v<table_allocator_type>,
+                  "[buffer_pool]: pointer-table allocator size_type must represent the reg domain.");
+    static_assert(std::is_same_v<table_pointer, pointer*>,
+                  "[buffer_pool]: pointer-table allocator must expose T** (raw).");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<table_allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires pointer-table "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
     static_assert(alloc::rebind_allocator_min_alignment_v<base_allocator_type, byte_type> >=
                       alloc::policy_storage_alignment_v<policy_type, value_type>,
                   "[buffer_pool]: allocator rebind must preserve runtime-buffer alignment.");
     static_assert(std::is_unsigned_v<size_type>,
                   "[buffer_pool]: reg (size_type) must be unsigned.");
 
-    static constexpr bool kNoexceptAllocate =
+    static constexpr bool kNoexceptByteAllocate =
         alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>;
+    static constexpr bool kNoexceptTableAllocate =
+        alloc::detail::allocator_allocate_noexcept_v<table_allocator_type>;
+    static constexpr bool kNoexceptAllocate =
+        kNoexceptByteAllocate && kNoexceptTableAllocate;
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Assignment
@@ -668,12 +689,9 @@ public:
             return *this;
         }
 
-        buffer_pool tmp;
-        if ((other.buffer_size_ != 0u) && !tmp.copy_from_(other)) {
+        if (!copy_from_(other)) {
             return *this;
         }
-
-        swap(tmp);
         return *this;
     }
     buffer_pool(buffer_pool&& other) noexcept
@@ -717,19 +735,20 @@ public:
             return true;
         }
 
-        std::array<pointer, Count> new_buffers{};
-        if (!allocate_all_buffers_(buffer_size, new_buffers)) {
+        scratch_table_type scratch{};
+        if (!allocate_scratch_(scratch) ||
+            !allocate_all_buffers_(buffer_size, scratch.data())) {
             return false;
         }
 
         const size_type copy_size = is_valid() ? ((buffer_size_ < buffer_size) ? buffer_size_ : buffer_size) : 0u;
-        if (!copy_prefix_(new_buffers, buffer_size, buffers_, copy_size)) {
-            release_all_buffers_(new_buffers, buffer_size);
+        if (!copy_prefix_(scratch.data(), buffer_size, buffers_.data(), copy_size)) {
+            release_all_buffers_(scratch.data(), buffer_size);
             return false;
         }
 
         destroy();
-        buffers_ = new_buffers;
+        commit_scratch_(scratch.data());
         buffer_size_ = buffer_size;
         return true;
     }
@@ -741,7 +760,7 @@ public:
         }
 
         if (state_ok_(buffers_, buffer_size_)) {
-            release_all_buffers_(buffers_, buffer_size_);
+            release_all_buffers_(buffers_.data(), buffer_size_);
         } else {
             clear_slots_();
         }
@@ -791,6 +810,9 @@ private:
     // ------------------------------------------------------------------------------------------
     // Internal Helpers
     // ------------------------------------------------------------------------------------------
+    using scratch_table_type =
+        alloc::detail::pointer_table_scratch<pointer, base_allocator_type>;
+
     [[nodiscard]] static bool state_ok_(const std::array<pointer, Count>& slot_ptrs,
                                         const size_type buffer_size) noexcept
     {
@@ -806,7 +828,7 @@ private:
     }
 
     static bool allocate_buffer_(const size_type buffer_size, pointer& out) noexcept(
-        kNoexceptAllocate && std::is_nothrow_default_constructible_v<value_type>)
+        kNoexceptByteAllocate && std::is_nothrow_default_constructible_v<value_type>)
     {
         const size_type effective_bytes = effective_buffer_size_bytes_(buffer_size);
         if (RB_UNLIKELY(effective_bytes == 0u)) {
@@ -856,9 +878,14 @@ private:
                                       effective_bytes);
     }
 
-    static bool allocate_all_buffers_(const size_type buffer_size, std::array<pointer, Count>& out) noexcept(
-        kNoexceptAllocate && std::is_nothrow_default_constructible_v<value_type>)
+    static bool allocate_all_buffers_(const size_type buffer_size, pointer* const out) noexcept(
+        kNoexceptByteAllocate && std::is_nothrow_default_constructible_v<value_type>)
     {
+        SPSC_ASSERT(out != nullptr);
+        if (RB_UNLIKELY(out == nullptr)) {
+            return false;
+        }
+
         for (size_type i = 0u; i < Count; ++i) {
             if (!allocate_buffer_(buffer_size, out[i])) {
                 for (size_type j = 0u; j < i; ++j) {
@@ -872,17 +899,21 @@ private:
         return true;
     }
 
-    static void release_all_buffers_(std::array<pointer, Count>& slot_ptrs, const size_type buffer_size) noexcept
+    static void release_all_buffers_(pointer* const slot_ptrs,
+                                     const size_type buffer_size) noexcept
     {
+        if (slot_ptrs == nullptr) {
+            return;
+        }
         for (size_type i = 0u; i < Count; ++i) {
             release_buffer_(slot_ptrs[i], buffer_size);
             slot_ptrs[i] = nullptr;
         }
     }
 
-    static bool copy_prefix_(std::array<pointer, Count>& dst,
+    static bool copy_prefix_(pointer* const dst,
                              const size_type dst_buffer_size,
-                             const std::array<pointer, Count>& src,
+                             pointer const* const src,
                              const size_type copy_size) noexcept(std::is_nothrow_copy_assignable_v<value_type>)
     {
         (void)dst_buffer_size;
@@ -910,15 +941,34 @@ private:
         return true;
     }
 
+    static bool allocate_scratch_(scratch_table_type& scratch) noexcept(
+        kNoexceptTableAllocate)
+    {
+        SPSC_TRY {
+            return scratch.allocate(Count);
+        } SPSC_CATCH_ALL {
+            return false;
+        }
+    }
+
+    void commit_scratch_(pointer const* const fresh) noexcept
+    {
+        SPSC_ASSERT(fresh != nullptr);
+        for (size_type i = 0u; i < Count; ++i) {
+            buffers_[i] = fresh[i];
+        }
+    }
+
     bool init_size_(const size_type buffer_size) noexcept(
         kNoexceptAllocate && std::is_nothrow_default_constructible_v<value_type>)
     {
-        std::array<pointer, Count> new_buffers{};
-        if (!allocate_all_buffers_(buffer_size, new_buffers)) {
+        scratch_table_type scratch{};
+        if (!allocate_scratch_(scratch) ||
+            !allocate_all_buffers_(buffer_size, scratch.data())) {
             return false;
         }
 
-        buffers_ = new_buffers;
+        commit_scratch_(scratch.data());
         buffer_size_ = buffer_size;
         return true;
     }
@@ -930,20 +980,24 @@ private:
         }
 
         if (other.buffer_size_ == 0u) {
+            destroy();
             return true;
         }
 
-        std::array<pointer, Count> new_buffers{};
-        if (!allocate_all_buffers_(other.buffer_size_, new_buffers)) {
+        scratch_table_type scratch{};
+        if (!allocate_scratch_(scratch) ||
+            !allocate_all_buffers_(other.buffer_size_, scratch.data())) {
             return false;
         }
 
-        if (!copy_prefix_(new_buffers, other.buffer_size_, other.buffers_, other.buffer_size_)) {
-            release_all_buffers_(new_buffers, other.buffer_size_);
+        if (!copy_prefix_(scratch.data(), other.buffer_size_,
+                          other.buffers_.data(), other.buffer_size_)) {
+            release_all_buffers_(scratch.data(), other.buffer_size_);
             return false;
         }
 
-        buffers_ = new_buffers;
+        destroy();
+        commit_scratch_(scratch.data());
         buffer_size_ = other.buffer_size_;
         return true;
     }

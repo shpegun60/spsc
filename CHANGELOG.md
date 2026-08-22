@@ -52,6 +52,12 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   fully dynamic `buffer_pool` now explicitly begin every pointer element's
   lifetime before assignment, preserving the C++17 raw-storage contract while
   bypassing custom allocator construction hooks.
+- Static `fifo` copy assignment no longer materializes a second embedded
+  payload array on the stack. Static `pool`/`typed_pool` and runtime-sized
+  fixed-count `buffer_pool` copy/resize transactions now keep their temporary
+  pointer tables in allocator-backed storage, bounding management stack use
+  independently of compile-time `Capacity`/`Count` without changing persistent
+  container layout.
 
 ### Tests
 
@@ -69,11 +75,16 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   pointer-table allocation paths, and checked queue-path shadow-preservation
   coverage. Hostile stale-shadow setup is kept separate from synchronized
   checked-path setup.
+- Added allocation-failure/state-preservation regressions for transient static
+  management tables and an exception-mode static-`fifo` basic-guarantee test.
 
 ### CI
 
 - Added exception-enabled runtime and ASan+UBSan coverage plus Cortex-M7 object
   code generation with symbol/disassembly checks for unwanted runtime helpers.
+- Added host (both exception modes) and Cortex-M7 `-fstack-usage` gates that
+  reject static management frames above 512 bytes, using
+  `Capacity`/`Count == 4096` probes.
 
 ### Documentation
 
@@ -82,8 +93,8 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   header to the internal value-swap helper.
 - Documented snapshot epoch/ABA limits, the owning `pool::push(U)` size
   precondition, finite-period shadow behavior, custom-backend zero
-  normalization, and the proportional stack scratch used by selected static
-  management paths.
+  normalization, and the bounded-stack management/failure contracts for
+  static owning containers.
 
 ## [3.0.2] - 2026-08-21
 

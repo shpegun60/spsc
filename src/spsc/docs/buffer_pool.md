@@ -69,6 +69,10 @@ dynamicShape.resize(8, 1500);
   emptiness from a constructor allocation failure. If a non-empty shape is
   required, call `resize()`, check its boolean result, and verify the exact
   `count()` and `size()` requested.
+- `buffer_pool<T, 0, Count>` uses an allocator-backed transient pointer table
+  for copy and resize. Stack use is independent of `Count`, container layout is
+  unchanged, and a failed temporary allocation leaves the previous assignment
+  or resize destination unchanged.
 
 Cache-aligned policies can align storage and round the physical span reported by
 `cache_span_bytes()`. Runtime-sized variants allocate each payload separately,
