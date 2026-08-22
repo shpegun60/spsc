@@ -228,7 +228,9 @@ outside the container.
   does not start `U` lifetime by itself
 - `publish()` / `try_publish()` commit one slot
 - `publish(unsafe, n)` / `try_publish(unsafe, n)` commit several prepared slots
-- `push(const U&)` / `try_push(const U&)` memcpy a trivially-copyable object into the slot
+- `push(const U&)` / `try_push(const U&)` memcpy a trivially-copyable object into the slot;
+  unchecked `push` requires `sizeof(U) <= buffer_size()`, while `try_push`
+  checks this at runtime and returns `false`
 - `push(data, size)` / `try_push(data, size)` copy raw bytes, truncating to `buffer_size()`
 - `try_write(v)` is a convenience alias for typed `try_push`
 
@@ -325,6 +327,10 @@ if (auto* hdr = q.claim_as<Header>()) {
 ```
 
 ### `push(const U&)`
+
+Precondition: `q` is valid and not full, and `sizeof(U) <= q.buffer_size()`.
+This unchecked hot path enforces the size condition only through `SPSC_ASSERT`;
+use `try_push` when the payload type may not fit.
 
 ```cpp
 Header hdr{0x12345678u, 32u};

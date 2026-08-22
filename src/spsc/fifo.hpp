@@ -795,14 +795,14 @@ public:
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(producer_can_write_cached_(n));
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -862,14 +862,14 @@ public:
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(consumer_can_read_cached_(n));
-        Base::advance_tail(n);
+        Base::advance_tail_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!consumer_can_read_cached_(n))) {
             return false;
         }
-        Base::advance_tail(n);
+        Base::advance_tail_checked(n);
         return true;
     }
 
@@ -1064,7 +1064,7 @@ public:
         // We linearized data to the start of new_buf, so head becomes old_size.
         if (old_size) {
             SPSC_ASSERT(old_size <= target_cap);
-            Base::advance_head(old_size);
+            Base::advance_head_checked(old_size);
         }
 
         // Non-concurrent operation: keep shadow caches coherent after changing indices.
@@ -1540,7 +1540,7 @@ private:
             }
 
             if (sz) {
-                Base::advance_head(sz);
+                Base::advance_head_checked(sz);
             }
         } else {
             // Static Copy
@@ -1564,7 +1564,7 @@ private:
                     const size_type idx = static_cast<size_type>((tail + k) & mask);
                     storage_[k] = other.storage_[idx];
                 }
-                Base::advance_head(sz);
+                Base::advance_head_checked(sz);
             }
         }
 

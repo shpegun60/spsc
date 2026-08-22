@@ -126,7 +126,11 @@ public:
     // ------------------------------------------------------------------------------------------
 
     // Default constructor: invalid until storage is attached.
-    pool_view() = default;
+    pool_view() noexcept
+        : Base()
+    {
+        bufferSize_.store(0u);
+    }
 
     // [Static] Attach to external slot array (pointer must NOT be a raw C-array argument).
     template<class Slots,
@@ -137,8 +141,9 @@ public:
                  std::is_same_v<std::remove_cv_t<std::remove_reference_t<Slots>>, pointer*>
                  >>
     explicit pool_view(Slots&& slot_array, const size_type buffer_size) noexcept
-        : Base(), slots_(slot_array)
+        : pool_view()
     {
+        slots_ = slot_array;
         bufferSize_.store(buffer_size);
         Base::clear();
         if (RB_UNLIKELY(slots_ == nullptr) || RB_UNLIKELY(bufferSize_.load() == 0u)) { detach(); }
@@ -183,8 +188,9 @@ public:
     // [Dynamic] Attach to external slot array with runtime depth (Capacity == 0).
     template<size_type C = Capacity, typename = std::enable_if_t<C == 0>>
     pool_view(pointer* slot_array, const size_type depth, const size_type buffer_size) noexcept
-        : Base(), slots_(slot_array)
+        : pool_view()
     {
+        slots_ = slot_array;
         bufferSize_.store(buffer_size);
         const bool ok = Base::init(depth);
         if (RB_UNLIKELY(!ok) || RB_UNLIKELY(slots_ == nullptr) || RB_UNLIKELY(bufferSize_.load() == 0u)
@@ -205,7 +211,11 @@ public:
     pool_view(const pool_view&)            = delete;
     pool_view& operator=(const pool_view&) = delete;
 
-    pool_view(pool_view&& other) noexcept(kNoThrowMoveOps) { move_from(std::move(other)); }
+    pool_view(pool_view&& other) noexcept(kNoThrowMoveOps)
+        : pool_view()
+    {
+        move_from(std::move(other));
+    }
 
     pool_view& operator=(pool_view&& other) noexcept(kNoThrowMoveOps) {
         if (this != &other) {
@@ -863,7 +873,7 @@ public:
                 return;
             }
         }
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
@@ -873,7 +883,7 @@ public:
         for (size_type i = 0u; i < n; ++i) {
             if (RB_UNLIKELY(slots_[(h + i) & m] == nullptr)) { return false; }
         }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -984,12 +994,12 @@ public:
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!consumer_can_read_cached_(n))) { SPSC_ASSERT(consumer_can_read_cached_(n)); return; }
-        Base::advance_tail(n);
+        Base::advance_tail_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!consumer_can_read_cached_(n))) { return false; }
-        Base::advance_tail(n);
+        Base::advance_tail_checked(n);
         return true;
     }
 

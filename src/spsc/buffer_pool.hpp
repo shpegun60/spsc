@@ -1298,7 +1298,8 @@ private:
             }
 
             for (size_type i = 0u; i < count; ++i) {
-                slot_ptrs[i] = nullptr;
+                (void)::new (static_cast<void*>(slot_ptrs + i))
+                    pointer(nullptr);
             }
 
             for (; built < count; ++built) {

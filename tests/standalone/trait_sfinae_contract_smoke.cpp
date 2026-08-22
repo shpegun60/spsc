@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <new>
 #include <type_traits>
@@ -50,6 +51,25 @@ struct immovable {
     immovable(immovable&&) = delete;
     immovable& operator=(immovable&&) = delete;
     ~immovable() noexcept = default;
+};
+
+struct mode0_throwing_relocation {
+    int payload{0};
+
+    explicit mode0_throwing_relocation(const int value) noexcept
+        : payload(value) {}
+    mode0_throwing_relocation(const mode0_throwing_relocation&) = delete;
+    mode0_throwing_relocation&
+    operator=(const mode0_throwing_relocation&) = delete;
+    mode0_throwing_relocation(
+        mode0_throwing_relocation&& other) noexcept(false)
+        : payload(other.payload) {}
+    mode0_throwing_relocation&
+    operator=(mode0_throwing_relocation&& other) noexcept(false) {
+        payload = other.payload;
+        return *this;
+    }
+    ~mode0_throwing_relocation() noexcept = default;
 };
 
 #if (SPSC_ENABLE_EXCEPTIONS != 0)
@@ -222,6 +242,46 @@ struct hostile_construct_allocator {
         (void)::new (static_cast<void*>(ptr))
             U(std::forward<Args>(args)...);
 #endif
+    }
+};
+
+struct relocation_probe_state {
+    static inline std::size_t allocation_calls{0u};
+    static inline std::size_t live_blocks{0u};
+};
+
+template<class T>
+struct relocation_probe_allocator {
+    using value_type = T;
+    using pointer = T*;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using is_always_equal = std::true_type;
+
+    template<class U>
+    struct rebind { using other = relocation_probe_allocator<U>; };
+
+    relocation_probe_allocator() noexcept = default;
+
+    template<class U>
+    relocation_probe_allocator(
+        const relocation_probe_allocator<U>&) noexcept {}
+
+    [[nodiscard]] pointer allocate(const size_type count) noexcept {
+        ++relocation_probe_state::allocation_calls;
+        pointer result = static_cast<pointer>(
+            ::operator new(count * sizeof(value_type), std::nothrow));
+        if (result != nullptr) {
+            ++relocation_probe_state::live_blocks;
+        }
+        return result;
+    }
+
+    void deallocate(pointer ptr, size_type) noexcept {
+        if (ptr != nullptr) {
+            --relocation_probe_state::live_blocks;
+            ::operator delete(ptr);
+        }
     }
 };
 
@@ -499,6 +559,9 @@ using move_only_typed = ::spsc::typed_pool<move_only, 8u>;
 using object_queue = ::spsc::queue<value, 8u>;
 using dynamic_immovable_queue =
     ::spsc::queue<immovable, 0u, ::spsc::policy::P>;
+using dynamic_mode0_relocation_queue =
+    ::spsc::queue<mode0_throwing_relocation, 0u, ::spsc::policy::P,
+                  relocation_probe_allocator<std::byte>>;
 using class_new_queue = ::spsc::queue<class_specific_new_value, 8u>;
 using dynamic_class_new_queue = ::spsc::queue<class_specific_new_value, 0u>;
 using raw_latest = ::spsc::latest<void, 0u>;
@@ -781,6 +844,21 @@ struct custom_counter_without_relaxed_load {
     void inc() noexcept { ++value; }
 };
 
+struct nonzero_atomic_counter {
+    static constexpr bool is_atomic = true;
+    static constexpr bool is_single_writer = true;
+    using value_type = reg;
+
+    value_type value{std::numeric_limits<value_type>::max()};
+
+    constexpr nonzero_atomic_counter() noexcept = default;
+    void store(const value_type next) noexcept { value = next; }
+    [[nodiscard]] value_type load() const noexcept { return value; }
+    [[nodiscard]] value_type load_relaxed() const noexcept { return value; }
+    void add(const value_type delta) noexcept { value += delta; }
+    void inc() noexcept { ++value; }
+};
+
 struct no_value_counter {
     void store(const reg) noexcept {}
     [[nodiscard]] reg load() const noexcept { return 0u; }
@@ -876,6 +954,22 @@ struct throwing_reg_relaxed_conversion_counter {
 using custom_policy = ::spsc::policy::Policy<custom_counter>;
 using custom_policy_without_relaxed_load =
     ::spsc::policy::Policy<custom_counter_without_relaxed_load>;
+using nonzero_atomic_policy =
+    ::spsc::policy::Policy<nonzero_atomic_counter>;
+
+class nonzero_dynamic_base_probe final
+    : private ::spsc::SPSCbase<0u, nonzero_atomic_policy>
+{
+    using Base = ::spsc::SPSCbase<0u, nonzero_atomic_policy>;
+
+public:
+    nonzero_dynamic_base_probe() noexcept = default;
+
+    [[nodiscard]] reg capacity() const noexcept { return Base::capacity(); }
+    [[nodiscard]] reg mask() const noexcept { return Base::mask(); }
+    [[nodiscard]] reg head() const noexcept { return Base::head(); }
+    [[nodiscard]] reg tail() const noexcept { return Base::tail(); }
+};
 
 struct custom_aligned_policy : custom_policy {
     static constexpr reg allocator_alignment = 32u;
@@ -889,6 +983,12 @@ struct custom_enum_aligned_policy : custom_policy {
 };
 
 static_assert(::spsc::policy::detail::is_counter_like_v<custom_counter>);
+static_assert(::spsc::policy::detail::is_counter_like_v<
+              nonzero_atomic_counter>);
+static_assert(
+    ::spsc::detail::rb_use_shadow_v<nonzero_atomic_policy> ==
+    ((std::numeric_limits<reg>::digits >= 64) ||
+     (SPSC_SHADOW_ALLOW_32BIT != 0)));
 static_assert(::spsc::policy::detail::is_counter_like_v<
               custom_counter_without_relaxed_load>);
 static_assert(!::spsc::cnt::counter_has_relaxed_load_v<
@@ -936,6 +1036,18 @@ using static_chunk_with_unused_throwing_allocator =
 using dynamic_chunk_with_hostile_construct_allocator =
     ::spsc::chunk<hostile_construct_value, 0u,
                   hostile_construct_allocator<std::byte>>;
+using dynamic_pool_with_hostile_construct_allocator =
+    ::spsc::pool<0u, ::spsc::policy::P,
+                 hostile_construct_allocator<std::byte>>;
+using dynamic_typed_pool_with_hostile_construct_allocator =
+    ::spsc::typed_pool<value, 0u, ::spsc::policy::P,
+                       hostile_construct_allocator<std::byte>>;
+using dynamic_raw_latest_with_hostile_construct_allocator =
+    ::spsc::latest<void, 0u, ::spsc::policy::P,
+                   hostile_construct_allocator<std::byte>>;
+using dynamic_buffer_pool_with_hostile_construct_allocator =
+    ::spsc::buffer_pool<std::byte, 0u, 0u, ::spsc::policy::P,
+                        hostile_construct_allocator<std::byte>>;
 using static_buffer_pool_with_unused_throwing_allocator =
     ::spsc::buffer_pool<int, 4u, 8u, ::spsc::policy::P,
                         throwing_allocate_allocator<std::byte>>;
@@ -947,6 +1059,14 @@ static_assert(std::is_default_constructible_v<
               static_chunk_with_unused_throwing_allocator>);
 static_assert(std::is_default_constructible_v<
               dynamic_chunk_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_pool_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_typed_pool_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_raw_latest_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_buffer_pool_with_hostile_construct_allocator>);
 static_assert(std::is_default_constructible_v<
               static_buffer_pool_with_unused_throwing_allocator>);
 
@@ -1071,6 +1191,68 @@ bool verify_chunk_owns_value_construction()
            hostile_construct_state::live_blocks == 0u &&
            hostile_construct_value::constructions == 8u &&
            hostile_construct_value::destructions == 8u;
+}
+
+bool verify_pointer_rings_own_pointer_lifetime()
+{
+    hostile_construct_state::construct_calls = 0u;
+    hostile_construct_state::live_blocks = 0u;
+
+    {
+        dynamic_pool_with_hostile_construct_allocator pool;
+        value input{11};
+        if (!pool.resize(4u, sizeof(input)) || !pool.is_valid() ||
+            !pool.try_push(input) || !pool.try_pop()) {
+            return false;
+        }
+    }
+    if (hostile_construct_state::construct_calls != 0u ||
+        hostile_construct_state::live_blocks != 0u) {
+        return false;
+    }
+
+    {
+        dynamic_typed_pool_with_hostile_construct_allocator pool;
+        if (!pool.resize(4u) || !pool.is_valid() ||
+            !pool.try_emplace(13) || pool.try_front() == nullptr ||
+            pool.try_front()->payload != 13 || !pool.try_pop()) {
+            return false;
+        }
+    }
+    if (hostile_construct_state::construct_calls != 0u ||
+        hostile_construct_state::live_blocks != 0u) {
+        return false;
+    }
+
+    {
+        dynamic_raw_latest_with_hostile_construct_allocator latest;
+        value input{17};
+        if (!latest.resize(4u, sizeof(input)) || !latest.is_valid() ||
+            !latest.try_push(input) || latest.try_front() == nullptr ||
+            !latest.try_pop()) {
+            return false;
+        }
+    }
+    if (hostile_construct_state::construct_calls != 0u ||
+        hostile_construct_state::live_blocks != 0u) {
+        return false;
+    }
+
+    {
+        dynamic_buffer_pool_with_hostile_construct_allocator buffers;
+        if (!buffers.resize(4u, 3u) || !buffers.is_valid() ||
+            buffers.count() != 4u || buffers.size() != 3u) {
+            return false;
+        }
+        for (reg i = 0u; i < buffers.count(); ++i) {
+            if (buffers.data(i) == nullptr) {
+                return false;
+            }
+        }
+    }
+
+    return hostile_construct_state::construct_calls == 0u &&
+           hostile_construct_state::live_blocks == 0u;
 }
 
 #if !defined(_MSC_VER)
@@ -1312,6 +1494,81 @@ bool verify_immovable_queue_resize_runtime()
     value_ptr = queue.try_emplace(103);
     return value_ptr != nullptr && value_ptr->payload == 103 &&
            queue.try_pop();
+}
+
+bool verify_mode0_queue_relocation_runtime()
+{
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    relocation_probe_state::allocation_calls = 0u;
+    relocation_probe_state::live_blocks = 0u;
+
+    dynamic_mode0_relocation_queue queue;
+    if (!queue.resize(4u) || !queue.is_valid() || queue.capacity() < 4u ||
+        relocation_probe_state::allocation_calls != 1u ||
+        relocation_probe_state::live_blocks != 1u) {
+        return false;
+    }
+
+    mode0_throwing_relocation* value_ptr = queue.try_emplace(107);
+    const auto old_capacity = queue.capacity();
+    const auto allocations_before_reject =
+        relocation_probe_state::allocation_calls;
+
+    if (value_ptr == nullptr || value_ptr->payload != 107 ||
+        queue.resize(8u) || queue.capacity() != old_capacity ||
+        queue.size() != 1u || queue.try_front() == nullptr ||
+        queue.try_front()->payload != 107 ||
+        relocation_probe_state::allocation_calls !=
+            allocations_before_reject ||
+        relocation_probe_state::live_blocks != 1u) {
+        return false;
+    }
+
+    if (!queue.try_pop() || !queue.resize(8u) || queue.capacity() < 8u ||
+        !queue.empty() || relocation_probe_state::allocation_calls !=
+                              (allocations_before_reject + 1u) ||
+        relocation_probe_state::live_blocks != 1u) {
+        return false;
+    }
+
+    queue.destroy();
+    return relocation_probe_state::live_blocks == 0u;
+#else
+    return true;
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+}
+
+bool verify_nonzero_counter_normalization_runtime()
+{
+    nonzero_dynamic_base_probe base;
+    if (base.capacity() != 0u || base.mask() != 0u || base.head() != 0u ||
+        base.tail() != 0u) {
+        return false;
+    }
+
+    ::spsc::fifo<value, 8u, nonzero_atomic_policy> fifo;
+    if (!fifo.empty() || fifo.size() != 0u || fifo.try_front() != nullptr ||
+        !fifo.try_push(value{109}) || fifo.try_front() == nullptr ||
+        fifo.try_front()->payload != 109 || !fifo.try_pop() || !fifo.empty()) {
+        return false;
+    }
+
+    ::spsc::pool<8u, nonzero_atomic_policy> pool;
+    if (pool.is_valid() || pool.capacity() != 0u || pool.buffer_size() != 0u) {
+        return false;
+    }
+
+    ::spsc::pool_view<8u, nonzero_atomic_policy> static_view;
+    ::spsc::pool_view<0u, nonzero_atomic_policy> dynamic_view;
+    if (static_view.is_valid() || static_view.buffer_size() != 0u ||
+        dynamic_view.is_valid() || dynamic_view.capacity() != 0u ||
+        dynamic_view.buffer_size() != 0u) {
+        return false;
+    }
+
+    static_view.swap(static_view);
+    dynamic_view.swap(dynamic_view);
+    return !static_view.is_valid() && !dynamic_view.is_valid();
 }
 
 bool verify_claim_publish_only_runtime()
@@ -1607,12 +1864,15 @@ int main()
 {
     return verify_value_swap_runtime() &&
                    verify_chunk_owns_value_construction() &&
+                   verify_pointer_rings_own_pointer_lifetime() &&
 #if !defined(_MSC_VER)
                    verify_fifo_move_prefers_nothrow_copy() &&
 #endif
                    verify_queue_raw_storage_runtime() &&
                    verify_address_of_hygiene_runtime() &&
                    verify_immovable_queue_resize_runtime() &&
+                   verify_mode0_queue_relocation_runtime() &&
+                   verify_nonzero_counter_normalization_runtime() &&
                    verify_claim_publish_only_runtime() &&
                    verify_raw_overlay_hygiene_runtime() &&
                    verify_copy_and_swap_runtime()

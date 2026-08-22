@@ -150,6 +150,14 @@ Pick the simplest model that matches your consumer:
 between snapshot capture and consume. Use `try_consume(snapshot)` when the
 consumer path may branch, delay, or perform another consumer-side operation first.
 
+Snapshots are short-lived consumer transactions. `clear`, reset, `destroy`,
+`resize`, `swap`, move, `attach`, `adopt`, and any backing-storage replacement
+invalidate every outstanding snapshot. `try_consume(snapshot)` validates the
+current pointer, mask, tail, and captured range; it is not a generation or
+epoch proof. An old snapshot can become indistinguishable after management
+recreates the same state or after one complete modular counter period. Never
+retain a snapshot across management or counter wrap.
+
 Likewise, complete `front -> process -> pop` before another consumer-side
 operation. A retained `front()` pointer, snapshot, bulk region, or guard is an
 active consumer transaction; same-side interleaving invalidates its contract.
@@ -272,6 +280,11 @@ domain. For example, its `counter_type::value_type` must be at least as wide
 as `reg`. Invalid backends are rejected when `Policy` is instantiated instead
 of failing later in an unrelated container template.
 
+The library does not require a custom counter or geometry backend's default
+constructor to produce zero. Every container constructor explicitly stores the
+canonical zero state before exposing the object. A backend must therefore
+honor its non-throwing `store(0)` operation; its own default value is ignored.
+
 `Policy::allocator_alignment` is optional; omitting it means `1`. When a
 custom policy supplies it, the value must be a positive integral or enum
 constant, fit in `std::size_t`, and be a power of two. The allocator and
@@ -288,6 +301,14 @@ plus cached `head`) metadata in separate owner blocks. This endpoint isolation
 does not depend on `CacheAligned`. The global shadow switch, counter-width gate,
 and explicit 32-bit opt-in still decide whether those shadow-enabled blocks are
 present.
+
+Shadow delta validation is safe across ordinary counter wrap. It cannot carry
+generation information through an entire counter-value period. For enabled
+sub-64-bit shadows, unchecked producer/consumer progress invalidates the local
+shadow so the next cached check reloads the real opposite counter. The 64-bit
+hot path intentionally has no extra invalidation store; retaining a stale
+shadow across all `2^64` counter values is treated as practically unreachable,
+not claimed to be mathematically impossible.
 
 `CacheAligned` policies influence policy-owned metadata and owning allocator
 paths:
@@ -353,6 +374,13 @@ These are generally **not** safe to call concurrently with producer/consumer tra
 - copy / move / state restore helpers
 
 Treat them as management operations performed while the queue is stopped.
+
+Management is not universally constant-stack. Some static `pool` resize/copy
+paths and fixed-count runtime-sized `buffer_pool` paths use a temporary pointer
+array proportional to compile-time `Capacity`/`Count`. This is outside the hot
+producer/consumer path, but embedded builds with large static shapes must budget
+that stack or avoid those management operations. A dedicated stack-usage audit
+remains separate from correctness of the SPSC hot path.
 
 RAII guard destructors still run during exception unwinding. Depending on the
 guard state, scope exit can publish an armed write prefix or consume an active

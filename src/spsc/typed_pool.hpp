@@ -825,14 +825,14 @@ public:
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(producer_can_write_cached_(n));
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -904,7 +904,7 @@ public:
             pointer p = object_ptr((Base::tail() + k) & Base::mask());
             detail::destroy_at(p);
         }
-        Base::advance_tail(n);
+        Base::advance_tail_unchecked(n);
     }
 
     // Guard against accidental overload selection when passing a value variable
@@ -924,7 +924,7 @@ public:
             pointer p = object_ptr((Base::tail() + k) & Base::mask());
             detail::destroy_at(p);
         }
-        Base::advance_tail(n);
+        Base::advance_tail_checked(n);
         return true;
     }
 
@@ -1655,7 +1655,8 @@ private:
             new_slots = slot_alloc_traits::allocate(sa, target_depth);
             if (RB_LIKELY(new_slots != nullptr)) {
                 for (size_type i = 0; i < target_depth; ++i) {
-                    new_slots[i] = nullptr;
+                    (void)::new (static_cast<void*>(new_slots + i))
+                        pointer(nullptr);
                 }
             }
 

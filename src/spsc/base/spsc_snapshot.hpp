@@ -13,6 +13,14 @@
  *  - snapshot_view<T, Size>        (mutable view)
  *  - const_snapshot_view<T, Size>  (read-only view)
  *  - snapshot_traits<T, Size>      (bundles types for containers)
+ *
+ * Snapshots are short-lived consumer transactions, not generation-tagged
+ * recovery records. Container management (clear/reset/destroy/resize/swap,
+ * move, attach/adopt, or storage replacement) invalidates every outstanding
+ * snapshot. A container's try_consume(snapshot) can validate the current
+ * pointer/mask/range, but it cannot prove an epoch and may accept an ancient
+ * snapshot after management recreates the same state or after a full modular
+ * counter period.
  */
 
 #ifndef SPSC_SNAPSHOT_HPP_

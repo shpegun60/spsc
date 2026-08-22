@@ -116,6 +116,9 @@ q.consume(snap);
 `consume(snapshot)` is a precondition API: the consumer must not move between
 `make_snapshot()` and `consume()`. Use `try_consume(snapshot)` when consumer
 logic may branch, delay, or observe another consumer-side operation first.
+Both forms are short-lived and invalidated by management or storage changes;
+`try_consume` validates a range, not a generation, so it must not be used as an
+epoch/recovery check.
 
 Use snapshots when:
 

@@ -76,7 +76,10 @@ This is the simplest path for:
 - `typed_pool`
 - typed `latest`
 
-`pool` and `pool_view` also have typed `push(const U&)` / `try_push(const U&)`, but only for trivially-copyable `U`.
+`pool` and `pool_view` also have typed `push(const U&)` / `try_push(const U&)`,
+but only for trivially-copyable `U`. Owning `pool::push(U)` is an unchecked
+hot path with the precondition `sizeof(U) <= buffer_size()`; use `try_push(U)`
+when the payload size is not statically guaranteed.
 
 ## 3. In-Place Construction: `emplace` / `try_emplace`
 
@@ -211,6 +214,12 @@ if (validate(snap)) {
 ```
 
 This pattern exists on the FIFO-like families, but not on `latest`.
+
+Snapshots are short-lived: do not retain one across `clear`, reset, `destroy`,
+`resize`, `swap`, move, view `attach`/`adopt`, storage replacement, or a full
+counter wrap. `try_consume()` validates the current range but carries no epoch,
+so it cannot distinguish a stale snapshot after the same pointer/mask/index
+state reappears.
 
 ## 8. View-State Pattern: `attach` / `adopt` / `state`
 

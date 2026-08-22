@@ -858,12 +858,12 @@ public:
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(producer_can_write_cached_(n));
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!producer_can_write_cached_(n))) { return false; }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -915,12 +915,12 @@ public:
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(consumer_can_read_cached_(n));
-        Base::advance_tail(n);
+        Base::advance_tail_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!consumer_can_read_cached_(n))) { return false; }
-        Base::advance_tail(n);
+        Base::advance_tail_checked(n);
         return true;
     }
 

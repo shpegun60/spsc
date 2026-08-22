@@ -57,6 +57,7 @@
 #include <cstddef>                 // std::byte, std::ptrdiff_t
 #include <cstring>                 // std::memcpy
 #include <memory>                  // std::allocator_traits, uninitialized_default_construct_n, destroy_n
+#include <new>
 #include <type_traits>
 #include <utility>                 // std::swap, std::move, std::forward
 
@@ -409,6 +410,11 @@ public:
         slot_pointer new_pool = slot_alloc_traits::allocate(slot_alloc, depth_pow2);
         if (RB_UNLIKELY(!new_pool)) {
             return false;
+        }
+
+        for (size_type slot = 0u; slot < depth_pow2; ++slot) {
+            (void)::new (static_cast<void*>(new_pool + slot))
+                pointer(nullptr);
         }
 
         size_type i = 0u;

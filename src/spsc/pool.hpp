@@ -39,6 +39,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <new>
 #include <type_traits>
 #include <utility>
 
@@ -193,17 +194,25 @@ public:
     // ------------------------------------------------------------------------------------------
     // Constructors / Destructor
     // ------------------------------------------------------------------------------------------
-    pool() = default;
+    pool() noexcept
+        : Base()
+    {
+        bufferSize_.store(0u);
+    }
 
     // Dynamic: request initial depth + buffer size.
     template<size_type C = Capacity, typename = std::enable_if_t<C == 0>>
-    explicit pool(const size_type depth, const size_type buffer_size) {
+    explicit pool(const size_type depth, const size_type buffer_size)
+        : pool()
+    {
         (void)resize(depth, buffer_size);
     }
 
     // Static: request buffer size (depth is Capacity).
     template<size_type C = Capacity, typename = std::enable_if_t<C != 0>>
-    explicit pool(const size_type buffer_size) {
+    explicit pool(const size_type buffer_size)
+        : pool()
+    {
         (void)resize(buffer_size);
     }
 
@@ -211,7 +220,7 @@ public:
 
     // Copy semantics
     pool(const pool& other)
-        : Base() {
+        : pool() {
         (void)copy_from(other);
     }
 
@@ -227,7 +236,7 @@ public:
 
     // Move semantics
     pool(pool&& other) noexcept
-        : Base() {
+        : pool() {
         move_from(std::move(other));
     }
 
@@ -615,6 +624,7 @@ public:
                  std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
                      !std::is_volatile_v<U>, int> = 0>
     RB_FORCEINLINE void push(const U& v) noexcept {
+        // Precondition-only hot path. Use try_push(v) when U may not fit.
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(!producer_full_cached_());
         SPSC_ASSERT(sizeof(U) <= bufferSize_.load());
@@ -707,12 +717,12 @@ public:
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(producer_can_write_cached_(n));
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!producer_can_write_cached_(n))) { return false; }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -828,12 +838,12 @@ public:
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(consumer_can_read_cached_(n));
-        Base::advance_tail(n);
+        Base::advance_tail_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!consumer_can_read_cached_(n))) { return false; }
-        Base::advance_tail(n);
+        Base::advance_tail_checked(n);
         return true;
     }
 
@@ -1417,7 +1427,10 @@ private:
                 slot_allocator_type sa{};
                 new_slots = slot_alloc_traits::allocate(sa, target_depth);
                 if (RB_LIKELY(new_slots != nullptr)) {
-                    for (size_type i = 0; i < target_depth; ++i) { new_slots[i] = nullptr; }
+                    for (size_type i = 0; i < target_depth; ++i) {
+                        (void)::new (static_cast<void*>(new_slots + i))
+                            pointer(nullptr);
+                    }
                 }
             } else {
                 new_static.fill(nullptr);

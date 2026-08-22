@@ -34,6 +34,21 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   a potentially throwing move assignment. Dynamic `chunk` now owns eager slot
   construction directly instead of delegating lifetime control to a custom
   `Alloc::construct()` hook.
+- Explicit sub-64-bit shadow configurations now invalidate endpoint-local
+  caches after unchecked single and bulk progress, closing the stale-shadow
+  full-period alias that could otherwise overwrite unread data or expose an
+  empty slot. Checked commits retain their cached fast path, and 64-bit H8 code
+  is unchanged.
+- In no-exceptions mode, a non-empty dynamic `queue` rejects growth before
+  allocation unless its live values have a no-throw move or copy construction
+  path. Empty queues can still grow for immovable or throwing-relocation types.
+- Container construction now explicitly normalizes custom counter and geometry
+  backends to zero, including the auxiliary `buffer_size` state in `pool` and
+  `pool_view`; it no longer relies on a custom backend's default value.
+- Dynamic pointer tables in `pool`, `typed_pool`, raw `latest<void>`, and the
+  fully dynamic `buffer_pool` now explicitly begin every pointer element's
+  lifetime before assignment, preserving the C++17 raw-storage contract while
+  bypassing custom allocator construction hooks.
 
 ### Tests
 
@@ -44,6 +59,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   allocation shapes, copy-trait regressions, static-fifo move-selection checks,
   exception-mode multi-allocation rollback verification, and a hostile
   allocator regression proving that `chunk` never calls `Alloc::construct()`.
+- Added deterministic static/dynamic genuine-32-bit stale-shadow wrap probes
+  for strict-RMW and single-writer atomic policies, mode-0 queue
+  relocation/state-preservation coverage, hostile non-zero counter/geometry
+  construction checks, and hostile allocator regressions for all four dynamic
+  pointer-table allocation paths.
 
 ### CI
 
@@ -55,6 +75,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Clarified C++17 view-state recovery syntax, empty `buffer_pool` validity, and
   RAII guard side effects during exception unwinding; added the missing SPDX
   header to the internal value-swap helper.
+- Documented snapshot epoch/ABA limits, the owning `pool::push(U)` size
+  precondition, finite-period shadow behavior, custom-backend zero
+  normalization, and the proportional stack scratch used by selected static
+  management paths.
 
 ## [3.0.2] - 2026-08-21
 

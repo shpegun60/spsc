@@ -728,14 +728,14 @@ public:
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(producer_can_write_cached_(n));
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -809,7 +809,7 @@ public:
                 detail::destroy_at(slot_ptr((idx + i) & mask));
             }
         }
-        Base::advance_tail(n);
+        Base::advance_tail_unchecked(n);
     }
     // Guard against accidental overload selection when passing a value variable
     // that is implicitly convertible to size_type. Without this, a call like:
@@ -1085,12 +1085,20 @@ public:
         constexpr bool kCanRelocate =
             std::is_move_constructible_v<value_type> ||
             std::is_copy_constructible_v<value_type>;
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+        constexpr bool kCanRelocateLive =
+            std::is_nothrow_move_constructible_v<value_type> ||
+            std::is_nothrow_copy_constructible_v<value_type>;
+#else
+        constexpr bool kCanRelocateLive = kCanRelocate;
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
 
         // An empty dynamic queue does not need value_type relocation and may
         // therefore acquire or grow its storage even for an immovable T.  A
-        // non-empty queue must fail before allocation when no legal
-        // relocation operation exists.
-        if constexpr (!kCanRelocate) {
+        // non-empty queue must fail before allocation when no safe relocation
+        // operation exists. Mode 0 has no catch/rollback path, so its live
+        // migration operation must itself be non-throwing.
+        if constexpr (!kCanRelocateLive) {
             if (old_size != 0u) {
                 return false;
             }
