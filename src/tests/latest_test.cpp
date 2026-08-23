@@ -735,6 +735,33 @@ static void raw_try_api(Q& q) {
 }
 
 template <class Q>
+static void raw_array_push_publishes_payload(Q& q) {
+    q.clear();
+
+    // A C-array argument must publish the array bytes, not the bytes of a
+    // decayed pointer to it (regression for the decay_t-based overload that
+    // memcpy'd sizeof(pointer) address bytes into the slot).
+    std::uint8_t frame[sizeof(Blob)]{};
+    for (std::size_t i = 0u; i < sizeof(frame); ++i) {
+        frame[i] = static_cast<std::uint8_t>(0xA0u + i);
+    }
+    QVERIFY(q.try_push(frame));
+
+    const void* f = q.front();
+    QVERIFY(f != nullptr);
+    QVERIFY(std::memcmp(f, frame, sizeof(frame)) == 0);
+    QVERIFY(q.try_pop());
+
+    // An oversized payload is rejected, never truncated. Cache-aligned
+    // policies round the physical slot upward, so size the probe against the
+    // actual slot capacity rather than sizeof(Blob).
+    std::uint8_t oversized[1024u]{};
+    QVERIFY(static_cast<reg>(sizeof(oversized)) > q.bytes_per_slot());
+    QVERIFY(!q.try_push(oversized));
+    QVERIFY(q.try_front() == nullptr);
+}
+
+template <class Q>
 static void raw_coalescing_pending_slot_contract(Q& q) {
     auto write = [](void* slot, const std::uint32_t seq) {
         Blob value{};
@@ -1360,6 +1387,7 @@ static void run_dynamic_raw_suite() {
 
     raw_basic_api(q);
     raw_try_api(q);
+    raw_array_push_publishes_payload(q);
     raw_coalescing_pending_slot_contract(q);
     raw_fuzz(q, 0x3333u);
 

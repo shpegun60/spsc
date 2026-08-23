@@ -659,18 +659,21 @@ public:
     }
 
 
+    // Direct representation copy, symmetric with pool::push(U&). No decay_t
+    // and no local temporary: decay would silently collapse a C-array
+    // argument to a pointer (publishing the address bytes instead of the
+    // payload), and a by-value temporary would cost O(sizeof(U)) stack.
     template<class U,
-             class V = std::decay_t<U>,
-             typename = std::enable_if_t<
-                 std::is_trivially_copyable_v<V> &&
-                 std::is_constructible_v<V, U&&>>>
-    RB_FORCEINLINE void push(U&& src) noexcept(std::is_nothrow_constructible_v<std::decay_t<U>, U&&>) {
-        SPSC_ASSERT(buffer_size() >= static_cast<size_type>(sizeof(V)));
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                     !std::is_volatile_v<U>, int> = 0>
+    RB_FORCEINLINE void push(const U& src) noexcept {
+        SPSC_ASSERT(buffer_size() >= static_cast<size_type>(sizeof(U)));
         SPSC_ASSERT(is_valid());
         if (RB_UNLIKELY(!is_valid())) {
             return;
         }
-        if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(V)))) {
+        if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(U)))) {
             return;
         }
 
@@ -679,22 +682,20 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return;
         }
-        V tmp(std::forward<U>(src));
         pointer dst = slots_[snapshot.index];
-        std::memcpy(dst, std::addressof(tmp), sizeof(V));
+        std::memcpy(dst, std::addressof(src), sizeof(U));
         Base::producer_commit_single(snapshot);
     }
 
     template<class U,
-             class V = std::decay_t<U>,
-             typename = std::enable_if_t<
-                 std::is_trivially_copyable_v<V> &&
-                 std::is_constructible_v<V, U&&>>>
-    [[nodiscard]] RB_FORCEINLINE bool try_push(U&& src) noexcept(std::is_nothrow_constructible_v<std::decay_t<U>, U&&>) {
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                     !std::is_volatile_v<U>, int> = 0>
+    [[nodiscard]] RB_FORCEINLINE bool try_push(const U& src) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(V)))) {
+        if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(U)))) {
             return false;
         }
 
@@ -703,9 +704,8 @@ public:
             return false;
         }
 
-        V tmp(std::forward<U>(src));
         pointer dst = slots_[snapshot.index];
-        std::memcpy(dst, std::addressof(tmp), sizeof(V));
+        std::memcpy(dst, std::addressof(src), sizeof(U));
         Base::producer_commit_single(snapshot);
         return true;
     }

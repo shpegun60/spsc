@@ -2,6 +2,7 @@
 #include "src/spsc/buffer_pool.hpp"
 #include "src/spsc/chunk_fifo.hpp"
 #include "src/spsc/fifo.hpp"
+#include "src/spsc/latest.hpp"
 #include "src/spsc/pool.hpp"
 #include "src/spsc/typed_pool.hpp"
 
@@ -42,6 +43,7 @@ using large_typed_pool =
 using large_fixed_count_buffers =
     ::spsc::buffer_pool<std::byte, 0u, kLargeCount,
                         ::spsc::policy::P>;
+using raw_latest = ::spsc::latest<void, 0u, ::spsc::policy::P>;
 
 static_assert(std::is_copy_constructible_v<large_fifo>);
 static_assert(std::is_copy_assignable_v<large_fifo>);
@@ -55,6 +57,13 @@ static_assert(std::is_copy_constructible_v<large_fixed_count_buffers>);
 static_assert(std::is_copy_assignable_v<large_fixed_count_buffers>);
 
 } // namespace
+
+// Raw latest publish must copy the caller's object representation directly
+// into the slot; the frame must stay O(1), not O(sizeof(payload)). Defined
+// outside the anonymous namespace so the probe keeps external linkage.
+struct spsc_stack_large_pod {
+    std::byte bytes[4096u];
+};
 
 SPSC_STACK_NOINLINE void
 spsc_stack_fifo_assign(large_fifo& destination, const large_fifo& source) {
@@ -130,6 +139,12 @@ spsc_stack_buffer_pool_assign(large_fixed_count_buffers& destination,
 SPSC_STACK_NOINLINE bool
 spsc_stack_buffer_pool_resize(large_fixed_count_buffers& value) {
     return value.resize(128u);
+}
+
+SPSC_STACK_NOINLINE bool
+spsc_stack_raw_latest_push(raw_latest& value,
+                           const spsc_stack_large_pod& payload) {
+    return value.try_push(payload);
 }
 
 #undef SPSC_STACK_NOINLINE

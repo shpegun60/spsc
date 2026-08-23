@@ -8,6 +8,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Fixed
 
+- Raw `latest<void>` `push(U)`/`try_push(U)` no longer decay their argument:
+  a C-array payload now publishes its contents instead of the decayed
+  pointer's address bytes, volatile arguments are rejected at the contract
+  level, and the intermediate `O(sizeof(U))` stack temporary is gone — the
+  slot is filled by one direct representation copy, matching `pool::push(U&)`.
 - `queue::consume_all()` and `typed_pool::consume_all()` now consume exactly
   the prefix visible in one fresh consumer snapshot, so a concurrently active
   producer cannot make the operation unbounded and later publications survive
@@ -87,6 +92,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Extended the genuine-32-bit H6 shadow matrix with checked `try_consume`
   shadow-preservation regressions for `fifo`, `fifo_view`, `pool`, `pool_view`,
   and `typed_pool` under both strict-RMW and single-writer counting policies.
+- Added raw `latest` C-array publish and oversized-payload rejection
+  regressions, plus a bounded-stack probe proving raw `latest` publish of a
+  4096-byte payload keeps an O(1) frame.
 - Added allocation-failure/state-preservation regressions for transient static
   management tables and an exception-mode static-`fifo` basic-guarantee test.
 - Compile-fail verification now requires exactly one unique library contract

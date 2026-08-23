@@ -351,7 +351,15 @@ latestState.emplace(v, i, t);
 spsc::latest<void, 0> bytesLatest;
 bytesLatest.resize(4, 64);
 bytesLatest.try_push(Header{7u, 32u});
+
+std::uint8_t frame[48]{};
+bytesLatest.try_push(frame); // publishes all 48 frame bytes
 ```
+
+`push(U)` / `try_push(U)` copy the argument's object representation directly
+into the slot: `sizeof(U)` bytes, including a C-array argument's full
+contents. `U` must be trivially copyable and non-volatile, and `try_push`
+returns `false` (never truncates) when `sizeof(U)` exceeds the slot size.
 
 ### `front()`, `try_front()`
 
