@@ -11,8 +11,13 @@
  * Notes on shadow indices:
  * - Shadows are only useful for atomic-backed policies (MT/SMP).
  * - For plain/volatile policies they waste bytes and can hurt caches.
- * - On 32-bit counters, wrap-around is possible. Shadow logic is wrap-safe by
- *   validating (head - tail) against capacity().
+ * - Delta validation rejects ordinary stale values across counter wrap, but a
+ *   shadow retained for one complete counter-value period can alias a newer
+ *   state. Shadow-enabled counters narrower than 64 bits therefore poison the
+ *   endpoint-local cache after unchecked owner progress so the next cached
+ *   operation must reload the real opposite counter. The 64-bit hot path keeps
+ *   no extra poison store; a full-period stale-shadow alias is its practically
+ *   unreachable finite-counter limitation.
  *
  * Build toggles:
  *   - SPSC_ENABLE_SHADOW_INDICES (default: 1)
@@ -299,6 +304,8 @@ class SPSCbase
 
     static constexpr bool kUseShadow =
         ::spsc::detail::rb_use_shadow_v<PolicyT>;
+    static constexpr bool kPoisonShadowAfterUnchecked =
+        kUseShadow && (std::numeric_limits<reg>::digits < 64);
 
     using IndexStorage = ::spsc::detail::rb_index_storage<Cnt, kUseShadow>;
 
@@ -334,13 +341,24 @@ private:
         }
     }
 
+    RB_FORCEINLINE void producer_commit_raw_(reg) noexcept;
+    RB_FORCEINLINE void consumer_commit_raw_(reg, reg) noexcept;
+
+    RB_FORCEINLINE void poison_producer_shadow_(reg) noexcept;
+    RB_FORCEINLINE void poison_consumer_shadow_(reg) noexcept;
+
 
 public:
     using Base::capacity;
     using Base::mask;
 
 protected:
-    SPSCbase() noexcept = default;
+    SPSCbase() noexcept {
+        if constexpr (C == 0u) {
+            (void)Base::init(0u);
+        }
+        clear();
+    }
 
     // Dynamic-capacity constructor (C == 0 only).
     template<reg C_ = C, typename = std::enable_if_t<C_ == 0>>
@@ -538,9 +556,13 @@ protected:
     // Consumer-owned "consume all" (advances tail to head). Can be used concurrently.
     RB_FORCEINLINE void sync_tail_to_head() noexcept;
 
-    // Advancement helpers (producer/consumer responsibilities).
-    RB_FORCEINLINE void advance_head(const reg) noexcept;
-    RB_FORCEINLINE void advance_tail(const reg) noexcept;
+    // Bulk advancement keeps checked/cached and precondition-only paths
+    // distinct. A sub-64-bit shadow must be poisoned after unchecked owner
+    // progress so a later cached operation cannot accept a full-period alias.
+    RB_FORCEINLINE void advance_head_checked(const reg) noexcept;
+    RB_FORCEINLINE void advance_tail_checked(const reg) noexcept;
+    RB_FORCEINLINE void advance_head_unchecked(const reg) noexcept;
+    RB_FORCEINLINE void advance_tail_unchecked(const reg) noexcept;
 
     RB_FORCEINLINE void increment_head() noexcept;
     RB_FORCEINLINE void increment_tail() noexcept;
@@ -724,11 +746,11 @@ SPSCbase<C, PolicyT>::consumer_single_snapshot_fresh() const noexcept {
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_single(
     const single_write_snapshot &snapshot) noexcept {
-    producer_commit_owner(snapshot.owner);
+    producer_commit_raw_(snapshot.owner);
 }
 
 template<reg C, typename PolicyT>
-RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_owner(
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_raw_(
     const reg owner) noexcept {
     if constexpr (::spsc::cnt::counter_is_single_writer_v<Cnt>) {
         // The endpoint's owner value came from a producer owner snapshot. A
@@ -742,6 +764,25 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_owner(
 }
 
 template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::poison_producer_shadow_(
+    const reg new_head) noexcept {
+    if constexpr (kPoisonShadowAfterUnchecked) {
+        // Make every cached producer delta impossible (> capacity). The next
+        // checked/cached producer operation must reload the real tail.
+        _indices.prod_shadow_tail() = static_cast<reg>(new_head + 1u);
+    } else {
+        (void)new_head;
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::producer_commit_owner(
+    const reg owner) noexcept {
+    producer_commit_raw_(owner);
+    poison_producer_shadow_(static_cast<reg>(owner + 1u));
+}
+
+template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_single(
     const single_read_snapshot &snapshot) noexcept {
     consumer_commit_from_snapshot(snapshot, 1u);
@@ -750,7 +791,7 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_single(
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_from_snapshot(
     const single_read_snapshot &snapshot, const reg count) noexcept {
-    consumer_commit_from_owner(snapshot.owner, count);
+    consumer_commit_raw_(snapshot.owner, count);
 }
 
 template<reg C, typename PolicyT>
@@ -760,7 +801,7 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_owner(
 }
 
 template<reg C, typename PolicyT>
-RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_from_owner(
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_raw_(
     const reg owner, const reg count) noexcept {
     if constexpr (::spsc::cnt::counter_is_single_writer_v<Cnt>) {
         // A release/seq_cst store makes the retired slot visible to the
@@ -769,6 +810,27 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_from_owner(
     } else {
         (void)owner;
         _indices.tail_counter().add(count);
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::poison_consumer_shadow_(
+    const reg new_tail) noexcept {
+    if constexpr (kPoisonShadowAfterUnchecked) {
+        // Make every cached consumer delta impossible (> capacity). The next
+        // checked/cached consumer operation must reload the real head.
+        _indices.cons_shadow_head() = static_cast<reg>(new_tail - 1u);
+    } else {
+        (void)new_tail;
+    }
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::consumer_commit_from_owner(
+    const reg owner, const reg count) noexcept {
+    consumer_commit_raw_(owner, count);
+    if (count != 0u) {
+        poison_consumer_shadow_(static_cast<reg>(owner + count));
     }
 }
 
@@ -1316,12 +1378,39 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::set_head(const reg new_head) noexcept 
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::increment_head() noexcept {
-    _indices.head_counter().inc();
+    if constexpr (kPoisonShadowAfterUnchecked) {
+        const reg owner = rb_owner_load_(_indices.head_counter());
+        producer_commit_owner(owner);
+    } else {
+        _indices.head_counter().inc();
+    }
 }
 
 template<reg C, typename PolicyT>
-RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_head(const reg n) noexcept {
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_head_checked(
+    const reg n) noexcept {
     _indices.head_counter().add(n);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_head_unchecked(
+    const reg n) noexcept {
+    if constexpr (kPoisonShadowAfterUnchecked) {
+        const reg owner = rb_owner_load_(_indices.head_counter());
+        const reg next = static_cast<reg>(owner + n);
+
+        if constexpr (::spsc::cnt::counter_is_single_writer_v<Cnt>) {
+            _indices.head_counter().store(next);
+        } else {
+            _indices.head_counter().add(n);
+        }
+
+        if (n != 0u) {
+            poison_producer_shadow_(next);
+        }
+    } else {
+        _indices.head_counter().add(n);
+    }
 }
 
 /* tail ops */
@@ -1332,12 +1421,39 @@ RB_FORCEINLINE void SPSCbase<C, PolicyT>::set_tail(const reg new_tail) noexcept 
 
 template<reg C, typename PolicyT>
 RB_FORCEINLINE void SPSCbase<C, PolicyT>::increment_tail() noexcept {
-    _indices.tail_counter().inc();
+    if constexpr (kPoisonShadowAfterUnchecked) {
+        const reg owner = rb_owner_load_(_indices.tail_counter());
+        consumer_commit_owner(owner);
+    } else {
+        _indices.tail_counter().inc();
+    }
 }
 
 template<reg C, typename PolicyT>
-RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_tail(const reg n) noexcept {
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_tail_checked(
+    const reg n) noexcept {
     _indices.tail_counter().add(n);
+}
+
+template<reg C, typename PolicyT>
+RB_FORCEINLINE void SPSCbase<C, PolicyT>::advance_tail_unchecked(
+    const reg n) noexcept {
+    if constexpr (kPoisonShadowAfterUnchecked) {
+        const reg owner = rb_owner_load_(_indices.tail_counter());
+        const reg next = static_cast<reg>(owner + n);
+
+        if constexpr (::spsc::cnt::counter_is_single_writer_v<Cnt>) {
+            _indices.tail_counter().store(next);
+        } else {
+            _indices.tail_counter().add(n);
+        }
+
+        if (n != 0u) {
+            poison_consumer_shadow_(next);
+        }
+    } else {
+        _indices.tail_counter().add(n);
+    }
 }
 
 template<reg C, typename PolicyT>

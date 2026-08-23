@@ -735,6 +735,33 @@ static void raw_try_api(Q& q) {
 }
 
 template <class Q>
+static void raw_array_push_publishes_payload(Q& q) {
+    q.clear();
+
+    // A C-array argument must publish the array bytes, not the bytes of a
+    // decayed pointer to it (regression for the decay_t-based overload that
+    // memcpy'd sizeof(pointer) address bytes into the slot).
+    std::uint8_t frame[sizeof(Blob)]{};
+    for (std::size_t i = 0u; i < sizeof(frame); ++i) {
+        frame[i] = static_cast<std::uint8_t>(0xA0u + i);
+    }
+    QVERIFY(q.try_push(frame));
+
+    const void* f = q.front();
+    QVERIFY(f != nullptr);
+    QVERIFY(std::memcmp(f, frame, sizeof(frame)) == 0);
+    QVERIFY(q.try_pop());
+
+    // An oversized payload is rejected, never truncated. Cache-aligned
+    // policies round the physical slot upward, so size the probe against the
+    // actual slot capacity rather than sizeof(Blob).
+    std::uint8_t oversized[1024u]{};
+    QVERIFY(static_cast<reg>(sizeof(oversized)) > q.bytes_per_slot());
+    QVERIFY(!q.try_push(oversized));
+    QVERIFY(q.try_front() == nullptr);
+}
+
+template <class Q>
 static void raw_coalescing_pending_slot_contract(Q& q) {
     auto write = [](void* slot, const std::uint32_t seq) {
         Blob value{};
@@ -1360,6 +1387,7 @@ static void run_dynamic_raw_suite() {
 
     raw_basic_api(q);
     raw_try_api(q);
+    raw_array_push_publishes_payload(q);
     raw_coalescing_pending_slot_contract(q);
     raw_fuzz(q, 0x3333u);
 
@@ -1727,16 +1755,23 @@ struct CountingAllocator {
     template <typename U>
     CountingAllocator(const CountingAllocator<U>&) noexcept {}
 
-    [[nodiscard]] T* allocate(std::size_t n) {
+    [[nodiscard]] T* allocate(std::size_t n) noexcept {
+        spsc::alloc::basic_allocator<
+            T, spsc::alloc::fail_mode::returns_null> alloc;
+        T* const result = alloc.allocate(n);
+        if (result == nullptr) {
+            return nullptr;
+        }
         alloc_calls.fetch_add(1, std::memory_order_relaxed);
         bytes_live.fetch_add(n * sizeof(T), std::memory_order_relaxed);
-        return std::allocator<T>{}.allocate(n);
+        return result;
     }
 
     void deallocate(T* p, std::size_t n) noexcept {
         dealloc_calls.fetch_add(1, std::memory_order_relaxed);
         bytes_live.fetch_sub(n * sizeof(T), std::memory_order_relaxed);
-        std::allocator<T>{}.deallocate(p, n);
+        spsc::alloc::basic_allocator<
+            T, spsc::alloc::fail_mode::returns_null>{}.deallocate(p, n);
     }
 
     template <typename U>
@@ -2264,27 +2299,40 @@ static void reserve_resize_edge_cases_raw_dynamic() {
     const reg cap0 = q.capacity();
     const reg bs0  = q.bytes_per_slot();
 
-    QVERIFY(q.reserve(2u, 1u)); // No shrink.
+    // A no-op reserve must preserve the currently published state.
+    const std::uint32_t no_op_value = 0x13579BDFu;
+    QVERIFY(q.try_push(no_op_value));
+    QVERIFY(!q.empty());
+    QVERIFY(q.reserve(cap0, bs0));
     QCOMPARE(q.capacity(), cap0);
     QCOMPARE(q.bytes_per_slot(), bs0);
+    QVERIFY(!q.empty());
+    std::uint32_t out{};
+    std::memcpy(&out, q.try_front(), sizeof(out));
+    QCOMPARE(out, no_op_value);
 
-    // Each reserve axis is an independent minimum. Growing slot bytes must
-    // retain depth even when the requested minimum depth is smaller.
+    // Actual slot-byte growth rebuilds storage and clears published state.
     const reg grow_bytes_req = static_cast<reg>(bs0 + 8u);
-    QVERIFY(q.reserve(2u, grow_bytes_req));
+    QVERIFY(q.reserve(cap0, grow_bytes_req));
     QCOMPARE(q.capacity(), cap0);
     QCOMPARE(q.bytes_per_slot(), expected_raw_slot_bytes<Q>(grow_bytes_req));
+    QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
 
-    // The inverse cross-axis request must grow depth without shrinking bytes.
+    // The inverse cross-axis request grows depth without shrinking bytes and
+    // is destructive for the same reason.
+    const std::uint32_t depth_growth_value = 0x2468ACE0u;
+    QVERIFY(q.try_push(depth_growth_value));
+    QVERIFY(!q.empty());
     const reg bytes_after_growth = q.bytes_per_slot();
     QVERIFY(q.reserve(cap0 + 1u, 1u));
     QVERIFY(q.capacity() >= cap0 + 1u);
     QCOMPARE(q.bytes_per_slot(), bytes_after_growth);
     QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
 
     const std::uint32_t v = 0xDEADBEEFu;
     QVERIFY(q.try_push(v));
-    std::uint32_t out{};
     std::memcpy(&out, q.front(), sizeof(out));
     QCOMPARE(out, v);
 

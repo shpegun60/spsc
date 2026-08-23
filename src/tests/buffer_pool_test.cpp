@@ -1442,13 +1442,15 @@ static void allocator_accounting_suite()
         QRuntimeCount q;
         QVERIFY(q.resize(4u));
         verify_invariants(q);
-        QCOMPARE(alloc_control<RuntimeCountTag>::alloc_calls.load(), std::size_t{3u});
-        QCOMPARE(alloc_control<RuntimeCountTag>::dealloc_calls.load(), std::size_t{0u});
+        // One transient pointer table plus one persistent allocation per
+        // fixed-count payload. The table is released before resize returns.
+        QCOMPARE(alloc_control<RuntimeCountTag>::alloc_calls.load(), std::size_t{4u});
+        QCOMPARE(alloc_control<RuntimeCountTag>::dealloc_calls.load(), std::size_t{1u});
         QCOMPARE(alloc_control<RuntimeCountTag>::bytes_live.load(),
                  static_cast<std::size_t>(q.count()) * static_cast<std::size_t>(q.span_bytes()));
         q.destroy();
         QCOMPARE(alloc_control<RuntimeCountTag>::bytes_live.load(), std::size_t{0u});
-        QCOMPARE(alloc_control<RuntimeCountTag>::dealloc_calls.load(), std::size_t{3u});
+        QCOMPARE(alloc_control<RuntimeCountTag>::dealloc_calls.load(), std::size_t{4u});
     }
 
     alloc_control<DynamicTag>::reset();

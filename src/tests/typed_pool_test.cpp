@@ -48,6 +48,7 @@
 #endif
 
 #include "test_policy_matrix.hpp"
+#include "test_bounded_consume.hpp"
 
 #include "typed_pool.hpp"
 
@@ -194,6 +195,10 @@ static void api_smoke_compile() {
 
     static_assert(std::is_pointer_v<value_type>);
     static_assert(std::is_same_v<std::remove_pointer_t<value_type>, obj_type>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().data()),
+                                 value_type const*>);
+    static_assert(std::is_same_v<decltype(std::declval<const Q&>().data()),
+                                 value_type const*>);
 
     // Producer
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_emplace(std::declval<std::uint32_t>())), bool>);
@@ -237,8 +242,6 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_write(reg{1})), typename Q::bulk_write_guard>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_read(reg{1})), typename Q::bulk_read_guard>);
 
-    // Const API should compile.
-    (void)sizeof(decltype(std::declval<const Q&>().data()));
 }
 
 static void api_compile_smoke_all() {
@@ -287,10 +290,12 @@ struct Tracked {
     static inline std::atomic<long long> copy{0};
     static inline std::atomic<long long> move{0};
 
-    Tracked() { ++live; ++ctor; }
-    explicit Tracked(std::uint32_t s) : seq(s) { ++live; ++ctor; }
+    Tracked() noexcept { ++live; ++ctor; }
+    explicit Tracked(std::uint32_t s) noexcept : seq(s) { ++live; ++ctor; }
 
-    Tracked(const Tracked& o) : seq(o.seq), cookie(o.cookie) { ++live; ++ctor; ++copy; }
+    Tracked(const Tracked& o) noexcept : seq(o.seq), cookie(o.cookie) {
+        ++live; ++ctor; ++copy;
+    }
 
     Tracked(Tracked&& o) noexcept : seq(o.seq), cookie(o.cookie) {
         o.cookie = 0xDEADu;
@@ -300,7 +305,7 @@ struct Tracked {
     Tracked& operator=(const Tracked&) = delete;
     Tracked& operator=(Tracked&&) = delete;
 
-    ~Tracked() {
+    ~Tracked() noexcept {
         cookie = 0xBADC0DEu;
         ++dtor;
         --live;
@@ -1459,6 +1464,11 @@ static void consume_all_contract_suite() {
     }
     QCOMPARE(Tracked::live.load(), 0);
     QCOMPARE(Tracked::ctor.load(), Tracked::dtor.load());
+
+    using ConcurrentPool =
+        spsc::typed_pool<spsc::test::bounded_consume_value, 4u,
+                         spsc::policy::FA<>>;
+    QVERIFY(spsc::test::bounded_consume_snapshot_contract<ConcurrentPool>());
 }
 
 template <class Policy>

@@ -129,13 +129,17 @@ class buffer_pool
                   "[buffer_pool]: static buffers require copy-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: static buffers require copy-assignable T.");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
-    static_assert(std::is_nothrow_destructible_v<T>,
-                  "[buffer_pool]: no-exceptions mode requires noexcept destructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
+    // The fully static form copies through the defaulted copy constructor,
+    // so mode 0 must also prove nothrow copy construction of T.
+    static_assert(std::is_nothrow_copy_constructible_v<T>,
+                  "[buffer_pool]: no-exceptions mode requires noexcept copy-constructible T.");
 #endif
 
 public:
@@ -163,8 +167,8 @@ public:
                   "[buffer_pool]: static buffer slot alignment must honor the policy storage alignment.");
     static_assert((sizeof(stored_buffer_type) % alignof(stored_buffer_type)) == 0u,
                   "[buffer_pool]: static buffer slot size must be a multiple of its alignment.");
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[buffer_pool]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[buffer_pool]: allocator must be nothrow default-constructible.");
     static_assert(std::is_unsigned_v<size_type>,
                   "[buffer_pool]: reg (size_type) must be unsigned.");
     static_assert(sizeof(buffer_type) <= (std::numeric_limits<size_type>::max)(),
@@ -239,11 +243,11 @@ class buffer_pool<T, BufferSize, 0u, Policy, Alloc>
                   "[buffer_pool]: fixed-size buffers require default-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: fixed-size buffers require copy-assignable T.");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
-    static_assert(std::is_nothrow_destructible_v<T>,
-                  "[buffer_pool]: no-exceptions mode requires noexcept destructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
 #endif
@@ -266,12 +270,20 @@ public:
     static constexpr size_type static_count = 0u;
     static constexpr size_type static_buffer_size = BufferSize;
 
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[buffer_pool]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[buffer_pool]: base allocator must be nothrow default-constructible.");
     static_assert(alloc_traits::is_always_equal::value,
                   "[buffer_pool]: dynamic buffer count requires always_equal allocator.");
-    static_assert(std::is_default_constructible_v<allocator_type>,
-                  "[buffer_pool]: dynamic buffer count requires default-constructible allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "[buffer_pool]: dynamic buffer count requires nothrow default-constructible allocator.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(alloc::detail::allocator_size_covers_reg_v<allocator_type>,
+                  "[buffer_pool]: allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<typename alloc_traits::pointer, stored_buffer_type*>,
                   "[buffer_pool]: dynamic buffer count requires allocator pointer type stored_buffer_type*.");
     static_assert(detail::allocator_supports_slot_alignment_v<base_allocator_type, stored_buffer_type>,
@@ -289,7 +301,7 @@ public:
                   "[buffer_pool]: effective fixed-buffer byte size must fit in reg.");
 
     static constexpr bool kNoexceptAllocate =
-        noexcept(alloc_traits::allocate(std::declval<allocator_type&>(), typename alloc_traits::size_type{1}));
+        alloc::detail::allocator_allocate_noexcept_v<allocator_type>;
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Assignment
@@ -379,9 +391,16 @@ public:
         }
 
         const size_type copy_count = is_valid() ? ((count_ < count) ? count_ : count) : 0u;
-        if (!copy_prefix_(new_buffers, count, buffers_, copy_count)) {
+        SPSC_TRY {
+            if (!copy_prefix_(new_buffers, count, buffers_, copy_count)) {
+                destroy_buffer_block_(new_buffers, count);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
             destroy_buffer_block_(new_buffers, count);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<stored_buffer_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         destroy();
@@ -460,7 +479,10 @@ private:
                 std::destroy_n(ptr, built);
                 alloc_traits::deallocate(alloc, ptr, count);
             }
-            return false;
+            if constexpr (!(kNoexceptAllocate &&
+                          std::is_nothrow_default_constructible_v<stored_buffer_type>)) {
+                SPSC_RETHROW;
+            }
         }
 
         out = ptr;
@@ -501,7 +523,9 @@ private:
                 dst[i] = src[i];
             }
         } SPSC_CATCH_ALL {
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<stored_buffer_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         return true;
@@ -535,9 +559,18 @@ private:
             return false;
         }
 
-        if (!copy_prefix_(new_buffers, other.count_, other.buffers_, other.count_)) {
+        SPSC_TRY {
+            if (!copy_prefix_(new_buffers, other.count_, other.buffers_, other.count_)) {
+                destroy_buffer_block_(new_buffers, other.count_);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
+            // Release the transient destination, then let the caller's
+            // exception propagate; the previous state is untouched.
             destroy_buffer_block_(new_buffers, other.count_);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<stored_buffer_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         buffers_ = new_buffers;
@@ -574,11 +607,14 @@ class buffer_pool<T, 0u, Count, Policy, Alloc>
                   "[buffer_pool]: dynamic-size buffers require default-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: dynamic-size buffers require copy-assignable T.");
+    static_assert(!std::is_volatile_v<T>,
+                  "[buffer_pool]: volatile payloads are not supported by "
+                  "runtime-size buffer construction.");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
-    static_assert(std::is_nothrow_destructible_v<T>,
-                  "[buffer_pool]: no-exceptions mode requires noexcept destructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
 #endif
@@ -597,26 +633,55 @@ public:
     using pointer = value_type*;
     using const_pointer = const value_type*;
     using byte_pointer = typename byte_alloc_traits::pointer;
+    using table_allocator_type = typename std::allocator_traits<base_allocator_type>::template rebind_alloc<pointer>;
+    using table_alloc_traits = std::allocator_traits<table_allocator_type>;
+    using table_pointer = typename table_alloc_traits::pointer;
 
     static constexpr size_type static_count = Count;
     static constexpr size_type static_buffer_size = 0u;
 
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[buffer_pool]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[buffer_pool]: base allocator must be nothrow default-constructible.");
     static_assert(byte_alloc_traits::is_always_equal::value,
                   "[buffer_pool]: dynamic buffer size requires always_equal allocator.");
-    static_assert(std::is_default_constructible_v<byte_allocator_type>,
-                  "[buffer_pool]: dynamic buffer size requires default-constructible allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<byte_allocator_type>,
+                  "[buffer_pool]: dynamic buffer size requires nothrow default-constructible allocator.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires byte "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(alloc::detail::allocator_size_covers_reg_v<byte_allocator_type>,
+                  "[buffer_pool]: byte allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<byte_pointer, byte_type*>,
-                  "[buffer_pool]: dynamic buffer size requires allocator pointer type std::byte*.");
+                   "[buffer_pool]: dynamic buffer size requires allocator pointer type std::byte*.");
+    static_assert(table_alloc_traits::is_always_equal::value,
+                  "[buffer_pool]: pointer-table allocator must be always_equal.");
+    static_assert(std::is_nothrow_default_constructible_v<table_allocator_type>,
+                  "[buffer_pool]: pointer-table allocator must be nothrow default-constructible.");
+    static_assert(alloc::detail::allocator_size_covers_reg_v<table_allocator_type>,
+                  "[buffer_pool]: pointer-table allocator size_type must represent the reg domain.");
+    static_assert(std::is_same_v<table_pointer, pointer*>,
+                  "[buffer_pool]: pointer-table allocator must expose T** (raw).");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<table_allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires pointer-table "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
     static_assert(alloc::rebind_allocator_min_alignment_v<base_allocator_type, byte_type> >=
                       alloc::policy_storage_alignment_v<policy_type, value_type>,
                   "[buffer_pool]: allocator rebind must preserve runtime-buffer alignment.");
     static_assert(std::is_unsigned_v<size_type>,
                   "[buffer_pool]: reg (size_type) must be unsigned.");
 
+    static constexpr bool kNoexceptByteAllocate =
+        alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>;
+    static constexpr bool kNoexceptTableAllocate =
+        alloc::detail::allocator_allocate_noexcept_v<table_allocator_type>;
     static constexpr bool kNoexceptAllocate =
-        noexcept(byte_alloc_traits::allocate(std::declval<byte_allocator_type&>(), typename byte_alloc_traits::size_type{1}));
+        kNoexceptByteAllocate && kNoexceptTableAllocate;
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Assignment
@@ -652,12 +717,9 @@ public:
             return *this;
         }
 
-        buffer_pool tmp;
-        if ((other.buffer_size_ != 0u) && !tmp.copy_from_(other)) {
+        if (!copy_from_(other)) {
             return *this;
         }
-
-        swap(tmp);
         return *this;
     }
     buffer_pool(buffer_pool&& other) noexcept
@@ -701,19 +763,27 @@ public:
             return true;
         }
 
-        std::array<pointer, Count> new_buffers{};
-        if (!allocate_all_buffers_(buffer_size, new_buffers)) {
+        scratch_table_type scratch{};
+        if (!allocate_scratch_(scratch) ||
+            !allocate_all_buffers_(buffer_size, scratch.data())) {
             return false;
         }
 
         const size_type copy_size = is_valid() ? ((buffer_size_ < buffer_size) ? buffer_size_ : buffer_size) : 0u;
-        if (!copy_prefix_(new_buffers, buffer_size, buffers_, copy_size)) {
-            release_all_buffers_(new_buffers, buffer_size);
-            return false;
+        SPSC_TRY {
+            if (!copy_prefix_(scratch.data(), buffer_size, buffers_.data(), copy_size)) {
+                release_all_buffers_(scratch.data(), buffer_size);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
+            release_all_buffers_(scratch.data(), buffer_size);
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         destroy();
-        buffers_ = new_buffers;
+        commit_scratch_(scratch.data());
         buffer_size_ = buffer_size;
         return true;
     }
@@ -725,7 +795,7 @@ public:
         }
 
         if (state_ok_(buffers_, buffer_size_)) {
-            release_all_buffers_(buffers_, buffer_size_);
+            release_all_buffers_(buffers_.data(), buffer_size_);
         } else {
             clear_slots_();
         }
@@ -741,10 +811,15 @@ public:
     // size()/size_bytes() expose usable logical size.
     // span_bytes() exposes the physical policy-rounded span for valid storage.
     // ------------------------------------------------------------------------------------------
+    // Introspection accessors rely on the O(1) shape invariant (the slot
+    // table is all-or-nothing, maintained by commit-after-complete
+    // management) instead of the deep O(Count) pointer scan; is_valid()
+    // stays available as the explicit deep integrity check and still guards
+    // these paths in assert-enabled builds.
     [[nodiscard]] static constexpr size_type count() noexcept { return Count; }
-    [[nodiscard]] size_type size() const noexcept { return is_valid() ? buffer_size_ : 0u; }
-    [[nodiscard]] size_type size_bytes() const noexcept { return is_valid() ? detail::logical_buffer_bytes<size_type, value_type>(buffer_size_) : 0u; }
-    [[nodiscard]] size_type span_bytes() const noexcept { return is_valid() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
+    [[nodiscard]] size_type size() const noexcept { SPSC_ASSERT(is_valid()); return buffer_size_; }
+    [[nodiscard]] size_type size_bytes() const noexcept { SPSC_ASSERT(is_valid()); return detail::logical_buffer_bytes<size_type, value_type>(buffer_size_); }
+    [[nodiscard]] size_type span_bytes() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
     [[nodiscard]] static constexpr size_type alignment() noexcept { return static_cast<size_type>(alloc::policy_storage_alignment_v<policy_type, value_type>); }
     [[nodiscard]] size_type payload_bytes() const noexcept { return size_bytes(); }
     [[nodiscard]] size_type cache_span_bytes() const noexcept { return span_bytes(); }
@@ -754,27 +829,34 @@ public:
     // ------------------------------------------------------------------------------------------
     // Element Access
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] pointer data(const size_type index) noexcept { return (is_valid() && (index < Count)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (is_valid() && (index < Count)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] pointer data(const size_type index) noexcept { return (shape_ok_() && (index < Count)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (shape_ok_() && (index < Count)) ? buffers_[index] : nullptr; }
     [[nodiscard]] pointer operator[](const size_type index) noexcept
     {
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(buffer_size_ != 0u);
         SPSC_ASSERT(index < Count);
-        return (is_valid() && (buffer_size_ != 0u) && (index < Count)) ? buffers_[index] : nullptr;
+        return (shape_ok_() && (index < Count)) ? buffers_[index] : nullptr;
     }
     [[nodiscard]] const_pointer operator[](const size_type index) const noexcept
     {
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(buffer_size_ != 0u);
         SPSC_ASSERT(index < Count);
-        return (is_valid() && (buffer_size_ != 0u) && (index < Count)) ? buffers_[index] : nullptr;
+        return (shape_ok_() && (index < Count)) ? buffers_[index] : nullptr;
     }
 
 private:
     // ------------------------------------------------------------------------------------------
     // Internal Helpers
     // ------------------------------------------------------------------------------------------
+    using scratch_table_type =
+        alloc::detail::pointer_table_scratch<pointer, base_allocator_type>;
+
+    // O(1) shape coherence used by the release-path accessors; the deep
+    // O(Count) integrity scan stays in state_ok_()/is_valid().
+    [[nodiscard]] bool shape_ok_() const noexcept { return buffer_size_ != 0u; }
+
     [[nodiscard]] static bool state_ok_(const std::array<pointer, Count>& slot_ptrs,
                                         const size_type buffer_size) noexcept
     {
@@ -790,7 +872,7 @@ private:
     }
 
     static bool allocate_buffer_(const size_type buffer_size, pointer& out) noexcept(
-        kNoexceptAllocate && std::is_nothrow_default_constructible_v<value_type>)
+        kNoexceptByteAllocate && std::is_nothrow_default_constructible_v<value_type>)
     {
         const size_type effective_bytes = effective_buffer_size_bytes_(buffer_size);
         if (RB_UNLIKELY(effective_bytes == 0u)) {
@@ -819,7 +901,10 @@ private:
             if (raw != nullptr) {
                 byte_alloc_traits::deallocate(alloc, raw, effective_bytes);
             }
-            return false;
+            if constexpr (!(kNoexceptByteAllocate &&
+                          std::is_nothrow_default_constructible_v<value_type>)) {
+                SPSC_RETHROW;
+            }
         }
 
         out = ptr;
@@ -840,33 +925,56 @@ private:
                                       effective_bytes);
     }
 
-    static bool allocate_all_buffers_(const size_type buffer_size, std::array<pointer, Count>& out) noexcept(
-        kNoexceptAllocate && std::is_nothrow_default_constructible_v<value_type>)
+    static bool allocate_all_buffers_(const size_type buffer_size, pointer* const out) noexcept(
+        kNoexceptByteAllocate && std::is_nothrow_default_constructible_v<value_type>)
     {
-        for (size_type i = 0u; i < Count; ++i) {
-            if (!allocate_buffer_(buffer_size, out[i])) {
-                for (size_type j = 0u; j < i; ++j) {
-                    release_buffer_(out[j], buffer_size);
-                    out[j] = nullptr;
+        SPSC_ASSERT(out != nullptr);
+        if (RB_UNLIKELY(out == nullptr)) {
+            return false;
+        }
+
+        size_type built = 0u;
+        SPSC_TRY {
+            for (; built < Count; ++built) {
+                if (!allocate_buffer_(buffer_size, out[built])) {
+                    for (size_type j = 0u; j < built; ++j) {
+                        release_buffer_(out[j], buffer_size);
+                        out[j] = nullptr;
+                    }
+                    return false;
                 }
-                return false;
+            }
+        } SPSC_CATCH_ALL {
+            // The failing slot cleaned itself up; release the built prefix
+            // and let the caller's exception propagate.
+            for (size_type j = 0u; j < built; ++j) {
+                release_buffer_(out[j], buffer_size);
+                out[j] = nullptr;
+            }
+            if constexpr (!(kNoexceptByteAllocate &&
+                          std::is_nothrow_default_constructible_v<value_type>)) {
+                SPSC_RETHROW;
             }
         }
 
         return true;
     }
 
-    static void release_all_buffers_(std::array<pointer, Count>& slot_ptrs, const size_type buffer_size) noexcept
+    static void release_all_buffers_(pointer* const slot_ptrs,
+                                     const size_type buffer_size) noexcept
     {
+        if (slot_ptrs == nullptr) {
+            return;
+        }
         for (size_type i = 0u; i < Count; ++i) {
             release_buffer_(slot_ptrs[i], buffer_size);
             slot_ptrs[i] = nullptr;
         }
     }
 
-    static bool copy_prefix_(std::array<pointer, Count>& dst,
+    static bool copy_prefix_(pointer* const dst,
                              const size_type dst_buffer_size,
-                             const std::array<pointer, Count>& src,
+                             pointer const* const src,
                              const size_type copy_size) noexcept(std::is_nothrow_copy_assignable_v<value_type>)
     {
         (void)dst_buffer_size;
@@ -888,21 +996,40 @@ private:
                 }
             }
         } SPSC_CATCH_ALL {
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         return true;
     }
 
+    static bool allocate_scratch_(scratch_table_type& scratch) noexcept(
+        kNoexceptTableAllocate)
+    {
+        // A null-returning table allocator still reports false; a throwing
+        // one propagates like every other owning allocation path.
+        return scratch.allocate(Count);
+    }
+
+    void commit_scratch_(pointer const* const fresh) noexcept
+    {
+        SPSC_ASSERT(fresh != nullptr);
+        for (size_type i = 0u; i < Count; ++i) {
+            buffers_[i] = fresh[i];
+        }
+    }
+
     bool init_size_(const size_type buffer_size) noexcept(
         kNoexceptAllocate && std::is_nothrow_default_constructible_v<value_type>)
     {
-        std::array<pointer, Count> new_buffers{};
-        if (!allocate_all_buffers_(buffer_size, new_buffers)) {
+        scratch_table_type scratch{};
+        if (!allocate_scratch_(scratch) ||
+            !allocate_all_buffers_(buffer_size, scratch.data())) {
             return false;
         }
 
-        buffers_ = new_buffers;
+        commit_scratch_(scratch.data());
         buffer_size_ = buffer_size;
         return true;
     }
@@ -914,20 +1041,33 @@ private:
         }
 
         if (other.buffer_size_ == 0u) {
+            destroy();
             return true;
         }
 
-        std::array<pointer, Count> new_buffers{};
-        if (!allocate_all_buffers_(other.buffer_size_, new_buffers)) {
+        scratch_table_type scratch{};
+        if (!allocate_scratch_(scratch) ||
+            !allocate_all_buffers_(other.buffer_size_, scratch.data())) {
             return false;
         }
 
-        if (!copy_prefix_(new_buffers, other.buffer_size_, other.buffers_, other.buffer_size_)) {
-            release_all_buffers_(new_buffers, other.buffer_size_);
-            return false;
+        SPSC_TRY {
+            if (!copy_prefix_(scratch.data(), other.buffer_size_,
+                              other.buffers_.data(), other.buffer_size_)) {
+                release_all_buffers_(scratch.data(), other.buffer_size_);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
+            // Release the transient destination, then let the caller's
+            // exception propagate; the previous state is untouched.
+            release_all_buffers_(scratch.data(), other.buffer_size_);
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
-        buffers_ = new_buffers;
+        destroy();
+        commit_scratch_(scratch.data());
         buffer_size_ = other.buffer_size_;
         return true;
     }
@@ -973,11 +1113,14 @@ class buffer_pool<T, 0u, 0u, Policy, Alloc>
                   "[buffer_pool]: dynamic buffers require default-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: dynamic buffers require copy-assignable T.");
+    static_assert(!std::is_volatile_v<T>,
+                  "[buffer_pool]: volatile payloads are not supported by "
+                  "runtime-size buffer construction.");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
-    static_assert(std::is_nothrow_destructible_v<T>,
-                  "[buffer_pool]: no-exceptions mode requires noexcept destructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
 #endif
@@ -1002,16 +1145,30 @@ public:
     static constexpr size_type static_count = 0u;
     static constexpr size_type static_buffer_size = 0u;
 
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[buffer_pool]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[buffer_pool]: base allocator must be nothrow default-constructible.");
     static_assert(slot_alloc_traits::is_always_equal::value,
                   "[buffer_pool]: dynamic count requires always_equal slot allocator.");
     static_assert(byte_alloc_traits::is_always_equal::value,
                   "[buffer_pool]: dynamic buffer size requires always_equal object allocator.");
-    static_assert(std::is_default_constructible_v<slot_allocator_type>,
-                  "[buffer_pool]: dynamic count requires default-constructible slot allocator.");
-    static_assert(std::is_default_constructible_v<byte_allocator_type>,
-                  "[buffer_pool]: dynamic buffer size requires default-constructible object allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<slot_allocator_type>,
+                  "[buffer_pool]: dynamic count requires nothrow default-constructible slot allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<byte_allocator_type>,
+                  "[buffer_pool]: dynamic buffer size requires nothrow default-constructible object allocator.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<slot_allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires slot "
+        "allocator::allocate(size_type) to be noexcept.");
+    static_assert(
+        alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>,
+        "[spsc::buffer_pool]: no-exceptions mode requires byte "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
+                  "[buffer_pool]: slot allocator size_type must represent the reg domain.");
+    static_assert(alloc::detail::allocator_size_covers_reg_v<byte_allocator_type>,
+                  "[buffer_pool]: byte allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<typename slot_alloc_traits::pointer, pointer*>,
                   "[buffer_pool]: dynamic count requires slot allocator pointer type T**.");
     static_assert(std::is_same_v<byte_pointer, byte_type*>,
@@ -1023,9 +1180,9 @@ public:
                   "[buffer_pool]: reg (size_type) must be unsigned.");
 
     static constexpr bool kNoexceptAllocateSlots =
-        noexcept(slot_alloc_traits::allocate(std::declval<slot_allocator_type&>(), typename slot_alloc_traits::size_type{1}));
+        alloc::detail::allocator_allocate_noexcept_v<slot_allocator_type>;
     static constexpr bool kNoexceptAllocateObjects =
-        noexcept(byte_alloc_traits::allocate(std::declval<byte_allocator_type&>(), typename byte_alloc_traits::size_type{1}));
+        alloc::detail::allocator_allocate_noexcept_v<byte_allocator_type>;
 
     // ------------------------------------------------------------------------------------------
     // Constructors / Assignment
@@ -1121,9 +1278,16 @@ public:
 
         const size_type copy_count = is_valid() ? ((count_ < count) ? count_ : count) : 0u;
         const size_type copy_size = is_valid() ? ((buffer_size_ < buffer_size) ? buffer_size_ : buffer_size) : 0u;
-        if (!copy_prefix_(new_buffers, count, buffer_size, buffers_, copy_count, copy_size)) {
+        SPSC_TRY {
+            if (!copy_prefix_(new_buffers, count, buffer_size, buffers_, copy_count, copy_size)) {
+                destroy_shape_(new_buffers, count, buffer_size);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
             destroy_shape_(new_buffers, count, buffer_size);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         destroy();
@@ -1156,10 +1320,15 @@ public:
     // count()/size() expose usable logical shape.
     // span_bytes() exposes the physical policy-rounded span for valid storage.
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] size_type count() const noexcept { return is_valid() ? count_ : 0u; }
-    [[nodiscard]] size_type size() const noexcept { return is_valid() ? buffer_size_ : 0u; }
-    [[nodiscard]] size_type size_bytes() const noexcept { return is_valid() ? detail::logical_buffer_bytes<size_type, value_type>(buffer_size_) : 0u; }
-    [[nodiscard]] size_type span_bytes() const noexcept { return is_valid() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
+    // Introspection accessors rely on the O(1) shape invariant (the slot
+    // table is all-or-nothing, maintained by commit-after-complete
+    // management) instead of the deep O(count) pointer scan; is_valid()
+    // stays available as the explicit deep integrity check and still guards
+    // these paths in assert-enabled builds.
+    [[nodiscard]] size_type count() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? count_ : 0u; }
+    [[nodiscard]] size_type size() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? buffer_size_ : 0u; }
+    [[nodiscard]] size_type size_bytes() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? detail::logical_buffer_bytes<size_type, value_type>(buffer_size_) : 0u; }
+    [[nodiscard]] size_type span_bytes() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
     [[nodiscard]] static constexpr size_type alignment() noexcept { return static_cast<size_type>(alloc::policy_storage_alignment_v<policy_type, value_type>); }
     [[nodiscard]] size_type payload_bytes() const noexcept { return size_bytes(); }
     [[nodiscard]] size_type cache_span_bytes() const noexcept { return span_bytes(); }
@@ -1169,15 +1338,21 @@ public:
     // ------------------------------------------------------------------------------------------
     // Element Access
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] pointer data(const size_type index) noexcept { return (is_valid() && (index < count_)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (is_valid() && (index < count_)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] pointer operator[](const size_type index) noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < count_); return (is_valid() && (index < count_)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] const_pointer operator[](const size_type index) const noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < count_); return (is_valid() && (index < count_)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] pointer data(const size_type index) noexcept { return (shape_ok_() && (index < count_)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (shape_ok_() && (index < count_)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] pointer operator[](const size_type index) noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < count_); return (shape_ok_() && (index < count_)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] const_pointer operator[](const size_type index) const noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < count_); return (shape_ok_() && (index < count_)) ? buffers_[index] : nullptr; }
 
 private:
     // ------------------------------------------------------------------------------------------
     // Internal Helpers
     // ------------------------------------------------------------------------------------------
+    // O(1) shape coherence used by the release-path accessors; the deep
+    // O(count) integrity scan stays in state_ok_()/is_valid().
+    [[nodiscard]] bool shape_ok_() const noexcept {
+        return (buffers_ != nullptr) && (count_ != 0u) && (buffer_size_ != 0u);
+    }
+
     [[nodiscard]] static bool state_ok_(pointer* slot_ptrs,
                                         const size_type count,
                                         const size_type buffer_size) noexcept
@@ -1229,7 +1404,10 @@ private:
             if (raw != nullptr) {
                 byte_alloc_traits::deallocate(alloc, raw, effective_bytes);
             }
-            return false;
+            if constexpr (!(kNoexceptAllocateObjects &&
+                          std::is_nothrow_default_constructible_v<value_type>)) {
+                SPSC_RETHROW;
+            }
         }
 
         out = ptr;
@@ -1268,7 +1446,8 @@ private:
             }
 
             for (size_type i = 0u; i < count; ++i) {
-                slot_ptrs[i] = nullptr;
+                (void)::new (static_cast<void*>(slot_ptrs + i))
+                    pointer(nullptr);
             }
 
             for (; built < count; ++built) {
@@ -1289,7 +1468,10 @@ private:
                 }
                 slot_alloc_traits::deallocate(slot_alloc, slot_ptrs, count);
             }
-            return false;
+            if constexpr (!(kNoexceptAllocateSlots && kNoexceptAllocateObjects &&
+                          std::is_nothrow_default_constructible_v<value_type>)) {
+                SPSC_RETHROW;
+            }
         }
 
         out = slot_ptrs;
@@ -1347,7 +1529,9 @@ private:
                 }
             }
         } SPSC_CATCH_ALL {
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         return true;
@@ -1384,9 +1568,18 @@ private:
             return false;
         }
 
-        if (!copy_prefix_(new_buffers, other.count_, other.buffer_size_, other.buffers_, other.count_, other.buffer_size_)) {
+        SPSC_TRY {
+            if (!copy_prefix_(new_buffers, other.count_, other.buffer_size_, other.buffers_, other.count_, other.buffer_size_)) {
+                destroy_shape_(new_buffers, other.count_, other.buffer_size_);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
+            // Release the transient destination, then let the caller's
+            // exception propagate; the previous state is untouched.
             destroy_shape_(new_buffers, other.count_, other.buffer_size_);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         buffers_ = new_buffers;

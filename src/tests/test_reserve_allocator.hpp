@@ -5,6 +5,8 @@
 #include <memory>
 #include <type_traits>
 
+#include "base/spsc_alloc.hpp"
+
 namespace spsc::test {
 
 struct reserve_allocator_stats {
@@ -33,7 +35,7 @@ public:
     template <class U>
     reserve_probe_allocator(const reserve_probe_allocator<U>&) noexcept {}
 
-    [[nodiscard]] T* allocate(const std::size_t count) {
+    [[nodiscard]] T* allocate(const std::size_t count) noexcept {
         ++reserve_allocator_stats::allocation_calls;
         reserve_allocator_stats::last_allocation_count = count;
 
@@ -43,12 +45,15 @@ public:
         if (count == 0u || count > kMaxSuccessfulElements) {
             return nullptr;
         }
-        return std::allocator<T>{}.allocate(count);
+        return spsc::alloc::basic_allocator<
+            T, spsc::alloc::fail_mode::returns_null>{}.allocate(count);
     }
 
     void deallocate(T* const ptr, const std::size_t count) noexcept {
         if (ptr != nullptr) {
-            std::allocator<T>{}.deallocate(ptr, count);
+            spsc::alloc::basic_allocator<
+                T, spsc::alloc::fail_mode::returns_null>{}.deallocate(
+                    ptr, count);
         }
     }
 

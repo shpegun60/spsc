@@ -5,12 +5,16 @@
 #include "src/spsc/fifo.hpp"
 #include "src/spsc/fifo_view.hpp"
 #include "src/spsc/latest.hpp"
+#include "src/spsc/pool.hpp"
+#include "src/spsc/pool_view.hpp"
 #include "src/spsc/queue.hpp"
 #include "src/spsc/typed_pool.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -38,6 +42,36 @@ struct move_only {
     move_only& operator=(move_only&&) noexcept = default;
 };
 
+struct immovable {
+    int payload{0};
+
+    explicit immovable(const int value) noexcept : payload(value) {}
+    immovable(const immovable&) = delete;
+    immovable& operator=(const immovable&) = delete;
+    immovable(immovable&&) = delete;
+    immovable& operator=(immovable&&) = delete;
+    ~immovable() noexcept = default;
+};
+
+struct mode0_throwing_relocation {
+    int payload{0};
+
+    explicit mode0_throwing_relocation(const int value) noexcept
+        : payload(value) {}
+    mode0_throwing_relocation(const mode0_throwing_relocation&) = delete;
+    mode0_throwing_relocation&
+    operator=(const mode0_throwing_relocation&) = delete;
+    mode0_throwing_relocation(
+        mode0_throwing_relocation&& other) noexcept(false)
+        : payload(other.payload) {}
+    mode0_throwing_relocation&
+    operator=(mode0_throwing_relocation&& other) noexcept(false) {
+        payload = other.payload;
+        return *this;
+    }
+    ~mode0_throwing_relocation() noexcept = default;
+};
+
 #if (SPSC_ENABLE_EXCEPTIONS != 0)
 struct throwing_move_only {
     throwing_move_only() noexcept = default;
@@ -47,6 +81,19 @@ struct throwing_move_only {
     throwing_move_only& operator=(throwing_move_only&&) noexcept(false) {
         return *this;
     }
+};
+
+struct throwing_default_noexcept_ops {
+    throwing_default_noexcept_ops() noexcept(false) {}
+    throwing_default_noexcept_ops(
+        const throwing_default_noexcept_ops&) noexcept = default;
+    throwing_default_noexcept_ops(
+        throwing_default_noexcept_ops&&) noexcept = default;
+    throwing_default_noexcept_ops& operator=(
+        const throwing_default_noexcept_ops&) noexcept = default;
+    throwing_default_noexcept_ops& operator=(
+        throwing_default_noexcept_ops&&) noexcept = default;
+    ~throwing_default_noexcept_ops() noexcept = default;
 };
 #endif
 
@@ -70,6 +117,172 @@ struct copy_constructible {
     copy_constructible& operator=(const copy_constructible&) noexcept = default;
     copy_constructible(copy_constructible&&) noexcept = default;
     copy_constructible& operator=(copy_constructible&&) noexcept = default;
+};
+
+struct throwing_copy_assignment {
+    int payload{0};
+
+    throwing_copy_assignment() noexcept = default;
+    throwing_copy_assignment(const throwing_copy_assignment&) noexcept = default;
+    throwing_copy_assignment(throwing_copy_assignment&&) noexcept = default;
+    throwing_copy_assignment&
+    operator=(const throwing_copy_assignment& other) noexcept(false) {
+        payload = other.payload;
+        return *this;
+    }
+    throwing_copy_assignment&
+    operator=(throwing_copy_assignment&&) noexcept = default;
+    ~throwing_copy_assignment() noexcept = default;
+};
+
+struct throwing_copy_construction {
+    int payload{0};
+
+    throwing_copy_construction() noexcept = default;
+    throwing_copy_construction(
+        const throwing_copy_construction& other) noexcept(false)
+        : payload(other.payload) {}
+    throwing_copy_construction(
+        throwing_copy_construction&&) noexcept = default;
+    throwing_copy_construction&
+    operator=(const throwing_copy_construction&) noexcept = default;
+    throwing_copy_construction&
+    operator=(throwing_copy_construction&&) noexcept = default;
+    ~throwing_copy_construction() noexcept = default;
+};
+
+template<class T>
+struct throwing_allocate_allocator {
+    using value_type = T;
+    using pointer = T*;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using is_always_equal = std::true_type;
+
+    template<class U>
+    struct rebind { using other = throwing_allocate_allocator<U>; };
+
+    throwing_allocate_allocator() noexcept = default;
+
+    template<class U>
+    throwing_allocate_allocator(
+        const throwing_allocate_allocator<U>&) noexcept {}
+
+    [[nodiscard]] pointer allocate(size_type) noexcept(false) {
+        return nullptr;
+    }
+
+    void deallocate(pointer, size_type) noexcept {}
+};
+
+struct hostile_construct_error {};
+
+struct hostile_construct_state {
+    static inline std::size_t construct_calls{0u};
+    static inline std::size_t live_blocks{0u};
+};
+
+struct hostile_construct_value {
+    static inline std::size_t constructions{0u};
+    static inline std::size_t destructions{0u};
+
+    int payload{73};
+
+    hostile_construct_value() noexcept { ++constructions; }
+    hostile_construct_value(const hostile_construct_value&) noexcept = default;
+    hostile_construct_value(hostile_construct_value&&) noexcept = default;
+    hostile_construct_value&
+    operator=(const hostile_construct_value&) noexcept = default;
+    hostile_construct_value&
+    operator=(hostile_construct_value&&) noexcept = default;
+    ~hostile_construct_value() noexcept { ++destructions; }
+};
+
+template<class T>
+struct hostile_construct_allocator {
+    using value_type = T;
+    using pointer = T*;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using is_always_equal = std::true_type;
+
+    template<class U>
+    struct rebind { using other = hostile_construct_allocator<U>; };
+
+    hostile_construct_allocator() noexcept = default;
+
+    template<class U>
+    hostile_construct_allocator(
+        const hostile_construct_allocator<U>&) noexcept {}
+
+    [[nodiscard]] pointer allocate(const size_type count) noexcept {
+        pointer result = static_cast<pointer>(
+            ::operator new(count * sizeof(value_type), std::nothrow));
+        if (result != nullptr) {
+            ++hostile_construct_state::live_blocks;
+        }
+        return result;
+    }
+
+    void deallocate(pointer ptr, size_type) noexcept {
+        if (ptr != nullptr) {
+            --hostile_construct_state::live_blocks;
+            ::operator delete(ptr);
+        }
+    }
+
+    template<class U, class... Args>
+    void construct(U* ptr, Args&&... args) noexcept(false) {
+        ++hostile_construct_state::construct_calls;
+#if (SPSC_ENABLE_EXCEPTIONS != 0)
+        (void)ptr;
+        (void)sizeof...(args);
+        throw hostile_construct_error{};
+#else
+        (void)::new (static_cast<void*>(ptr))
+            U(std::forward<Args>(args)...);
+#endif
+    }
+};
+
+struct relocation_probe_state {
+    [[maybe_unused]] static inline std::size_t allocation_calls{0u};
+    [[maybe_unused]] static inline std::size_t live_blocks{0u};
+};
+
+template<class T>
+struct relocation_probe_allocator {
+    using value_type = T;
+    using pointer = T*;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using is_always_equal = std::true_type;
+
+    template<class U>
+    struct rebind { using other = relocation_probe_allocator<U>; };
+
+    relocation_probe_allocator() noexcept = default;
+
+    template<class U>
+    relocation_probe_allocator(
+        const relocation_probe_allocator<U>&) noexcept {}
+
+    [[nodiscard]] pointer allocate(const size_type count) noexcept {
+        ++relocation_probe_state::allocation_calls;
+        pointer result = static_cast<pointer>(
+            ::operator new(count * sizeof(value_type), std::nothrow));
+        if (result != nullptr) {
+            ++relocation_probe_state::live_blocks;
+        }
+        return result;
+    }
+
+    void deallocate(pointer ptr, size_type) noexcept {
+        if (ptr != nullptr) {
+            --relocation_probe_state::live_blocks;
+            ::operator delete(ptr);
+        }
+    }
 };
 
 /* Deliberately rejects ADL swap while retaining the assignment operations
@@ -186,9 +399,13 @@ struct hostile_address_value {
 };
 
 struct non_assignable_latest_value {
-    non_assignable_latest_value() = default;
-    non_assignable_latest_value(const non_assignable_latest_value&) = default;
-    non_assignable_latest_value(non_assignable_latest_value&&) = default;
+    int payload{0};
+
+    non_assignable_latest_value() noexcept = default;
+    non_assignable_latest_value(
+        const non_assignable_latest_value&) noexcept = default;
+    non_assignable_latest_value(
+        non_assignable_latest_value&&) noexcept = default;
 
     non_assignable_latest_value&
     operator=(const non_assignable_latest_value&) = delete;
@@ -198,6 +415,20 @@ struct non_assignable_latest_value {
 
     friend void swap(non_assignable_latest_value&,
                      non_assignable_latest_value&) = delete;
+
+    ~non_assignable_latest_value() noexcept = default;
+};
+
+struct externally_owned_value {
+    int payload;
+
+    externally_owned_value() = delete;
+    explicit externally_owned_value(const int value) noexcept : payload(value) {}
+    externally_owned_value(const externally_owned_value&) = delete;
+    externally_owned_value& operator=(const externally_owned_value&) = delete;
+    externally_owned_value(externally_owned_value&&) = delete;
+    externally_owned_value& operator=(externally_owned_value&&) = delete;
+    ~externally_owned_value() noexcept(false) {}
 };
 
 struct non_trivial_payload {
@@ -251,6 +482,42 @@ struct has_try_push<
     std::void_t<decltype(std::declval<Q&>().try_push(std::declval<Arg>()))>>
     : std::true_type {};
 
+template<class Q, class U, class = void>
+struct has_try_peek : std::false_type {};
+
+template<class Q, class U>
+struct has_try_peek<
+    Q, U,
+    std::void_t<decltype(std::declval<const Q&>().try_peek(
+        std::declval<U&>()))>> : std::true_type {};
+
+template<class Q, class U, class = void>
+struct has_claim_as : std::false_type {};
+
+template<class Q, class U>
+struct has_claim_as<
+    Q, U,
+    std::void_t<decltype(std::declval<Q&>().template claim_as<U>())>>
+    : std::true_type {};
+
+template<class Q, class Arg, class = void>
+struct has_write_next : std::false_type {};
+
+template<class Q, class Arg>
+struct has_write_next<
+    Q, Arg,
+    std::void_t<decltype(std::declval<Q&>().write_next(
+        std::declval<Arg>()))>> : std::true_type {};
+
+template<class Q, class U, class = void>
+struct has_overlay_as : std::false_type {};
+
+template<class Q, class U>
+struct has_overlay_as<
+    Q, U,
+    std::void_t<decltype(std::declval<Q&>().template as<U>())>>
+    : std::true_type {};
+
 template<class Q, class Arg, class = void>
 struct has_push_back : std::false_type {};
 
@@ -290,13 +557,22 @@ using dynamic_chunk = ::spsc::chunk<value, 0u>;
 using typed = ::spsc::typed_pool<value, 8u>;
 using move_only_typed = ::spsc::typed_pool<move_only, 8u>;
 using object_queue = ::spsc::queue<value, 8u>;
+using dynamic_immovable_queue =
+    ::spsc::queue<immovable, 0u, ::spsc::policy::P>;
+using dynamic_mode0_relocation_queue =
+    ::spsc::queue<mode0_throwing_relocation, 0u, ::spsc::policy::P,
+                  relocation_probe_allocator<std::byte>>;
 using class_new_queue = ::spsc::queue<class_specific_new_value, 8u>;
 using dynamic_class_new_queue = ::spsc::queue<class_specific_new_value, 0u>;
 using raw_latest = ::spsc::latest<void, 0u>;
+using raw_pool = ::spsc::pool<8u, ::spsc::policy::P>;
+using raw_pool_view = ::spsc::pool_view<8u, ::spsc::policy::P>;
 using hostile_fifo =
     ::spsc::fifo<hostile_address_value, 8u, ::spsc::policy::P>;
 using hostile_fifo_view =
     ::spsc::fifo_view<hostile_address_value, 8u, ::spsc::policy::P>;
+using non_owning_only_fifo_view =
+    ::spsc::fifo_view<externally_owned_value, 8u, ::spsc::policy::P>;
 using hostile_latest =
     ::spsc::latest<hostile_address_value, 8u, ::spsc::policy::P>;
 using hostile_dynamic_latest =
@@ -356,11 +632,49 @@ static_assert(has_emplace_next<typename object_queue::bulk_write_guard, int>::va
 static_assert(!has_emplace_next<typename object_queue::bulk_write_guard, bad_argument>::value);
 static_assert(has_push<class_new_queue, int>::value);
 static_assert(has_try_push<class_new_queue, int>::value);
+static_assert(!std::is_move_constructible_v<immovable>);
+static_assert(!std::is_copy_constructible_v<immovable>);
 
 static_assert(has_push<raw_latest, std::uint32_t>::value);
 static_assert(has_try_push<raw_latest, std::uint32_t>::value);
 static_assert(!has_push<raw_latest, non_trivial_payload&>::value);
 static_assert(!has_try_push<raw_latest, non_trivial_payload&>::value);
+
+static_assert(has_try_push<raw_pool, const std::uint32_t&>::value);
+static_assert(has_try_push<raw_pool_view, const std::uint32_t&>::value);
+static_assert(!has_try_push<raw_pool, volatile std::uint32_t&>::value);
+static_assert(!has_try_push<raw_pool_view, volatile std::uint32_t&>::value);
+static_assert(!has_try_push<raw_pool, const non_trivial_payload&>::value);
+static_assert(!has_try_push<raw_pool_view, const non_trivial_payload&>::value);
+static_assert(has_try_peek<raw_pool, std::uint32_t>::value);
+static_assert(has_try_peek<raw_pool_view, std::uint32_t>::value);
+static_assert(!has_try_peek<raw_pool, const std::uint32_t>::value);
+static_assert(!has_try_peek<raw_pool_view, volatile std::uint32_t>::value);
+static_assert(!has_try_peek<raw_pool, non_trivial_payload>::value);
+static_assert(has_claim_as<raw_pool, std::uint32_t>::value);
+static_assert(has_claim_as<raw_pool_view, std::uint32_t>::value);
+static_assert(!has_claim_as<raw_pool, non_trivial_payload>::value);
+static_assert(!has_claim_as<raw_pool_view, non_trivial_payload>::value);
+static_assert(has_write_next<typename raw_pool::bulk_write_guard,
+                             const std::uint32_t&>::value);
+static_assert(has_write_next<typename raw_pool_view::bulk_write_guard,
+                             const std::uint32_t&>::value);
+static_assert(!has_write_next<typename raw_pool::bulk_write_guard,
+                              volatile std::uint32_t&>::value);
+static_assert(!has_write_next<typename raw_pool_view::bulk_write_guard,
+                              volatile std::uint32_t&>::value);
+static_assert(!has_write_next<typename raw_pool::bulk_write_guard,
+                              const non_trivial_payload&>::value);
+static_assert(!has_write_next<typename raw_pool_view::bulk_write_guard,
+                              const non_trivial_payload&>::value);
+static_assert(has_overlay_as<typename raw_pool::write_guard,
+                             std::uint32_t>::value);
+static_assert(has_overlay_as<typename raw_pool_view::read_guard,
+                             std::uint32_t>::value);
+static_assert(!has_overlay_as<typename raw_pool::write_guard,
+                              non_trivial_payload>::value);
+static_assert(!has_overlay_as<typename raw_pool_view::read_guard,
+                              non_trivial_payload>::value);
 
 using slot_for_move_only = ::spsc::detail::cache_aligned_slot<move_only, 64u>;
 static_assert(!std::is_constructible_v<slot_for_move_only, const move_only&>);
@@ -369,11 +683,20 @@ static_assert(std::is_constructible_v<slot_for_move_only, move_only&&>);
 using noncopyable_fifo = ::spsc::fifo<move_only, 8u>;
 using assign_copy_fifo = ::spsc::fifo<copy_assign_only, 8u>;
 using dynamic_assign_copy_fifo = ::spsc::fifo<copy_assign_only, 0u>;
+using throwing_copy_fifo = ::spsc::fifo<throwing_copy_assignment, 8u>;
+using dynamic_throwing_copy_fifo =
+    ::spsc::fifo<throwing_copy_assignment, 0u>;
 using noncopyable_typed = ::spsc::typed_pool<move_only, 8u>;
 using copyable_typed = ::spsc::typed_pool<copy_constructible, 8u>;
 using dynamic_copyable_typed = ::spsc::typed_pool<copy_constructible, 0u>;
+using throwing_copy_typed =
+    ::spsc::typed_pool<throwing_copy_construction, 8u>;
+using dynamic_throwing_copy_typed =
+    ::spsc::typed_pool<throwing_copy_construction, 0u>;
 using noncopyable_array_fifo = ::spsc::array_fifo<move_only, 2u, 8u>;
 using noncopyable_chunk_fifo = ::spsc::chunk_fifo<move_only, 2u, 8u>;
+using no_throw_fallback_fifo =
+    ::spsc::fifo<throwing_move_noexcept_copy, 8u, ::spsc::policy::P>;
 
 static_assert(!std::is_copy_constructible_v<noncopyable_fifo>);
 static_assert(!std::is_copy_assignable_v<noncopyable_fifo>);
@@ -387,6 +710,27 @@ static_assert(std::is_copy_constructible_v<copyable_typed>);
 static_assert(std::is_copy_assignable_v<copyable_typed>);
 static_assert(std::is_copy_constructible_v<dynamic_copyable_typed>);
 static_assert(std::is_copy_assignable_v<dynamic_copyable_typed>);
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+static_assert(!std::is_copy_constructible_v<throwing_copy_fifo>);
+static_assert(!std::is_copy_assignable_v<throwing_copy_fifo>);
+static_assert(!std::is_copy_constructible_v<dynamic_throwing_copy_fifo>);
+static_assert(!std::is_copy_assignable_v<dynamic_throwing_copy_fifo>);
+static_assert(!std::is_copy_constructible_v<throwing_copy_typed>);
+static_assert(!std::is_copy_assignable_v<throwing_copy_typed>);
+static_assert(!std::is_copy_constructible_v<dynamic_throwing_copy_typed>);
+static_assert(!std::is_copy_assignable_v<dynamic_throwing_copy_typed>);
+#else
+static_assert(std::is_copy_constructible_v<throwing_copy_fifo>);
+static_assert(std::is_copy_assignable_v<throwing_copy_fifo>);
+static_assert(std::is_copy_constructible_v<dynamic_throwing_copy_fifo>);
+static_assert(std::is_copy_assignable_v<dynamic_throwing_copy_fifo>);
+static_assert(std::is_copy_constructible_v<throwing_copy_typed>);
+static_assert(std::is_copy_assignable_v<throwing_copy_typed>);
+static_assert(std::is_copy_constructible_v<dynamic_throwing_copy_typed>);
+static_assert(std::is_copy_assignable_v<dynamic_throwing_copy_typed>);
+#endif
+static_assert(std::is_nothrow_move_constructible_v<no_throw_fallback_fifo>);
+static_assert(std::is_nothrow_move_assignable_v<no_throw_fallback_fifo>);
 static_assert(!std::is_copy_constructible_v<noncopyable_array_fifo>);
 static_assert(!std::is_copy_assignable_v<noncopyable_array_fifo>);
 static_assert(!std::is_copy_constructible_v<noncopyable_chunk_fifo>);
@@ -394,23 +738,46 @@ static_assert(!std::is_copy_assignable_v<noncopyable_chunk_fifo>);
 static_assert(!exposes_storage<assign_copy_fifo>::value);
 static_assert(!exposes_slots<copyable_typed>::value);
 
-#if (SPSC_ENABLE_EXCEPTIONS != 0)
-using throwing_move_fifo = ::spsc::fifo<throwing_move_only, 8u>;
-using non_assignable_latest = ::spsc::latest<non_assignable_latest_value, 8u>;
+using non_assignable_latest =
+    ::spsc::latest<non_assignable_latest_value, 8u, ::spsc::policy::P>;
+using dynamic_non_assignable_latest =
+    ::spsc::latest<non_assignable_latest_value, 0u, ::spsc::policy::P>;
 using non_assignable_aligned_slot =
     ::spsc::detail::cache_aligned_slot<non_assignable_latest_value, 64u>;
-static_assert(!std::is_copy_constructible_v<throwing_move_fifo>);
-static_assert(!std::is_copy_assignable_v<throwing_move_fifo>);
-static_assert(std::is_move_constructible_v<throwing_move_fifo>);
-static_assert(!std::is_nothrow_move_constructible_v<throwing_move_fifo>);
-static_assert(std::is_same_v<
-              decltype(std::move_if_noexcept(
-                  std::declval<throwing_move_fifo&>())),
-              throwing_move_fifo&&>);
+static_assert(!std::is_default_constructible_v<externally_owned_value>);
+static_assert(!std::is_assignable_v<externally_owned_value&,
+                                    externally_owned_value&&>);
+static_assert(!std::is_nothrow_destructible_v<externally_owned_value>);
+static_assert(!has_push<non_owning_only_fifo_view,
+                        externally_owned_value&&>::value);
+static_assert(!has_push<non_assignable_latest,
+                        non_assignable_latest_value&&>::value);
+static_assert(!has_push<dynamic_non_assignable_latest,
+                        non_assignable_latest_value&&>::value);
 static_assert(!std::is_move_constructible_v<non_assignable_latest>);
 static_assert(!std::is_move_assignable_v<non_assignable_latest>);
 static_assert(!std::is_swappable_v<non_assignable_latest>);
 static_assert(!std::is_swappable_v<non_assignable_aligned_slot>);
+
+#if (SPSC_ENABLE_EXCEPTIONS != 0)
+using throwing_move_fifo = ::spsc::fifo<throwing_move_only, 8u>;
+using throwing_default_fifo =
+    ::spsc::fifo<throwing_default_noexcept_ops, 8u>;
+using throwing_default_latest =
+    ::spsc::latest<throwing_default_noexcept_ops, 8u>;
+using throwing_default_chunk =
+    ::spsc::chunk<throwing_default_noexcept_ops, 8u>;
+static_assert(!std::is_copy_constructible_v<throwing_move_fifo>);
+static_assert(!std::is_copy_assignable_v<throwing_move_fifo>);
+static_assert(std::is_move_constructible_v<throwing_move_fifo>);
+static_assert(!std::is_nothrow_move_constructible_v<throwing_move_fifo>);
+static_assert(!std::is_nothrow_move_constructible_v<throwing_default_fifo>);
+static_assert(!std::is_nothrow_move_constructible_v<throwing_default_latest>);
+static_assert(!std::is_nothrow_default_constructible_v<throwing_default_chunk>);
+static_assert(std::is_same_v<
+              decltype(std::move_if_noexcept(
+                  std::declval<throwing_move_fifo&>())),
+              throwing_move_fifo&&>);
 #endif
 
 using swap_fifo = ::spsc::fifo<no_adl_swap, 8u>;
@@ -473,6 +840,21 @@ struct custom_counter_without_relaxed_load {
     constexpr custom_counter_without_relaxed_load() noexcept = default;
     void store(const value_type next) noexcept { value = next; }
     [[nodiscard]] value_type load() const noexcept { return value; }
+    void add(const value_type delta) noexcept { value += delta; }
+    void inc() noexcept { ++value; }
+};
+
+struct nonzero_atomic_counter {
+    static constexpr bool is_atomic = true;
+    static constexpr bool is_single_writer = true;
+    using value_type = reg;
+
+    value_type value{std::numeric_limits<value_type>::max()};
+
+    constexpr nonzero_atomic_counter() noexcept = default;
+    void store(const value_type next) noexcept { value = next; }
+    [[nodiscard]] value_type load() const noexcept { return value; }
+    [[nodiscard]] value_type load_relaxed() const noexcept { return value; }
     void add(const value_type delta) noexcept { value += delta; }
     void inc() noexcept { ++value; }
 };
@@ -572,6 +954,22 @@ struct throwing_reg_relaxed_conversion_counter {
 using custom_policy = ::spsc::policy::Policy<custom_counter>;
 using custom_policy_without_relaxed_load =
     ::spsc::policy::Policy<custom_counter_without_relaxed_load>;
+using nonzero_atomic_policy =
+    ::spsc::policy::Policy<nonzero_atomic_counter>;
+
+class nonzero_dynamic_base_probe final
+    : private ::spsc::SPSCbase<0u, nonzero_atomic_policy>
+{
+    using Base = ::spsc::SPSCbase<0u, nonzero_atomic_policy>;
+
+public:
+    nonzero_dynamic_base_probe() noexcept = default;
+
+    [[nodiscard]] reg capacity() const noexcept { return Base::capacity(); }
+    [[nodiscard]] reg mask() const noexcept { return Base::mask(); }
+    [[nodiscard]] reg head() const noexcept { return Base::head(); }
+    [[nodiscard]] reg tail() const noexcept { return Base::tail(); }
+};
 
 struct custom_aligned_policy : custom_policy {
     static constexpr reg allocator_alignment = 32u;
@@ -585,6 +983,12 @@ struct custom_enum_aligned_policy : custom_policy {
 };
 
 static_assert(::spsc::policy::detail::is_counter_like_v<custom_counter>);
+static_assert(::spsc::policy::detail::is_counter_like_v<
+              nonzero_atomic_counter>);
+static_assert(
+    ::spsc::detail::rb_use_shadow_v<nonzero_atomic_policy> ==
+    ((std::numeric_limits<reg>::digits >= 64) ||
+     (SPSC_SHADOW_ALLOW_32BIT != 0)));
 static_assert(::spsc::policy::detail::is_counter_like_v<
               custom_counter_without_relaxed_load>);
 static_assert(!::spsc::cnt::counter_has_relaxed_load_v<
@@ -604,6 +1008,67 @@ static_assert(!::spsc::policy::detail::is_counter_like_v<
 static_assert(::spsc::alloc::policy_allocator_alignment_v<custom_aligned_policy> == 32u);
 static_assert(::spsc::alloc::policy_allocator_alignment_v<
                   custom_enum_aligned_policy> == 32u);
+static_assert(
+    ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+        ::spsc::alloc::default_alloc> == (SPSC_ENABLE_EXCEPTIONS == 0));
+static_assert(
+    ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+        ::spsc::alloc::align_alloc<32u>> == (SPSC_ENABLE_EXCEPTIONS == 0));
+#if !defined(__STDC_HOSTED__) || (__STDC_HOSTED__ != 0)
+static_assert(
+    !::spsc::alloc::detail::allocator_allocate_noexcept_v<
+        std::allocator<std::byte>>);
+#endif
+static_assert(
+    !::spsc::alloc::detail::allocator_allocate_noexcept_v<
+        throwing_allocate_allocator<std::byte>>);
+
+// An allocator argument that is not used by embedded static storage does not
+// inherit the dynamic-allocation requirement.
+using static_fifo_with_unused_throwing_allocator =
+    ::spsc::fifo<int, 8u, ::spsc::policy::P,
+                 throwing_allocate_allocator<std::byte>>;
+using static_latest_with_unused_throwing_allocator =
+    ::spsc::latest<int, 8u, ::spsc::policy::P,
+                   throwing_allocate_allocator<std::byte>>;
+using static_chunk_with_unused_throwing_allocator =
+    ::spsc::chunk<int, 8u, throwing_allocate_allocator<std::byte>>;
+using dynamic_chunk_with_hostile_construct_allocator =
+    ::spsc::chunk<hostile_construct_value, 0u,
+                  hostile_construct_allocator<std::byte>>;
+using dynamic_pool_with_hostile_construct_allocator =
+    ::spsc::pool<0u, ::spsc::policy::P,
+                 hostile_construct_allocator<std::byte>>;
+using dynamic_typed_pool_with_hostile_construct_allocator =
+    ::spsc::typed_pool<value, 0u, ::spsc::policy::P,
+                       hostile_construct_allocator<std::byte>>;
+using dynamic_raw_latest_with_hostile_construct_allocator =
+    ::spsc::latest<void, 0u, ::spsc::policy::P,
+                   hostile_construct_allocator<std::byte>>;
+using dynamic_buffer_pool_with_hostile_construct_allocator =
+    ::spsc::buffer_pool<std::byte, 0u, 0u, ::spsc::policy::P,
+                        hostile_construct_allocator<std::byte>>;
+using static_buffer_pool_with_unused_throwing_allocator =
+    ::spsc::buffer_pool<int, 4u, 8u, ::spsc::policy::P,
+                        throwing_allocate_allocator<std::byte>>;
+static_assert(std::is_default_constructible_v<
+              static_fifo_with_unused_throwing_allocator>);
+static_assert(std::is_default_constructible_v<
+              static_latest_with_unused_throwing_allocator>);
+static_assert(std::is_default_constructible_v<
+              static_chunk_with_unused_throwing_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_chunk_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_pool_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_typed_pool_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_raw_latest_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              dynamic_buffer_pool_with_hostile_construct_allocator>);
+static_assert(std::is_default_constructible_v<
+              static_buffer_pool_with_unused_throwing_allocator>);
 
 using custom_counter_fifo = ::spsc::fifo<value, 8u, custom_policy>;
 using custom_counter_without_relaxed_fifo =
@@ -685,6 +1150,131 @@ bool verify_value_swap_runtime()
 
     return bounded_aligned_scratch && swap_scratch_probe::live_count == 0u;
 }
+
+bool verify_chunk_owns_value_construction()
+{
+    hostile_construct_state::construct_calls = 0u;
+    hostile_construct_state::live_blocks = 0u;
+    hostile_construct_value::constructions = 0u;
+    hostile_construct_value::destructions = 0u;
+
+    {
+        dynamic_chunk_with_hostile_construct_allocator chunk;
+#if (SPSC_ENABLE_EXCEPTIONS != 0)
+        try {
+            if (!chunk.reserve(8u)) {
+                return false;
+            }
+        } catch (const hostile_construct_error&) {
+            return false;
+        }
+#else
+        if (!chunk.reserve(8u)) {
+            return false;
+        }
+#endif
+
+        if (hostile_construct_state::construct_calls != 0u ||
+            hostile_construct_state::live_blocks != 1u ||
+            hostile_construct_value::constructions != 8u ||
+            hostile_construct_value::destructions != 0u) {
+            return false;
+        }
+        for (reg i = 0u; i < chunk.capacity(); ++i) {
+            if (chunk.data()[i].payload != 73) {
+                return false;
+            }
+        }
+    }
+
+    return hostile_construct_state::construct_calls == 0u &&
+           hostile_construct_state::live_blocks == 0u &&
+           hostile_construct_value::constructions == 8u &&
+           hostile_construct_value::destructions == 8u;
+}
+
+bool verify_pointer_rings_own_pointer_lifetime()
+{
+    hostile_construct_state::construct_calls = 0u;
+    hostile_construct_state::live_blocks = 0u;
+
+    {
+        dynamic_pool_with_hostile_construct_allocator pool;
+        value input{11};
+        if (!pool.resize(4u, sizeof(input)) || !pool.is_valid() ||
+            !pool.try_push(input) || !pool.try_pop()) {
+            return false;
+        }
+    }
+    if (hostile_construct_state::construct_calls != 0u ||
+        hostile_construct_state::live_blocks != 0u) {
+        return false;
+    }
+
+    {
+        dynamic_typed_pool_with_hostile_construct_allocator pool;
+        if (!pool.resize(4u) || !pool.is_valid() ||
+            !pool.try_emplace(13) || pool.try_front() == nullptr ||
+            pool.try_front()->payload != 13 || !pool.try_pop()) {
+            return false;
+        }
+    }
+    if (hostile_construct_state::construct_calls != 0u ||
+        hostile_construct_state::live_blocks != 0u) {
+        return false;
+    }
+
+    {
+        dynamic_raw_latest_with_hostile_construct_allocator latest;
+        value input{17};
+        if (!latest.resize(4u, sizeof(input)) || !latest.is_valid() ||
+            !latest.try_push(input) || latest.try_front() == nullptr ||
+            !latest.try_pop()) {
+            return false;
+        }
+    }
+    if (hostile_construct_state::construct_calls != 0u ||
+        hostile_construct_state::live_blocks != 0u) {
+        return false;
+    }
+
+    {
+        dynamic_buffer_pool_with_hostile_construct_allocator buffers;
+        if (!buffers.resize(4u, 3u) || !buffers.is_valid() ||
+            buffers.count() != 4u || buffers.size() != 3u) {
+            return false;
+        }
+        for (reg i = 0u; i < buffers.count(); ++i) {
+            if (buffers.data(i) == nullptr) {
+                return false;
+            }
+        }
+    }
+
+    return hostile_construct_state::construct_calls == 0u &&
+           hostile_construct_state::live_blocks == 0u;
+}
+
+#if !defined(_MSC_VER)
+bool verify_fifo_move_prefers_nothrow_copy()
+{
+    no_throw_fallback_fifo source;
+    throwing_move_noexcept_copy value;
+    value.payload = 71;
+    if (!source.try_push(value)) {
+        return false;
+    }
+
+    throwing_move_noexcept_copy::move_assignments = 0u;
+    throwing_move_noexcept_copy::copy_assignments = 0u;
+
+    no_throw_fallback_fifo destination(std::move(source));
+    return source.empty() && destination.size() == 1u &&
+           destination.front().payload == 71 &&
+           throwing_move_noexcept_copy::move_assignments == 0u &&
+           throwing_move_noexcept_copy::copy_assignments != 0u;
+}
+#endif
 
 bool verify_queue_raw_storage_runtime()
 {
@@ -880,6 +1470,237 @@ bool verify_address_of_hygiene_runtime()
     return true;
 }
 
+bool verify_immovable_queue_resize_runtime()
+{
+    dynamic_immovable_queue queue;
+    if (!queue.resize(4u) || !queue.is_valid() || queue.capacity() < 4u) {
+        return false;
+    }
+
+    immovable* value_ptr = queue.try_emplace(101);
+    const auto old_capacity = queue.capacity();
+    if (value_ptr == nullptr || value_ptr->payload != 101 ||
+        queue.resize(8u) || queue.capacity() != old_capacity ||
+        queue.size() != 1u || queue.try_front() == nullptr ||
+        queue.try_front()->payload != 101) {
+        return false;
+    }
+
+    if (!queue.try_pop() || !queue.resize(8u) || queue.capacity() < 8u ||
+        !queue.empty()) {
+        return false;
+    }
+
+    value_ptr = queue.try_emplace(103);
+    return value_ptr != nullptr && value_ptr->payload == 103 &&
+           queue.try_pop();
+}
+
+bool verify_mode0_queue_relocation_runtime()
+{
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    relocation_probe_state::allocation_calls = 0u;
+    relocation_probe_state::live_blocks = 0u;
+
+    dynamic_mode0_relocation_queue queue;
+    if (!queue.resize(4u) || !queue.is_valid() || queue.capacity() < 4u ||
+        relocation_probe_state::allocation_calls != 1u ||
+        relocation_probe_state::live_blocks != 1u) {
+        return false;
+    }
+
+    mode0_throwing_relocation* value_ptr = queue.try_emplace(107);
+    const auto old_capacity = queue.capacity();
+    const auto allocations_before_reject =
+        relocation_probe_state::allocation_calls;
+
+    if (value_ptr == nullptr || value_ptr->payload != 107 ||
+        queue.resize(8u) || queue.capacity() != old_capacity ||
+        queue.size() != 1u || queue.try_front() == nullptr ||
+        queue.try_front()->payload != 107 ||
+        relocation_probe_state::allocation_calls !=
+            allocations_before_reject ||
+        relocation_probe_state::live_blocks != 1u) {
+        return false;
+    }
+
+    if (!queue.try_pop() || !queue.resize(8u) || queue.capacity() < 8u ||
+        !queue.empty() || relocation_probe_state::allocation_calls !=
+                              (allocations_before_reject + 1u) ||
+        relocation_probe_state::live_blocks != 1u) {
+        return false;
+    }
+
+    queue.destroy();
+    return relocation_probe_state::live_blocks == 0u;
+#else
+    return true;
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+}
+
+bool verify_nonzero_counter_normalization_runtime()
+{
+    nonzero_dynamic_base_probe base;
+    if (base.capacity() != 0u || base.mask() != 0u || base.head() != 0u ||
+        base.tail() != 0u) {
+        return false;
+    }
+
+    ::spsc::fifo<value, 8u, nonzero_atomic_policy> fifo;
+    if (!fifo.empty() || fifo.size() != 0u || fifo.try_front() != nullptr ||
+        !fifo.try_push(value{109}) || fifo.try_front() == nullptr ||
+        fifo.try_front()->payload != 109 || !fifo.try_pop() || !fifo.empty()) {
+        return false;
+    }
+
+    ::spsc::pool<8u, nonzero_atomic_policy> pool;
+    if (pool.is_valid() || pool.capacity() != 0u || pool.buffer_size() != 0u) {
+        return false;
+    }
+
+    ::spsc::pool_view<8u, nonzero_atomic_policy> static_view;
+    ::spsc::pool_view<0u, nonzero_atomic_policy> dynamic_view;
+    if (static_view.is_valid() || static_view.buffer_size() != 0u ||
+        dynamic_view.is_valid() || dynamic_view.capacity() != 0u ||
+        dynamic_view.buffer_size() != 0u) {
+        return false;
+    }
+
+    static_view.swap(static_view);
+    dynamic_view.swap(dynamic_view);
+    return !static_view.is_valid() && !dynamic_view.is_valid();
+}
+
+bool verify_claim_publish_only_runtime()
+{
+    externally_owned_value storage[8]{
+        externally_owned_value{0}, externally_owned_value{0},
+        externally_owned_value{0}, externally_owned_value{0},
+        externally_owned_value{0}, externally_owned_value{0},
+        externally_owned_value{0}, externally_owned_value{0}};
+    non_owning_only_fifo_view view{storage};
+    externally_owned_value* view_slot = view.try_claim();
+    if (!view.is_valid() || view_slot == nullptr) {
+        return false;
+    }
+    view_slot->payload = 107;
+    if (!view.try_publish() || view.try_front() == nullptr ||
+        view.try_front()->payload != 107 || !view.try_pop()) {
+        return false;
+    }
+
+    non_assignable_latest static_latest;
+    non_assignable_latest_value* latest_slot = static_latest.try_claim();
+    if (latest_slot == nullptr) {
+        return false;
+    }
+    latest_slot->payload = 109;
+    if (!static_latest.try_publish() || static_latest.try_front() == nullptr ||
+        static_latest.try_front()->payload != 109 || !static_latest.try_pop()) {
+        return false;
+    }
+
+    dynamic_non_assignable_latest dynamic_latest;
+    if (!dynamic_latest.resize(8u)) {
+        return false;
+    }
+    latest_slot = dynamic_latest.try_claim();
+    if (latest_slot == nullptr) {
+        return false;
+    }
+    latest_slot->payload = 113;
+    return dynamic_latest.try_publish() &&
+           dynamic_latest.try_front() != nullptr &&
+           dynamic_latest.try_front()->payload == 113 &&
+           dynamic_latest.try_pop();
+}
+
+bool verify_raw_overlay_hygiene_runtime()
+{
+    struct oversized_overlay {
+        std::byte bytes[sizeof(hostile_address_value) + 1u]{};
+    };
+
+    hostile_address_value input;
+    input.payload = 61;
+    hostile_address_value output;
+
+    raw_pool pool{sizeof(hostile_address_value)};
+    if (!pool.is_valid() || !pool.try_push(input) ||
+        !pool.try_peek(output) || output.payload != 61 || !pool.try_pop()) {
+        return false;
+    }
+
+    {
+        auto guard = pool.scoped_write(1u);
+        oversized_overlay oversized{};
+        if (guard.write_next(oversized) != nullptr) {
+            return false;
+        }
+    }
+    if (!pool.empty()) {
+        return false;
+    }
+
+    {
+        auto guard = pool.scoped_write(1u);
+        if (guard.write_next(nullptr, 1u) != nullptr) {
+            return false;
+        }
+    }
+    if (!pool.empty()) {
+        return false;
+    }
+
+    alignas(hostile_address_value)
+        std::byte view_storage[8u][sizeof(hostile_address_value)]{};
+    void* view_slots[8u]{};
+    for (std::size_t i = 0u; i < 8u; ++i) {
+        view_slots[i] = view_storage[i];
+    }
+
+    raw_pool_view view{view_slots, sizeof(hostile_address_value)};
+    output.payload = 0;
+    if (!view.is_valid() || !view.try_push(input) ||
+        !view.try_peek(output) || output.payload != 61 || !view.try_pop()) {
+        return false;
+    }
+
+    {
+        auto guard = view.scoped_write(1u);
+        oversized_overlay oversized{};
+        if (guard.write_next(oversized) != nullptr) {
+            return false;
+        }
+    }
+    if (!view.empty()) {
+        return false;
+    }
+
+    {
+        auto guard = view.scoped_write(1u);
+        if (guard.write_next(nullptr, 1u) != nullptr) {
+            return false;
+        }
+    }
+    if (!view.empty()) {
+        return false;
+    }
+
+    raw_latest latest;
+    if (!latest.resize(8u, sizeof(hostile_address_value)) ||
+        !latest.try_push(input)) {
+        return false;
+    }
+    const void* raw = latest.try_front();
+    if (raw == nullptr) {
+        return false;
+    }
+    output.payload = 0;
+    std::memcpy(std::addressof(output), raw, sizeof(output));
+    return output.payload == 61 && latest.try_pop();
+}
+
 bool verify_copy_and_swap_runtime()
 {
     assign_copy_fifo fifo_source;
@@ -1042,8 +1863,18 @@ bool verify_copy_and_swap_runtime()
 int main()
 {
     return verify_value_swap_runtime() &&
+                   verify_chunk_owns_value_construction() &&
+                   verify_pointer_rings_own_pointer_lifetime() &&
+#if !defined(_MSC_VER)
+                   verify_fifo_move_prefers_nothrow_copy() &&
+#endif
                    verify_queue_raw_storage_runtime() &&
                    verify_address_of_hygiene_runtime() &&
+                   verify_immovable_queue_resize_runtime() &&
+                   verify_mode0_queue_relocation_runtime() &&
+                   verify_nonzero_counter_normalization_runtime() &&
+                   verify_claim_publish_only_runtime() &&
+                   verify_raw_overlay_hygiene_runtime() &&
                    verify_copy_and_swap_runtime()
                ? 0
                : 1;

@@ -86,6 +86,10 @@
 #  define SPSC_ENABLE_EXCEPTIONS 0
 #endif /* SPSC_ENABLE_EXCEPTIONS */
 
+#if (SPSC_ENABLE_EXCEPTIONS != 0) && (SPSC_ENABLE_EXCEPTIONS != 1)
+#  error "SPSC_ENABLE_EXCEPTIONS must be 0 or 1"
+#endif
+
 /*
  * Optional: prefer aligned-new when available.
  */

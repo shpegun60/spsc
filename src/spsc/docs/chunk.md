@@ -57,6 +57,11 @@ start_dma(block.data(), block.capacity());
 block.commit_size(actualSamplesWritten);
 ```
 
+External byte writes such as DMA overwrite object representations directly,
+so this pattern is only safe for trivially-copyable `T`. `commit_size()`
+itself just publishes the logical length; for non-trivial `T`, build
+elements through `push`/`emplace` instead of external byte transfers.
+
 ## More Example Patterns
 
 ### Dynamic Reserve Then Fill
@@ -133,7 +138,8 @@ block.pop_back_n(4);
 
 - `chunk<T, N>` is fixed-size and allocation-free
 - `chunk<T, 0>` starts empty and usually needs `reserve(...)`
-- copy, move, and `swap(...)` are supported
+- static `chunk` supports copy, move, and `swap(...)`; dynamic `chunk<T, 0>`
+  is move-only (its copy operations are disabled)
 
 ### State And Capacity
 

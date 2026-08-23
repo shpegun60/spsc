@@ -81,7 +81,10 @@ class typed_pool : private detail::typed_pool_base<Capacity>,
     static constexpr bool kDynamic = (Capacity == 0);
     using Base = ::spsc::SPSCbase<Capacity, Policy>;
 
-    static constexpr bool kCopyEnabled = std::is_copy_constructible_v<T>;
+    static constexpr bool kCopyEnabled =
+        std::is_copy_constructible_v<T> &&
+        ((SPSC_ENABLE_EXCEPTIONS != 0) ||
+         std::is_nothrow_copy_constructible_v<T>);
     struct disabled_copy_source;
     using copy_source = std::conditional_t<kCopyEnabled,
                                            const typed_pool&,
@@ -152,18 +155,19 @@ public:
     // ------------------------------------------------------------------------------------------
     // Static Assertions
     // ------------------------------------------------------------------------------------------
-    static_assert(std::is_default_constructible_v<base_allocator_type>,
-                  "[spsc::typed_pool]: allocator must be default-constructible "
-                  "(used by get_allocator()).");
-    static_assert(!kDynamic || slot_alloc_traits::is_always_equal::value,
-                  "[spsc::typed_pool]: dynamic typed_pool requires always_equal "
-                  "allocator (stateless).");
-    static_assert(!kDynamic ||
-                      std::is_default_constructible_v<slot_allocator_type>,
-                  "[spsc::typed_pool]: dynamic typed_pool requires "
-                  "default-constructible allocator.");
-    static_assert(!kDynamic || std::is_same_v<slot_pointer, pointer *>,
-                  "[spsc::typed_pool]: dynamic typed_pool requires allocator "
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[spsc::typed_pool]: base allocator must be nothrow default-constructible.");
+    static_assert(slot_alloc_traits::is_always_equal::value,
+                  "[spsc::typed_pool]: slot allocator must be always_equal "
+                  "(stateless).");
+    static_assert(std::is_nothrow_default_constructible_v<slot_allocator_type>,
+                  "[spsc::typed_pool]: slot allocator must be nothrow "
+                  "default-constructible.");
+    static_assert(
+        ::spsc::alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
+                  "[spsc::typed_pool]: slot allocator size_type must represent the reg domain.");
+    static_assert(std::is_same_v<slot_pointer, pointer *>,
+                  "[spsc::typed_pool]: typed_pool requires allocator "
                   "pointer type T** (raw).");
     static_assert(
         std::is_same_v<object_pointer, pointer>,
@@ -197,8 +201,33 @@ public:
         object_alloc_traits::is_always_equal::value,
         "[spsc::typed_pool]: object allocator must be always_equal (stateless).");
     static_assert(
-        std::is_default_constructible_v<object_allocator_type>,
-        "[spsc::typed_pool]: object allocator must be default-constructible.");
+        std::is_nothrow_default_constructible_v<object_allocator_type>,
+        "[spsc::typed_pool]: object allocator must be nothrow default-constructible.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+            slot_allocator_type>,
+        "[spsc::typed_pool]: no-exceptions mode requires slot "
+        "allocator::allocate(size_type) to be noexcept.");
+    static_assert(
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+            object_allocator_type>,
+        "[spsc::typed_pool]: no-exceptions mode requires object "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(
+        !std::is_const_v<object_type>,
+        "[spsc::typed_pool]: const T does not make sense for a writable pool.");
+    static_assert(
+        !std::is_volatile_v<object_type>,
+        "[spsc::typed_pool]: volatile payloads are not supported by the "
+        "manual object-lifetime paths.");
+    static_assert(
+        !std::is_array_v<object_type>,
+        "[spsc::typed_pool]: raw array payloads are not supported; use "
+        "std::array.");
+    static_assert(std::is_nothrow_destructible_v<object_type>,
+                  "[spsc::typed_pool]: object_type destructor must be noexcept.");
     static_assert(std::is_same_v<value_type, pointer>,
                   "[spsc::typed_pool]: value_type must match pointer.");
     static_assert(std::is_trivially_copyable_v<pointer>,
@@ -245,12 +274,17 @@ public:
             (void)other;
         } else if (this == &other) {
             return *this;
-        } else {
+        } else if constexpr (kDynamic) {
             typed_pool tmp(other);
             if (other.is_valid() && !tmp.is_valid()) {
                 return *this;
             }
             swap(tmp);
+        } else {
+            // Build the replacement behind an allocator-backed transient
+            // pointer table.  Do not place another Capacity-sized typed_pool
+            // object (or pointer table) on the caller's stack.
+            (void)copy_from(other);
         }
         return *this;
     }
@@ -559,7 +593,11 @@ public:
             }
         }
 
-        pop(snap_used);
+        // Checked commit: the range was just proven readable, so keep the
+        // consumer shadow instead of routing through the unchecked pop() path
+        // (which poisons the shadow on 32-bit shadow-enabled builds).
+        destroy_prefix_(snap_used);
+        Base::advance_tail_checked(snap_used);
         return true;
     }
     void consume_all() noexcept {
@@ -567,12 +605,29 @@ public:
             return;
         }
 
+        // Retire exactly the prefix visible at one fresh consumer snapshot.
+        // Publications that happen while destructors run remain queued for a
+        // later consumer pass, and runtime is bounded by capacity.
+        const auto owner = Base::consumer_single_owner_snapshot();
+        const size_type head = Base::head();
+        const size_type count = static_cast<size_type>(head - owner.owner);
+        const size_type cap = Base::capacity();
+
+        if (RB_UNLIKELY(count > cap)) {
+            return;
+        }
+
         if constexpr (!std::is_trivially_destructible_v<object_type>) {
-            while (!consumer_empty_cached_()) {
-                pop();
+            const size_type mask = Base::mask();
+            for (size_type i = 0u; i < count; ++i) {
+                pointer p = object_ptr(
+                    static_cast<size_type>((owner.owner + i) & mask));
+                detail::destroy_at(p);
             }
-        } else {
-            Base::sync_tail_to_head();
+        }
+
+        if (count != 0u) {
+            Base::consumer_commit_from_owner(owner.owner, count);
         }
     }
 
@@ -582,7 +637,7 @@ public:
 
     [[nodiscard]] regions
     claim_write(const ::spsc::unsafe_t, const size_type max_count =
-                                        std::numeric_limits<size_type>::max()) noexcept {
+                                        (std::numeric_limits<size_type>::max)()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
@@ -640,7 +695,7 @@ public:
 
     [[nodiscard]] regions
     claim_read(const ::spsc::unsafe_t, const size_type max_count =
-                                       std::numeric_limits<size_type>::max()) noexcept {
+                                       (std::numeric_limits<size_type>::max)()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
@@ -788,14 +843,14 @@ public:
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(producer_can_write_cached_(n));
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -863,11 +918,8 @@ public:
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(consumer_can_read_cached_(n));
 
-        for (size_type k = 0; k < n; ++k) {
-            pointer p = object_ptr((Base::tail() + k) & Base::mask());
-            detail::destroy_at(p);
-        }
-        Base::advance_tail(n);
+        destroy_prefix_(n);
+        Base::advance_tail_unchecked(n);
     }
 
     // Guard against accidental overload selection when passing a value variable
@@ -883,11 +935,8 @@ public:
             return false;
         }
 
-        for (size_type k = 0; k < n; ++k) {
-            pointer p = object_ptr((Base::tail() + k) & Base::mask());
-            detail::destroy_at(p);
-        }
-        Base::advance_tail(n);
+        destroy_prefix_(n);
+        Base::advance_tail_checked(n);
         return true;
     }
 
@@ -1325,7 +1374,7 @@ public:
 
             if (publish_on_destroy_ && constructed_) {
                 // Object becomes visible to the consumer.
-                p_->publish();
+                (void)p_->try_publish();
             } else if (constructed_) {
                 // Constructed but not published: destroy safely.
                 ::spsc::detail::destroy_at(std::launder(ptr_));
@@ -1379,7 +1428,7 @@ public:
             if (p_ && ptr_) {
                 SPSC_ASSERT(constructed_ && "write_guard::commit() publishing an unconstructed slot");
                 if (constructed_) {
-                    p_->publish();
+                    (void)p_->try_publish();
                 }
             }
 
@@ -1428,7 +1477,7 @@ public:
 
         ~read_guard() noexcept {
             if (active_ && p_) {
-                p_->pop();
+                (void)p_->try_pop();
             }
         }
 
@@ -1442,7 +1491,7 @@ public:
         explicit operator bool() const noexcept { return active_; }
         void commit() noexcept {
             if (active_ && p_) {
-                p_->pop();
+                (void)p_->try_pop();
             }
             cancel();
         }
@@ -1471,6 +1520,10 @@ public:
     }
 
 private:
+    using scratch_table_type =
+        ::spsc::alloc::detail::pointer_table_scratch<
+            pointer, base_allocator_type>;
+
     [[nodiscard]] RB_FORCEINLINE bool producer_full_cached_() const noexcept {
         return !is_valid() || Base::producer_full_cached();
     }
@@ -1487,6 +1540,19 @@ private:
     [[nodiscard]] RB_FORCEINLINE bool
     consumer_can_read_cached_(const size_type n = 1u) const noexcept {
         return is_valid() && Base::consumer_can_read_cached(n);
+    }
+
+    // Destroy the n oldest live objects without advancing the tail. Shared by
+    // pop(n)/try_pop(n)/try_consume() so the object-lifetime logic has a
+    // single definition while each caller picks its own commit flavor.
+    RB_FORCEINLINE void destroy_prefix_(const size_type n) noexcept {
+        if constexpr (!std::is_trivially_destructible_v<object_type>) {
+            const size_type tail = Base::tail();
+            const size_type mask = Base::mask();
+            for (size_type k = 0u; k < n; ++k) {
+                detail::destroy_at(object_ptr((tail + k) & mask));
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1618,7 +1684,8 @@ private:
             new_slots = slot_alloc_traits::allocate(sa, target_depth);
             if (RB_LIKELY(new_slots != nullptr)) {
                 for (size_type i = 0; i < target_depth; ++i) {
-                    new_slots[i] = nullptr;
+                    (void)::new (static_cast<void*>(new_slots + i))
+                        pointer(nullptr);
                 }
             }
 
@@ -1732,6 +1799,86 @@ private:
         return true;
     }
 
+    static void release_fresh_storage_(pointer* const fresh_slots,
+                                       const size_type allocated,
+                                       const size_type constructed) noexcept {
+        if (fresh_slots == nullptr) {
+            return;
+        }
+
+        for (size_type i = 0u; i < constructed; ++i) {
+            detail::destroy_at(std::launder(fresh_slots[i]));
+        }
+        for (size_type i = 0u; i < allocated; ++i) {
+            free_one(fresh_slots[i]);
+            fresh_slots[i] = nullptr;
+        }
+    }
+
+    [[nodiscard]] bool copy_from_static_(const typed_pool& other) {
+        static_assert(!kDynamic,
+                      "copy_from_static_() is for static Capacity only");
+
+        const size_type observed_size = other.size();
+        const size_type copy_size =
+            (observed_size <= Capacity) ? observed_size : 0u;
+
+        scratch_table_type scratch{};
+        pointer* fresh = nullptr;
+        size_type allocated = 0u;
+        size_type constructed = 0u;
+
+        SPSC_TRY {
+            if (scratch.allocate(Capacity)) {
+                fresh = scratch.data();
+            }
+
+            if (fresh != nullptr) {
+                for (; allocated < Capacity; ++allocated) {
+                    pointer p = alloc_one();
+                    if (RB_UNLIKELY(p == nullptr)) {
+                        break;
+                    }
+                    fresh[allocated] = p;
+                }
+            }
+
+            if (allocated == Capacity) {
+                const size_type mask = other.Base::mask();
+                const size_type tail = other.Base::tail();
+                for (; constructed < copy_size; ++constructed) {
+                    pointer src = other.object_ptr(
+                        static_cast<size_type>((tail + constructed) & mask));
+                    (void)::new (static_cast<void*>(fresh[constructed]))
+                        T(*src);
+                }
+            }
+        }
+        SPSC_CATCH_ALL {
+            release_fresh_storage_(fresh, allocated, constructed);
+            SPSC_RETHROW;
+        }
+
+        if (RB_UNLIKELY(fresh == nullptr) ||
+            RB_UNLIKELY(allocated != Capacity)) {
+            release_fresh_storage_(fresh, allocated, constructed);
+            return false;
+        }
+
+        // The replacement is complete.  Allocation failure and payload-copy
+        // failure above leave the destination untouched.
+        destroy();
+        for (size_type i = 0u; i < Capacity; ++i) {
+            slots_[i] = fresh[i];
+        }
+        this->isAllocated_ = true;
+
+        const bool ok = Base::init(copy_size, 0u);
+        SPSC_ASSERT(ok);
+        (void)ok;
+        return true;
+    }
+
     [[nodiscard]] bool copy_from(const typed_pool &other) {
         static_assert(std::is_copy_constructible_v<T>,
                       "[typed_pool]: T must be copy-constructible for copying");
@@ -1741,67 +1888,63 @@ private:
             return true;
         }
 
-        const size_type target_depth = other.capacity();
+        if constexpr (!kDynamic) {
+            return copy_from_static_(other);
+        } else {
+            const size_type target_depth = other.capacity();
 
-        // Allocate fresh storage (do not reuse old pointers).
-        typed_pool tmp;
+            // Allocate fresh storage (do not reuse old pointers).
+            typed_pool tmp;
 
-        if constexpr (kDynamic) {
             if (!tmp.resize(target_depth)) {
                 destroy();
                 return false;
             }
-        } else {
-            (void)target_depth;
-            if (!tmp.is_valid() && !tmp.allocate_static_storage()) {
+
+            if (!tmp.is_valid()) {
                 destroy();
                 return false;
             }
-        }
 
-        if (!tmp.is_valid()) {
-            destroy();
-            return false;
-        }
+            const size_type sz = other.size();
+            const size_type cap = tmp.capacity();
+            if (RB_UNLIKELY(sz > cap)) {
+                // Corrupted other state: keep tmp empty.
+                tmp.Base::clear();
+                swap(tmp);
+                return true;
+            }
 
-        const size_type sz = other.size();
-        const size_type cap = tmp.capacity();
-        if (RB_UNLIKELY(sz > cap)) {
-            // Corrupted other state: keep tmp empty.
+            // Copy-construct live objects into tmp[0..sz-1]
+            size_type constructed = 0u;
+            SPSC_TRY {
+                const size_type m = other.Base::mask();
+                const size_type t = other.Base::tail();
+
+                for (; constructed < sz; ++constructed) {
+                    // Must use object_ptr() on source to launder the pointer
+                    pointer src = other.object_ptr((t + constructed) & m);
+                    pointer dst = tmp.data()[constructed];
+                    ::new (static_cast<void *>(dst)) T(*src);
+                }
+            }
+            SPSC_CATCH_ALL {
+                for (size_type k = 0; k < constructed; ++k) {
+                    detail::destroy_at(tmp.data()[k]);
+                }
+                // tmp will free memory in its destructor.
+                SPSC_RETHROW;
+            }
+
+            // Set geometry: [0..sz-1] live, tail=0
             tmp.Base::clear();
+            tmp.Base::set_tail(0u);
+            tmp.Base::set_head(sz);
+            tmp.Base::sync_cache();
+
             swap(tmp);
             return true;
         }
-
-        // Copy-construct live objects into tmp[0..sz-1]
-        size_type constructed = 0u;
-        SPSC_TRY {
-            const size_type m = other.Base::mask();
-            const size_type t = other.Base::tail();
-
-            for (; constructed < sz; ++constructed) {
-                // Must use object_ptr() on source to launder the pointer
-                pointer src = other.object_ptr((t + constructed) & m);
-                pointer dst = tmp.data()[constructed];
-                ::new (static_cast<void *>(dst)) T(*src);
-            }
-        }
-        SPSC_CATCH_ALL {
-            for (size_type k = 0; k < constructed; ++k) {
-                detail::destroy_at(tmp.data()[k]);
-            }
-            // tmp will free memory in its destructor.
-            SPSC_RETHROW;
-        }
-
-        // Set geometry: [0..sz-1] live, tail=0
-        tmp.Base::clear();
-        tmp.Base::set_tail(0u);
-        tmp.Base::set_head(sz);
-        tmp.Base::sync_cache();
-
-        swap(tmp);
-        return true;
     }
 
     void move_from(typed_pool &&other) noexcept {

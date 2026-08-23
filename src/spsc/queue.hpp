@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Lifetime-managed SPSC Queue (Ring Buffer) for type T.
- * Interface compatible with spsc::fifo (owning) and queue_view (non-owning).
+ * Interface compatible with spsc::fifo (owning).
  *
  * Design goals:
  * - Modern:      constexpr, [[nodiscard]], optional span-based bulk API.
@@ -127,8 +127,8 @@ public:
     using geometry_value = typename geometry_type::value_type;
 
     // Allocation noexcept detection (important for not lying in signatures).
-    static constexpr bool kNoexceptAllocate = noexcept(alloc_traits::allocate(
-        std::declval<allocator_type &>(), alloc_size_type{1}));
+    static constexpr bool kNoexceptAllocate =
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<allocator_type>;
 
     // ------------------------------------------------------------------------------------------
     // Static Assertions
@@ -136,6 +136,15 @@ public:
     static_assert(
         !std::is_const_v<value_type>,
         "[spsc::queue]: const T does not make sense for a writable queue.");
+    static_assert(
+        !std::is_volatile_v<value_type>,
+        "[spsc::queue]: volatile payloads are not supported by the manual "
+        "object-lifetime paths.");
+    static_assert(
+        !std::is_array_v<value_type>,
+        "[spsc::queue]: raw array payloads are not supported; use std::array.");
+    static_assert(std::is_nothrow_destructible_v<value_type>,
+                  "[spsc::queue]: value_type destructor must be noexcept.");
     static_assert(std::numeric_limits<counter_value>::digits >= 2,
                   "[spsc::queue]: counter type is too narrow.");
     static_assert(
@@ -156,8 +165,16 @@ public:
                   "[spsc::queue]: allocator must be stateless (is_always_equal) "
                   "because the queue"
                   " default-constructs allocators for allocate/deallocate.");
-    static_assert(std::is_default_constructible_v<allocator_type>,
-                  "[spsc::queue]: allocator must be default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "[spsc::queue]: allocator must be nothrow default-constructible.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        kNoexceptAllocate,
+        "[spsc::queue]: no-exceptions mode requires allocator::allocate(size_type) "
+        "to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(::spsc::alloc::detail::allocator_size_covers_reg_v<allocator_type>,
+                  "[spsc::queue]: allocator size_type must represent the reg domain.");
     static_assert(std::is_same_v<alloc_pointer, pointer>,
                   "[spsc::queue]: allocator pointer type must be raw T*.");
     static_assert(kDynamic || (Capacity >= 2u),
@@ -467,7 +484,8 @@ public:
             }
         }
 
-        pop(snap_used);
+        destroy_prefix_(snap_used);
+        Base::advance_tail_checked(snap_used);
         return true;
     }
 
@@ -477,12 +495,28 @@ public:
             return;
         }
 
+        // Bound this operation to the prefix visible at one fresh consumer
+        // snapshot.  A producer may publish more elements while destructors
+        // run; those later publications belong to the next consumer pass.
+        const auto owner = Base::consumer_single_owner_snapshot();
+        const size_type head = Base::head();
+        const size_type count = static_cast<size_type>(head - owner.owner);
+        const size_type cap = Base::capacity();
+
+        if (RB_UNLIKELY(count > cap)) {
+            return;
+        }
+
         if constexpr (!std::is_trivially_destructible_v<value_type>) {
-            while (!consumer_empty_cached_()) {
-                pop();
+            const size_type mask = Base::mask();
+            for (size_type i = 0u; i < count; ++i) {
+                detail::destroy_at(
+                    slot_ptr(static_cast<size_type>((owner.owner + i) & mask)));
             }
-        } else {
-            Base::sync_tail_to_head();
+        }
+
+        if (count != 0u) {
+            Base::consumer_commit_from_owner(owner.owner, count);
         }
     }
 
@@ -702,14 +736,14 @@ public:
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(producer_can_write_cached_(n));
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -775,15 +809,8 @@ public:
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(consumer_can_read_cached_(n));
-
-        if constexpr (!std::is_trivially_destructible_v<value_type>) {
-            size_type idx = Base::tail();
-            const size_type mask = Base::mask();
-            for (size_type i = 0; i < n; ++i) {
-                detail::destroy_at(slot_ptr((idx + i) & mask));
-            }
-        }
-        Base::advance_tail(n);
+        destroy_prefix_(n);
+        Base::advance_tail_unchecked(n);
     }
     // Guard against accidental overload selection when passing a value variable
     // that is implicitly convertible to size_type. Without this, a call like:
@@ -801,7 +828,8 @@ public:
         if (RB_UNLIKELY(!consumer_can_read_cached_(n))) {
             return false;
         }
-        pop(n);
+        destroy_prefix_(n);
+        Base::advance_tail_checked(n);
         return true;
     }
     // Same trap as pop(U&): prevent q.try_pop(out) from accidentally binding to
@@ -1056,6 +1084,28 @@ public:
             return true;
         }
 
+        constexpr bool kCanRelocate =
+            std::is_move_constructible_v<value_type> ||
+            std::is_copy_constructible_v<value_type>;
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+        constexpr bool kCanRelocateLive =
+            std::is_nothrow_move_constructible_v<value_type> ||
+            std::is_nothrow_copy_constructible_v<value_type>;
+#else
+        constexpr bool kCanRelocateLive = kCanRelocate;
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+
+        // An empty dynamic queue does not need value_type relocation and may
+        // therefore acquire or grow its storage even for an immovable T.  A
+        // non-empty queue must fail before allocation when no safe relocation
+        // operation exists. Mode 0 has no catch/rollback path, so its live
+        // migration operation must itself be non-throwing.
+        if constexpr (!kCanRelocateLive) {
+            if (old_size != 0u) {
+                return false;
+            }
+        }
+
         allocator_type alloc{};
         pointer new_buf = alloc_traits::allocate(alloc, target_cap);
         if (RB_UNLIKELY(new_buf == nullptr)) {
@@ -1064,30 +1114,32 @@ public:
 
         size_type migrated = 0u;
 
-        SPSC_TRY {
-            for (size_type i = 0; i < old_size; ++i) {
-                pointer src = slot_ptr((old_tail + i) & old_mask);
-                pointer dst = new_buf + i;
+        if constexpr (kCanRelocate) {
+            SPSC_TRY {
+                for (size_type i = 0; i < old_size; ++i) {
+                    pointer src = slot_ptr((old_tail + i) & old_mask);
+                    pointer dst = new_buf + i;
 
-                if constexpr (std::is_nothrow_move_constructible_v<value_type> ||
-                              !std::is_copy_constructible_v<value_type>) {
-                    (void)::new (static_cast<void *>(dst))
-                        value_type(std::move(*src));
-                } else {
-                    (void)::new (static_cast<void *>(dst)) value_type(*src);
-                }
+                    if constexpr (std::is_nothrow_move_constructible_v<value_type> ||
+                                  !std::is_copy_constructible_v<value_type>) {
+                        (void)::new (static_cast<void *>(dst))
+                            value_type(std::move(*src));
+                    } else {
+                        (void)::new (static_cast<void *>(dst)) value_type(*src);
+                    }
 
-                ++migrated;
-            }
-        }
-        SPSC_CATCH_ALL {
-            if constexpr (!std::is_trivially_destructible_v<value_type>) {
-                for (size_type i = 0; i < migrated; ++i) {
-                    detail::destroy_at(std::launder(new_buf + i));
+                    ++migrated;
                 }
             }
-            alloc_traits::deallocate(alloc, new_buf, target_cap);
-            SPSC_RETHROW;
+            SPSC_CATCH_ALL {
+                if constexpr (!std::is_trivially_destructible_v<value_type>) {
+                    for (size_type i = 0; i < migrated; ++i) {
+                        detail::destroy_at(std::launder(new_buf + i));
+                    }
+                }
+                alloc_traits::deallocate(alloc, new_buf, target_cap);
+                SPSC_RETHROW;
+            }
         }
 
         // Destroy and release old storage only after successful migration.
@@ -1317,7 +1369,7 @@ public:
             }
 
             if (publish_on_destroy_ && constructed_) {
-                q_->publish();
+                (void)q_->try_publish();
                 return;
             }
 
@@ -1366,7 +1418,7 @@ public:
             if (q_ && ptr_) {
                 SPSC_ASSERT(constructed_ && "write_guard::commit() publishing an unconstructed slot");
                 if (constructed_) {
-                    q_->publish();
+                    (void)q_->try_publish();
                 }
             }
 
@@ -1415,7 +1467,7 @@ public:
 
         ~read_guard() noexcept {
             if (active_ && q_) {
-                q_->pop();
+                (void)q_->try_pop();
             }
         }
 
@@ -1429,7 +1481,7 @@ public:
         explicit operator bool() const noexcept { return active_; }
         void commit() noexcept {
             if (active_ && q_) {
-                q_->pop();
+                (void)q_->try_pop();
             }
             cancel();
         }
@@ -1474,6 +1526,16 @@ private:
     [[nodiscard]] RB_FORCEINLINE bool
     consumer_can_read_cached_(const size_type n = 1u) const noexcept {
         return is_valid() && Base::consumer_can_read_cached(n);
+    }
+
+    RB_FORCEINLINE void destroy_prefix_(const size_type n) noexcept {
+        if constexpr (!std::is_trivially_destructible_v<value_type>) {
+            const size_type tail = Base::tail();
+            const size_type mask = Base::mask();
+            for (size_type i = 0u; i < n; ++i) {
+                detail::destroy_at(slot_ptr((tail + i) & mask));
+            }
+        }
     }
 
     void allocate_static_() noexcept(kNoexceptAllocate) {

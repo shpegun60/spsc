@@ -50,6 +50,23 @@ if (auto* block = q.try_claim()) {
 }
 ```
 
+For `ChunkCapacity == 0` the chunk payload lives in a separate allocation
+owned by the chunk's `Alloc`. The owning `cache_aligned_chunk_fifo` alias
+derives that allocator from its cache-aligned policy, so dynamic payloads
+are cache-line aligned; the `cache_aligned_chunk_fifo_view` alias defaults
+to `default_alloc`, so its dynamic chunk payload is NOT automatically
+cache-line aligned — pass an explicitly aligned allocator when DMA needs
+aligned payloads.
+
+`block->clear()` at claim time is part of the reuse contract, not example
+decoration: consumer `pop()` releases the slot without clearing the embedded
+chunk object, so once the ring wraps, `claim()` hands back a block that still
+carries the previous logical length and contents. `clear()` is therefore
+required before append-style `push`/`emplace` refills — skipping it silently
+appends new elements after stale ones. A producer that rewrites the block
+wholesale and sets the length explicitly via `resize(n)`/`commit_size(n)`
+overwrites the stale length itself and does not need `clear()`.
+
 ## Consumer Example
 
 ```cpp

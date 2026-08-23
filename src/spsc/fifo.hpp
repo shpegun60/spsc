@@ -67,17 +67,27 @@ class fifo : private ::spsc::SPSCbase<Capacity, Policy> {
     using DynamicBuf = T *;
     using storage_type = std::conditional_t<kDynamic, DynamicBuf, StaticBuf>;
 
-    static constexpr bool kCopyEnabled = std::is_copy_assignable_v<T>;
+    static constexpr bool kCopyEnabled =
+        std::is_copy_assignable_v<T> &&
+        ((SPSC_ENABLE_EXCEPTIONS != 0) ||
+         std::is_nothrow_copy_assignable_v<T>);
     struct disabled_copy_source;
     using copy_source = std::conditional_t<kCopyEnabled,
                                            const fifo&,
                                            disabled_copy_source&&>;
 
-    static constexpr bool kNoThrowMoveOps =
+    static constexpr bool kUseMoveStorageAssignment =
+        std::is_move_assignable_v<storage_type> &&
+        (std::is_nothrow_move_assignable_v<storage_type> ||
+         !std::is_copy_assignable_v<storage_type>);
+    static constexpr bool kNoThrowStorageAssignment =
         kDynamic ? true
-                 : (std::is_move_assignable_v<storage_type>
+                 : (kUseMoveStorageAssignment
                         ? std::is_nothrow_move_assignable_v<storage_type>
                         : std::is_nothrow_copy_assignable_v<storage_type>);
+    static constexpr bool kNoThrowMoveConstruction =
+        kDynamic || (std::is_nothrow_default_constructible_v<storage_type> &&
+                     kNoThrowStorageAssignment);
 
 public:
     // ------------------------------------------------------------------------------------------
@@ -140,18 +150,26 @@ public:
     static_assert(
         !std::is_const_v<value_type>,
         "[spsc::fifo]: const T does not make sense for a writable FIFO.");
+    static_assert(
+        !std::is_volatile_v<value_type>,
+        "[spsc::fifo]: volatile payloads are not supported by the "
+        "trivial-copy management paths.");
+    static_assert(std::is_nothrow_destructible_v<value_type>,
+                  "[spsc::fifo]: value_type destructor must be noexcept.");
 
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<value_type>,
                   "[spsc::fifo]: no-exceptions mode requires noexcept default "
                   "constructor.");
-    static_assert(
-        std::is_nothrow_destructible_v<value_type>,
-        "[spsc::fifo]: no-exceptions mode requires noexcept destructor.");
     static_assert(std::is_nothrow_move_assignable_v<value_type> ||
                       std::is_nothrow_copy_assignable_v<value_type>,
                   "[spsc::fifo]: no-exceptions mode requires noexcept assignment "
                   "(move or copy).");
+    static_assert(
+        !kDynamic ||
+            ::spsc::alloc::detail::allocator_allocate_noexcept_v<allocator_type>,
+        "[spsc::fifo]: no-exceptions mode requires allocator::allocate(size_type) "
+        "to be noexcept.");
 #endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
 
     static_assert(std::is_trivially_copyable_v<counter_value>,
@@ -175,8 +193,11 @@ public:
                   "[spsc::fifo]: policy counter/geometry value type must be unsigned.");
     static_assert(sizeof(counter_value) >= sizeof(size_type),
                   "[spsc::fifo]: counter_type::value_type must be at least as wide as reg.");
-    static_assert(std::is_default_constructible_v<allocator_type>,
-                  "[spsc::fifo]: allocator must be default-constructible (used by get_allocator()).");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "[spsc::fifo]: allocator must be nothrow default-constructible.");
+    static_assert(!kDynamic ||
+                      ::spsc::alloc::detail::allocator_size_covers_reg_v<allocator_type>,
+                  "[spsc::fifo]: allocator size_type must represent the reg domain.");
     // Extra compile-time hardening (keeps parity with pool)
     static_assert(std::is_unsigned_v<size_type>,
                   "[spsc::fifo]: reg (size_type) must be unsigned.");
@@ -231,20 +252,23 @@ public:
             }
 
             swap(tmp);
-        } else if constexpr (::spsc::detail::value_swap_noexcept_v<storage_type>) {
-            fifo tmp(other);
-            swap(tmp);
         } else {
-            // copy_from() already does Base::clear() in the static branch.
+            // Static storage is embedded in the container.  A copy-and-swap
+            // temporary would therefore put Capacity * sizeof(T) bytes on the
+            // caller's stack.  Copy in place instead.  If a payload assignment
+            // throws, copy_from() leaves the destination logically empty and
+            // valid (basic guarantee); no proportional scratch is materialized.
             copy_from(other);
         }
         return *this;
     }
 
     // Move semantics
-    fifo(fifo &&other) noexcept(kNoThrowMoveOps) : Base() { move_from(std::move(other)); }
+    fifo(fifo &&other) noexcept(kNoThrowMoveConstruction) : Base() {
+        move_from(std::move(other));
+    }
 
-    fifo &operator=(fifo &&other) noexcept(kNoThrowMoveOps) {
+    fifo &operator=(fifo &&other) noexcept(kNoThrowStorageAssignment) {
         if (this != &other) {
             destroy();
             move_from(std::move(other));
@@ -543,7 +567,10 @@ public:
             }
         }
 
-        pop(snap_used);
+        // Checked commit: the range was just proven readable, so keep the
+        // consumer shadow instead of routing through the unchecked pop() path
+        // (which poisons the shadow on 32-bit shadow-enabled builds).
+        Base::advance_tail_checked(snap_used);
         return true;
     }
 
@@ -560,7 +587,7 @@ public:
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] regions
     claim_write(const ::spsc::unsafe_t, const size_type max_count =
-                                        std::numeric_limits<size_type>::max()) noexcept {
+                                        (std::numeric_limits<size_type>::max)()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
@@ -618,7 +645,7 @@ public:
 
     [[nodiscard]] regions
     claim_read(const ::spsc::unsafe_t, const size_type max_count =
-                                       std::numeric_limits<size_type>::max()) noexcept {
+                                       (std::numeric_limits<size_type>::max)()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
@@ -776,14 +803,14 @@ public:
 
     RB_FORCEINLINE void publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         SPSC_ASSERT(producer_can_write_cached_(n));
-        Base::advance_head(n);
+        Base::advance_head_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_publish(const ::spsc::unsafe_t, const size_type n) noexcept {
         if (RB_UNLIKELY(!producer_can_write_cached_(n))) {
             return false;
         }
-        Base::advance_head(n);
+        Base::advance_head_checked(n);
         return true;
     }
     void publish(const size_type) noexcept = delete;
@@ -843,14 +870,14 @@ public:
 
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(consumer_can_read_cached_(n));
-        Base::advance_tail(n);
+        Base::advance_tail_unchecked(n);
     }
 
     [[nodiscard]] RB_FORCEINLINE bool try_pop(const size_type n) noexcept {
         if (RB_UNLIKELY(!consumer_can_read_cached_(n))) {
             return false;
         }
-        Base::advance_tail(n);
+        Base::advance_tail_checked(n);
         return true;
     }
 
@@ -1045,7 +1072,7 @@ public:
         // We linearized data to the start of new_buf, so head becomes old_size.
         if (old_size) {
             SPSC_ASSERT(old_size <= target_cap);
-            Base::advance_head(old_size);
+            Base::advance_head_checked(old_size);
         }
 
         // Non-concurrent operation: keep shadow caches coherent after changing indices.
@@ -1296,7 +1323,7 @@ public:
 
         ~write_guard() noexcept {
             if (active_ && q_ && publish_on_destroy_) {
-                q_->publish();
+                (void)q_->try_publish();
             }
         }
 
@@ -1330,7 +1357,7 @@ public:
 
         void commit() noexcept {
             if (active_ && q_) {
-                q_->publish();
+                (void)q_->try_publish();
             }
             cancel();
         }
@@ -1370,7 +1397,7 @@ public:
 
         ~read_guard() noexcept {
             if (active_ && q_) {
-                q_->pop();
+                (void)q_->try_pop();
             }
         }
 
@@ -1385,7 +1412,7 @@ public:
 
         void commit() noexcept {
             if (active_ && q_) {
-                q_->pop();
+                (void)q_->try_pop();
             }
 
             active_ = false;
@@ -1521,7 +1548,7 @@ private:
             }
 
             if (sz) {
-                Base::advance_head(sz);
+                Base::advance_head_checked(sz);
             }
         } else {
             // Static Copy
@@ -1545,7 +1572,7 @@ private:
                     const size_type idx = static_cast<size_type>((tail + k) & mask);
                     storage_[k] = other.storage_[idx];
                 }
-                Base::advance_head(sz);
+                Base::advance_head_checked(sz);
             }
         }
 
@@ -1553,7 +1580,7 @@ private:
         Base::sync_cache();
     }
 
-    void move_from(fifo &&other) noexcept(kNoThrowMoveOps) {
+    void move_from(fifo &&other) noexcept(kNoThrowStorageAssignment) {
         if constexpr (kDynamic) {
             const size_type cap = other.Base::capacity();
             const size_type head = other.Base::head();
@@ -1592,7 +1619,7 @@ private:
                 return;
             }
 
-            if constexpr (std::is_move_assignable_v<storage_type>) {
+            if constexpr (kUseMoveStorageAssignment) {
                 storage_ = std::move(other.storage_);
             } else {
                 storage_ = other.storage_;

@@ -64,6 +64,31 @@ dynamicShape.resize(8, 1500);
   allocator may happen to provide.
 - `data(i)` returns `nullptr` when `i` is outside the valid buffer range.
 - `operator[](i)` is the assert-style indexed form for valid indices.
+- A zero count or zero buffer size is a coherent empty shape for runtime-shaped
+  variants. Consequently, `is_valid()` alone cannot distinguish deliberate
+  emptiness from a constructor allocation failure. If a non-empty shape is
+  required, call `resize()`, check its boolean result, and verify the exact
+  `count()` and `size()` requested.
+- `buffer_pool<T, 0, Count>` uses an allocator-backed transient pointer table
+  for copy and resize. Stack use is independent of `Count`, container layout is
+  unchanged, and a failed temporary allocation leaves the previous assignment
+  or resize destination unchanged.
+- Unlike the ring containers, whose `resize()` is grow-only, `buffer_pool`
+  `resize()` is a reshape and may shrink: the leading `min(old_count,
+  new_count)` buffers survive with their leading `min(old_size, new_size)`
+  elements of `T` preserved (the corresponding logical byte prefix is
+  elements times `sizeof(T)`), and everything beyond that is released. A
+  successful non-zero reshape leaves exactly the requested shape; passing
+  zero for any runtime axis is the documented reset to that form's coherent
+  empty shape. On failure the previous shape and contents are untouched.
+  Like all management, it is not concurrent with ownership transfers.
+
+Runtime-size forms allocate payloads through the allocator's byte rebind.
+With a plain (non-cache-aligned) policy the default allocator only
+guarantees default-new alignment after that rebind, so an over-aligned `T`
+(for example `alignas(64)`) is rejected at compile time rather than being
+under-aligned at runtime. Give over-aligned runtime buffers a cache-aligned
+policy such as `CP`, or supply an explicitly aligned allocator.
 
 Cache-aligned policies can align storage and round the physical span reported by
 `cache_span_bytes()`. Runtime-sized variants allocate each payload separately,

@@ -150,6 +150,14 @@ Pick the simplest model that matches your consumer:
 between snapshot capture and consume. Use `try_consume(snapshot)` when the
 consumer path may branch, delay, or perform another consumer-side operation first.
 
+Snapshots are short-lived consumer transactions. `clear`, reset, `destroy`,
+`resize`, `swap`, move, `attach`, `adopt`, and any backing-storage replacement
+invalidate every outstanding snapshot. `try_consume(snapshot)` validates the
+current pointer, mask, tail, and captured range; it is not a generation or
+epoch proof. An old snapshot can become indistinguishable after management
+recreates the same state or after one complete modular counter period. Never
+retain a snapshot across management or counter wrap.
+
 Likewise, complete `front -> process -> pop` before another consumer-side
 operation. A retained `front()` pointer, snapshot, bulk region, or guard is an
 active consumer transaction; same-side interleaving invalidates its contract.
@@ -272,6 +280,11 @@ domain. For example, its `counter_type::value_type` must be at least as wide
 as `reg`. Invalid backends are rejected when `Policy` is instantiated instead
 of failing later in an unrelated container template.
 
+The library does not require a custom counter or geometry backend's default
+constructor to produce zero. Every container constructor explicitly stores the
+canonical zero state before exposing the object. A backend must therefore
+honor its non-throwing `store(0)` operation; its own default value is ignored.
+
 `Policy::allocator_alignment` is optional; omitting it means `1`. When a
 custom policy supplies it, the value must be a positive integral or enum
 constant, fit in `std::size_t`, and be a power of two. The allocator and
@@ -288,6 +301,17 @@ plus cached `head`) metadata in separate owner blocks. This endpoint isolation
 does not depend on `CacheAligned`. The global shadow switch, counter-width gate,
 and explicit 32-bit opt-in still decide whether those shadow-enabled blocks are
 present.
+
+Shadow delta validation is safe across ordinary counter wrap. It cannot carry
+generation information through an entire counter-value period. For enabled
+sub-64-bit shadows, unchecked producer/consumer progress invalidates the local
+shadow so the next cached check reloads the real opposite counter. Checked
+commits — including a successful `try_consume(snapshot)` in every container
+that offers it — keep the local shadow they just proved, so the following
+cached check does not need a synchronized reload. The 64-bit
+hot path intentionally has no extra invalidation store; retaining a stale
+shadow across all `2^64` counter values is treated as practically unreachable,
+not claimed to be mathematically impossible.
 
 `CacheAligned` policies influence policy-owned metadata and owning allocator
 paths:
@@ -354,6 +378,25 @@ These are generally **not** safe to call concurrently with producer/consumer tra
 
 Treat them as management operations performed while the queue is stopped.
 
+Management stack usage is bounded independently of compile-time
+`Capacity`/`Count`. Static `fifo` copy assignment works in place instead of
+materializing a second full container. If a payload copy assignment throws, the
+destination remains valid and logically empty (basic guarantee).
+
+Static `pool` and `typed_pool`, plus `buffer_pool<T, 0, Count>`, use an
+allocator-backed transient pointer table for transactional copy/resize work.
+This does not add persistent fields or change container `sizeof`/`alignof`, but
+the management operation performs one additional temporary allocation. A null
+allocation result leaves the old destination unchanged; boolean `resize()`
+reports `false`. These rules apply only while endpoints are stopped, as above.
+
+RAII guard destructors still run during exception unwinding. Depending on the
+guard state, scope exit can publish an armed write prefix or consume an active
+read region; it is not an automatic rollback boundary. If guarded work may
+throw, catch while the guard is still alive and call `cancel()` (or disarm
+publication where that is the intended contract) before rethrowing. See
+[Guard And Bulk Helpers](guard-and-bulk-helpers.md#exception-unwinding-and-raii-side-effects).
+
 ## 11. Assertions And Allocation Failure
 
 `SPSC_ASSERT` is an opt-in diagnostic hook. Unless the application defines it
@@ -371,8 +414,26 @@ preconditions; they are not a replacement for `try_*` methods or `is_valid()`.
 
 The default `SPSC_ENABLE_EXCEPTIONS=0` configuration makes the shipped
 allocators return `nullptr` on allocation failure. Because constructors cannot
-return a status, an allocation-backed constructor may produce an invalid
+return a status, most allocation-backed constructors may produce an invalid
 object. This applies to runtime-sized containers and to allocation-backed
 static forms such as `queue`. Check `is_valid()` before publishing the object
 to producer/consumer endpoints. Prefer the boolean result of `resize()` or
 `reserve()` when initialization must report failure explicitly.
+
+A custom allocator used by an allocation-backed form in this mode must expose
+`allocate(size_type) noexcept`. Throwing allocators, including
+`std::allocator`, are rejected at compile time because mode `0` deliberately
+does not build exception rollback handlers. This requirement applies to every
+rebound allocator that actually allocates (for example, both slot and payload
+allocators in a dynamic pool). It does not constrain an allocator template
+argument that remains unused by wholly embedded storage, such as static
+`fifo`, static typed `latest`, static `chunk`, or fully static `buffer_pool`.
+Static `pool`, static `typed_pool`, and runtime-sized fixed-count `buffer_pool`
+do use rebound allocators for payloads and transient management tables. Define
+`SPSC_ENABLE_EXCEPTIONS=1` build-wide when a throwing allocator is required.
+
+Runtime-shaped `buffer_pool` specializations are the deliberate exception: a
+zero count or zero buffer size is a coherent empty shape, so `is_valid()` can
+remain `true` after constructor allocation failure. When a non-empty pool is
+required, use the boolean `resize()` result and verify the resulting
+`count()`/`size()` against the requested shape.

@@ -791,16 +791,23 @@ struct CountingAllocator {
     template <typename U>
     CountingAllocator(const CountingAllocator<U>&) noexcept {}
 
-    [[nodiscard]] T* allocate(std::size_t n) {
+    [[nodiscard]] T* allocate(std::size_t n) noexcept {
+        spsc::alloc::basic_allocator<
+            T, spsc::alloc::fail_mode::returns_null> alloc;
+        T* const result = alloc.allocate(n);
+        if (result == nullptr) {
+            return nullptr;
+        }
         CountingAllocatorState::alloc_calls.fetch_add(1, std::memory_order_relaxed);
         CountingAllocatorState::bytes_live.fetch_add(n * sizeof(T), std::memory_order_relaxed);
-        return std::allocator<T>{}.allocate(n);
+        return result;
     }
 
     void deallocate(T* p, std::size_t n) noexcept {
         CountingAllocatorState::dealloc_calls.fetch_add(1, std::memory_order_relaxed);
         CountingAllocatorState::bytes_live.fetch_sub(n * sizeof(T), std::memory_order_relaxed);
-        std::allocator<T>{}.deallocate(p, n);
+        spsc::alloc::basic_allocator<
+            T, spsc::alloc::fail_mode::returns_null>{}.deallocate(p, n);
     }
 
     template <typename U>

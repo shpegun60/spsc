@@ -116,6 +116,9 @@ q.consume(snap);
 `consume(snapshot)` is a precondition API: the consumer must not move between
 `make_snapshot()` and `consume()`. Use `try_consume(snapshot)` when consumer
 logic may branch, delay, or observe another consumer-side operation first.
+Both forms are short-lived and invalidated by management or storage changes;
+`try_consume` validates a range, not a generation, so it must not be used as an
+epoch/recovery check.
 
 Use snapshots when:
 
@@ -242,7 +245,13 @@ This gives a better default for metadata and starting storage alignment. For DMA
 
 - `fifo()` creates an empty queue.
 - `fifo(requested_capacity)` exists only for dynamic `fifo<T, 0, ...>`.
-- copy and move are supported.
+- copy is available when `T` is copy-assignable; in
+  `SPSC_ENABLE_EXCEPTIONS=0` mode that assignment must also be `noexcept`.
+- static copy assignment is in-place and does not create a
+  `Capacity * sizeof(T)` stack temporary. If a copy assignment throws, the
+  destination remains valid and logically empty (basic guarantee).
+- move is supported and prefers a no-throw copy assignment when static storage
+  has a potentially throwing move assignment.
 - `swap(other)` exchanges storage and queue state. Use only when the queue is stopped.
 
 Example:

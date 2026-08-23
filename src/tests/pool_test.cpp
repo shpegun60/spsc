@@ -439,11 +439,15 @@ struct misalign_byte_alloc {
     template <class U>
     misalign_byte_alloc(const misalign_byte_alloc<U>&) noexcept {}
 
-    [[nodiscard]] T* allocate(std::size_t n) {
-        std::allocator<T> base;
+    [[nodiscard]] T* allocate(std::size_t n) noexcept {
+        spsc::alloc::basic_allocator<
+            T, spsc::alloc::fail_mode::returns_null> base;
         if constexpr (std::is_same_v<T, std::byte>) {
             // Allocate +1 byte and shift by 1 to break typical power-of-two alignments.
             auto* raw = base.allocate(n + 1u);
+            if (raw == nullptr) {
+                return nullptr;
+            }
             return reinterpret_cast<T*>(reinterpret_cast<std::byte*>(raw) + 1u);
         } else {
             return base.allocate(n);
@@ -451,7 +455,8 @@ struct misalign_byte_alloc {
     }
 
     void deallocate(T* p, std::size_t n) noexcept {
-        std::allocator<T> base;
+        spsc::alloc::basic_allocator<
+            T, spsc::alloc::fail_mode::returns_null> base;
         if constexpr (std::is_same_v<T, std::byte>) {
             auto* raw = reinterpret_cast<T*>(reinterpret_cast<std::byte*>(p) - 1u);
             base.deallocate(raw, n + 1u);

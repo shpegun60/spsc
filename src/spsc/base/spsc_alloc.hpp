@@ -16,6 +16,7 @@
 #include <memory>      // std::allocator_traits
 #include <new>         // std::nothrow, std::align_val_t
 #include <type_traits> // std::true_type, std::false_type
+#include <utility>     // std::declval
 
 #include "basic_types.h"        // reg
 #include "spsc_tools.hpp"
@@ -55,7 +56,7 @@ constexpr std::size_t max_sz(const std::size_t a, const std::size_t b) noexcept 
 }
 
 constexpr bool add_overflow(const std::size_t a, const std::size_t b) noexcept {
-    return a > (std::numeric_limits<std::size_t>::max() - b);
+    return a > ((std::numeric_limits<std::size_t>::max)() - b);
 }
 
 template<fail_mode Mode>
@@ -102,7 +103,7 @@ template<fail_mode Mode>
         alignment = alignof(void*);
     }
 
-    const std::uintptr_t upMax = std::numeric_limits<std::uintptr_t>::max();
+    const std::uintptr_t upMax = (std::numeric_limits<std::uintptr_t>::max)();
     const std::size_t upMaxSz  = static_cast<std::size_t>(upMax);
 
     if (RB_UNLIKELY(!is_pow2(alignment) || ((alignment - 1u) > upMaxSz))) {
@@ -279,7 +280,7 @@ public:
             return nullptr;
         }
 
-        if (RB_UNLIKELY(n > (std::numeric_limits<size_type>::max() / sizeof(T)))) {
+        if (RB_UNLIKELY(n > ((std::numeric_limits<size_type>::max)() / sizeof(T)))) {
             return static_cast<T*>(detail::fail_ptr<Mode>());
         }
 
@@ -393,7 +394,7 @@ public:
             return nullptr;
         }
 
-        if (RB_UNLIKELY(n > (std::numeric_limits<size_type>::max() / sizeof(T)))) {
+        if (RB_UNLIKELY(n > ((std::numeric_limits<size_type>::max)() / sizeof(T)))) {
             return static_cast<T*>(detail::fail_ptr<Mode>());
         }
 
@@ -451,9 +452,6 @@ inline bool operator!=(const basic_allocator<T1, M1>& a,
 // Default allocator aliases
 // ============================================================================
 
-static_assert(SPSC_ENABLE_EXCEPTIONS == 0 || SPSC_ENABLE_EXCEPTIONS == 1,
-              "SPSC_ENABLE_EXCEPTIONS must be 0 or 1");
-
 using default_alloc = basic_allocator<std::byte,
     (SPSC_ENABLE_EXCEPTIONS != 0) ? fail_mode::throws : fail_mode::returns_null
 >;
@@ -493,7 +491,7 @@ private:
     static_assert(static_cast<long double>(Policy::allocator_alignment) > 0.0L &&
                       static_cast<long double>(Policy::allocator_alignment) <=
                           static_cast<long double>(
-                              std::numeric_limits<std::size_t>::max()),
+                              (std::numeric_limits<std::size_t>::max)()),
                   "[spsc::alloc]: Policy::allocator_alignment must be positive "
                   "and representable as size_t");
     static_assert(alignment != 0u && is_pow2(alignment),
@@ -507,6 +505,148 @@ struct policy_allocator_alignment<Policy, std::void_t<decltype(Policy::allocator
 
 template<class Alloc, class T>
 using rebind_alloc_t = typename std::allocator_traits<Alloc>::template rebind_alloc<T>;
+
+template<class Alloc, class = void>
+struct allocator_size_covers_reg : std::false_type {};
+
+template<class Alloc>
+struct allocator_size_covers_reg<
+    Alloc,
+    std::void_t<typename std::allocator_traits<Alloc>::size_type>>
+    : std::bool_constant<
+          std::is_integral_v<
+              typename std::allocator_traits<Alloc>::size_type> &&
+          std::is_unsigned_v<
+              typename std::allocator_traits<Alloc>::size_type> &&
+          (std::numeric_limits<
+               typename std::allocator_traits<Alloc>::size_type>::digits >=
+           std::numeric_limits<reg>::digits)> {};
+
+template<class Alloc>
+inline constexpr bool allocator_size_covers_reg_v =
+    allocator_size_covers_reg<Alloc>::value;
+
+// std::allocator_traits<Alloc>::allocate() is not conditionally noexcept in
+// C++17, even when Alloc::allocate() is.  Inspect the allocator operation that
+// the standard allocator contract actually requires so the no-exceptions
+// configuration accepts the shipped null-returning allocators while rejecting
+// throwing custom allocators such as std::allocator.
+template<class Alloc, class = void>
+struct allocator_allocate_noexcept : std::false_type {};
+
+template<class Alloc>
+struct allocator_allocate_noexcept<
+    Alloc,
+    std::void_t<
+        typename std::allocator_traits<Alloc>::size_type,
+        decltype(std::declval<Alloc&>().allocate(
+            std::declval<
+                typename std::allocator_traits<Alloc>::size_type>()))>>
+    : std::bool_constant<noexcept(std::declval<Alloc&>().allocate(
+          std::declval<
+              typename std::allocator_traits<Alloc>::size_type>()))> {};
+
+template<class Alloc>
+inline constexpr bool allocator_allocate_noexcept_v =
+    allocator_allocate_noexcept<Alloc>::value;
+
+// Allocator-backed transient pointer table used by stopped-queue management
+// operations.  Keeping the table out of automatic storage bounds stack usage
+// independently of a container's compile-time Capacity/Count.  The pointed-to
+// objects are never owned by this helper; only the temporary table allocation
+// is released on scope exit.
+template<class Pointer, class BaseAlloc>
+class pointer_table_scratch {
+    static_assert(std::is_pointer_v<Pointer>,
+                  "pointer_table_scratch requires a pointer value type");
+
+public:
+    using value_type = Pointer;
+    using allocator_type =
+        typename std::allocator_traits<BaseAlloc>::template rebind_alloc<value_type>;
+    using alloc_traits = std::allocator_traits<allocator_type>;
+    using alloc_pointer = typename alloc_traits::pointer;
+    using alloc_size_type = typename alloc_traits::size_type;
+
+    static_assert(alloc_traits::is_always_equal::value,
+                  "pointer-table allocator must be always_equal");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "pointer-table allocator must be nothrow default-constructible");
+    static_assert(std::is_same_v<alloc_pointer, value_type*>,
+                  "pointer-table allocator must expose a raw pointer");
+    static_assert(allocator_size_covers_reg_v<allocator_type>,
+                  "pointer-table allocator size_type must represent reg");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(allocator_allocate_noexcept_v<allocator_type>,
+                  "no-exceptions mode requires noexcept pointer-table allocation");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+
+    pointer_table_scratch() noexcept = default;
+    pointer_table_scratch(const pointer_table_scratch&) = delete;
+    pointer_table_scratch& operator=(const pointer_table_scratch&) = delete;
+    pointer_table_scratch(pointer_table_scratch&&) = delete;
+    pointer_table_scratch& operator=(pointer_table_scratch&&) = delete;
+
+    ~pointer_table_scratch() noexcept { reset(); }
+
+    [[nodiscard]] bool allocate(const reg count) noexcept(
+        allocator_allocate_noexcept_v<allocator_type>)
+    {
+        SPSC_ASSERT(data_ == nullptr);
+        if (RB_UNLIKELY(data_ != nullptr)) {
+            return false;
+        }
+        if (count == 0u) {
+            return true;
+        }
+
+        allocator_type alloc{};
+        data_ = alloc_traits::allocate(
+            alloc, static_cast<alloc_size_type>(count));
+        if (RB_UNLIKELY(data_ == nullptr)) {
+            return false;
+        }
+
+        count_ = count;
+        for (reg i = 0u; i < count_; ++i) {
+            (void)::new (static_cast<void*>(data_ + i)) value_type(nullptr);
+        }
+        return true;
+    }
+
+    void reset() noexcept {
+        if (data_ == nullptr) {
+            count_ = 0u;
+            return;
+        }
+
+        allocator_type alloc{};
+        alloc_traits::deallocate(
+            alloc, data_, static_cast<alloc_size_type>(count_));
+        data_ = nullptr;
+        count_ = 0u;
+    }
+
+    [[nodiscard]] value_type* data() noexcept { return data_; }
+    [[nodiscard]] const value_type* data() const noexcept { return data_; }
+    [[nodiscard]] reg size() const noexcept { return count_; }
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return data_ != nullptr;
+    }
+
+    [[nodiscard]] value_type& operator[](const reg index) noexcept {
+        SPSC_ASSERT(index < count_);
+        return data_[index];
+    }
+    [[nodiscard]] const value_type& operator[](const reg index) const noexcept {
+        SPSC_ASSERT(index < count_);
+        return data_[index];
+    }
+
+private:
+    value_type* data_{nullptr};
+    reg count_{0u};
+};
 
 template<class Alloc, class T, class = void>
 struct allocator_min_alignment : std::integral_constant<std::size_t, object_alignment<T>::value> {};

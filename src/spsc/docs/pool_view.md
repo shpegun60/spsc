@@ -51,10 +51,7 @@ q.attach(slots.data(), slots.size(), bufferSize);
 `pool_view` supports attach/adopt with saved state.
 
 ```cpp
-spsc::pool_view<0>::state_t st{
-    .head = savedHead,
-    .tail = savedTail,
-};
+spsc::pool_view<0>::state_t st{savedHead, savedTail};
 
 q.attach(slots.data(), slots.size(), bufferSize, st);
 ```
@@ -368,6 +365,11 @@ std::byte payload[32]{};
 q.push(payload, sizeof(payload));
 (void)q.try_push(payload, sizeof(payload));
 ```
+
+Both overloads clamp the copy to `buffer_size()`: a `true` result means
+"one slot was published", not "the whole input fit". Use the typed
+`try_push(const U&)` when an oversized input must be rejected instead of
+truncated.
 
 ### `try_publish()`, `publish(unsafe, n)`
 

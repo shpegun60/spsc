@@ -69,6 +69,12 @@ if (!q.try_push(packet, sizeof(packet))) {
 }
 ```
 
+`push(data, size)`/`try_push(data, size)` clamp the copy to `buffer_size()`:
+a `true` result means "one slot was published", not "the whole input fit".
+When the input can exceed the slot size, check it explicitly first, or use
+the typed `try_push(const U&)`, which rejects an oversized `U` instead of
+truncating it.
+
 ### Typed Header Plus Raw Payload
 
 ```cpp
@@ -211,6 +217,11 @@ outside the container.
 - `destroy()` frees the slot array and backing buffers
 - `swap(other)` exchanges storage and queue state
 
+Static-depth copy and non-zero resize use an allocator-backed transient pointer
+table. Their stack usage does not grow with `Capacity`, and the table is not a
+persistent field. If that temporary allocation returns `nullptr`, assignment
+keeps the previous destination state and `resize()` returns `false`.
+
 ### State And Introspection
 
 - `is_valid()`
@@ -228,7 +239,9 @@ outside the container.
   does not start `U` lifetime by itself
 - `publish()` / `try_publish()` commit one slot
 - `publish(unsafe, n)` / `try_publish(unsafe, n)` commit several prepared slots
-- `push(const U&)` / `try_push(const U&)` memcpy a trivially-copyable object into the slot
+- `push(const U&)` / `try_push(const U&)` memcpy a trivially-copyable object into the slot;
+  unchecked `push` requires `sizeof(U) <= buffer_size()`, while `try_push`
+  checks this at runtime and returns `false`
 - `push(data, size)` / `try_push(data, size)` copy raw bytes, truncating to `buffer_size()`
 - `try_write(v)` is a convenience alias for typed `try_push`
 
@@ -298,6 +311,13 @@ if (auto guard = q.scoped_read()) {
 `CacheAligned` policies can influence default allocation and raw slot rounding.  
 That is helpful for aligned raw-buffer use, but cache maintenance still remains outside the container.
 
+`resize()` and deep copy migrate slot contents as raw bytes into fresh
+storage. In C++17 that byte copy does not carry over the lifetime of a `U`
+that was placement-new'd into the old slot: after a management operation,
+read migrated slots through `try_peek()` or byte access, and re-establish a
+typed overlay with placement-new before dereferencing `front_as<U>()` again.
+
+
 ## Snippet Catalog
 
 ### `buffer_size()`
@@ -325,6 +345,10 @@ if (auto* hdr = q.claim_as<Header>()) {
 ```
 
 ### `push(const U&)`
+
+Precondition: `q` is valid and not full, and `sizeof(U) <= q.buffer_size()`.
+This unchecked hot path enforces the size condition only through `SPSC_ASSERT`;
+use `try_push` when the payload type may not fit.
 
 ```cpp
 Header hdr{0x12345678u, 32u};

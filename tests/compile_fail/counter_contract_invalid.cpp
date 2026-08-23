@@ -35,6 +35,16 @@ struct throwing_relaxed_conversion_counter {
     void inc() noexcept {}
 };
 
+struct throwing_operation_counter {
+    using value_type = reg;
+
+    void store(value_type) noexcept(false) {}
+    [[nodiscard]] value_type load() const noexcept(false) { return 0u; }
+    [[nodiscard]] value_type load_relaxed() const noexcept(false) { return 0u; }
+    void add(value_type) noexcept(false) {}
+    void inc() noexcept(false) {}
+};
+
 #if defined(SPSC_TEST_THROWING_LOAD_CONVERSION)
 using invalid_counter = throwing_load_conversion_counter;
 #elif defined(SPSC_TEST_THROWING_RELAXED_CONVERSION)
@@ -43,7 +53,10 @@ using invalid_counter = throwing_relaxed_conversion_counter;
 using invalid_counter = incomplete_counter;
 #endif
 
-#if defined(SPSC_TEST_DIRECT_POLICY_COUNTER)
+#if defined(SPSC_TEST_CACHELINE_UNDERLYING_COUNTER)
+using rejected_policy =
+    spsc::cnt::CachelineCounter<throwing_operation_counter, 64u>;
+#elif defined(SPSC_TEST_DIRECT_POLICY_COUNTER)
 struct direct_counter_policy {
     using counter_type = invalid_counter;
     using geometry_type = spsc::cnt::PlainCounter<reg>;

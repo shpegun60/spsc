@@ -6,6 +6,192 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+### Fixed
+
+- Unsupported payload categories are now rejected at the contract level
+  instead of failing deep inside template instantiation: `queue` rejects
+  volatile and raw-array payloads, `typed_pool` rejects const, volatile,
+  and raw-array payloads, and owning `fifo` rejects volatile payloads,
+  whose manual-lifetime and trivial-copy management paths cannot support
+  them (`std::array` remains the supported aggregate payload, and
+  array-element views such as `carray_fifo_view` are unaffected). The
+  fully static `buffer_pool` no-exceptions gate now also requires nothrow
+  copy construction, matching the copy its defaulted copy constructor
+  performs. Dynamic `chunk<T, 0>` and the two runtime-size `buffer_pool`
+  forms likewise reject volatile payloads, whose placement-new/memcpy
+  construction paths cannot support them; static embedded `chunk` keeps its
+  assignment-based volatile support. `SPSC_ENABLE_EXCEPTIONS` is validated
+  as strictly 0/1 in `spsc_config.hpp` itself, so view-only includes reject
+  an invalid value too.
+- Runtime-size `buffer_pool` introspection accessors (`count()`, `size()`,
+  `size_bytes()`, `span_bytes()`, `data(i)`, `operator[]`) now use an O(1)
+  shape check plus the per-slot null guard instead of re-running the full
+  pointer-table scan on every call, so `for (i < count()) data(i)` loops are
+  O(N) instead of O(N²). `is_valid()` keeps its deep O(N) integrity-scan
+  semantics and still guards the accessors in assert-enabled builds.
+- Runtime-shaped `buffer_pool` forms no longer swallow user exceptions in
+  exception-enabled builds: a throwing `T` construction or copy assignment
+  inside copy construction, copy assignment, or `resize()` now cleans up
+  every transient allocation (including already-built sibling buffers) and
+  propagates, matching the rest of the owning containers. The destination of
+  an assignment or resize is preserved, a copy constructor can no longer
+  silently produce an empty pool, and null-returning allocation failure
+  still reports `false` without throwing.
+- Single RAII write/read guards in `fifo`, `fifo_view`, `pool`, `typed_pool`,
+  and `queue` now commit through the checked `try_publish()`/`try_pop()`
+  paths instead of the unchecked owner commit, preserving the consumer/
+  producer shadow their checked acquisition already proved on explicit
+  32-bit shadow-enabled builds. Bulk `unsafe` guards keep their unchecked
+  commit-and-poison semantics; `pool_view` single guards already committed
+  through validated snapshots.
+- Public headers now survive Windows' function-like `min`/`max` macros:
+  every `std::numeric_limits<T>::max()`/`min()` call uses the
+  `(std::numeric_limits<T>::max)()` idiom (16 call sites across the allocator
+  core, `chunk`, `fifo`, `fifo_view`, `pool`, `pool_view`, and `typed_pool`).
+  The library never `#undef`s the consumer's macros.
+- Raw `latest<void>` `push(U)`/`try_push(U)` no longer decay their argument:
+  a C-array payload now publishes its contents instead of the decayed
+  pointer's address bytes, volatile arguments are rejected at the contract
+  level, and the intermediate `O(sizeof(U))` stack temporary is gone — the
+  slot is filled by one direct representation copy, matching `pool::push(U&)`.
+- `queue::consume_all()` and `typed_pool::consume_all()` now consume exactly
+  the prefix visible in one fresh consumer snapshot, so a concurrently active
+  producer cannot make the operation unbounded and later publications survive
+  for the next consumer pass.
+- Static `fifo`/`latest` move and `chunk` construction traits now include the
+  destination operations their bodies actually perform. Lifetime-owning
+  containers reject throwing destructors, and allocators constructed from
+  `noexcept` paths must have no-throw default constructors.
+- Raw typed overlays in `pool`, `pool_view`, and `latest<void>` now bypass
+  class-specific address operators, participate only for trivially-copyable
+  types, reject cv-qualified outputs, and fail closed on oversized or invalid
+  guarded writes without advancing publication state.
+- `CachelineCounter` validates its underlying counter directly. Allocator
+  `size_type` domains must represent `reg`, and an empty dynamic `queue` can
+  resize for an immovable payload while a non-empty one rejects growth without
+  changing state.
+- `fifo_view` no longer imposes owning-container construction, destruction, or
+  assignment requirements on externally owned payloads. Typed `latest` can use
+  claim/publish-only payloads that are default-constructible but non-assignable.
+- No-exceptions builds now reject throwing custom allocators on every owning
+  storage path that actually allocates. `fifo` and `typed_pool` deep-copy
+  traits likewise require the copy operation used by their implementation to
+  be `noexcept`, and static `fifo` move prefers an available no-throw copy over
+  a potentially throwing move assignment. Dynamic `chunk` now owns eager slot
+  construction directly instead of delegating lifetime control to a custom
+  `Alloc::construct()` hook.
+- Explicit sub-64-bit shadow configurations now invalidate endpoint-local
+  caches after unchecked single and bulk progress, closing the stale-shadow
+  full-period alias that could otherwise overwrite unread data or expose an
+  empty slot. Checked commits retain their cached fast path, and 64-bit H8 code
+  is unchanged.
+- Validated `queue::try_pop(n)` and `queue::try_consume(snapshot)` operations
+  now share prefix destruction with their unchecked counterparts but advance
+  through the checked consumer path, preserving a proven consumer shadow.
+- `try_consume(snapshot)` in `fifo`, `fifo_view`, `pool`, `pool_view`, and
+  `typed_pool` (inherited by the `array_fifo` and `chunk_fifo` wrappers) now
+  commits through the checked consumer path instead of the unchecked `pop(n)`
+  commit, matching `queue` and preserving the proven consumer shadow on
+  explicit 32-bit shadow-enabled configurations. `typed_pool` object
+  destruction for `pop(n)`/`try_pop(n)`/`try_consume` now shares a single
+  prefix-destruction helper.
+- In no-exceptions mode, a non-empty dynamic `queue` rejects growth before
+  allocation unless its live values have a no-throw move or copy construction
+  path. Empty queues can still grow for immovable or throwing-relocation types.
+- Container construction now explicitly normalizes custom counter and geometry
+  backends to zero, including the auxiliary `buffer_size` state in `pool` and
+  `pool_view`; it no longer relies on a custom backend's default value.
+- Dynamic pointer tables in `pool`, `typed_pool`, raw `latest<void>`, and the
+  fully dynamic `buffer_pool` now explicitly begin every pointer element's
+  lifetime before assignment, preserving the C++17 raw-storage contract while
+  bypassing custom allocator construction hooks.
+- Static `fifo` copy assignment no longer materializes a second embedded
+  payload array on the stack. Static `pool`/`typed_pool` and runtime-sized
+  fixed-count `buffer_pool` copy/resize transactions now keep their temporary
+  pointer tables in allocator-backed storage, bounding management stack use
+  independently of compile-time `Capacity`/`Count` without changing persistent
+  container layout. Custom allocators for those forms must therefore support
+  the documented raw pointer-table rebind, including no-throw allocation in
+  no-exceptions builds.
+
+### Tests
+
+- Added active-producer bounded-consume regressions, hostile exception and raw
+  overlay smokes, immovable-queue coverage, and compile-fail checks for invalid
+  counter, allocator-domain, allocator-construction, and destructor contracts.
+- Added mode-0 compile-fail coverage for throwing allocators across all owning
+  allocation shapes, copy-trait regressions, static-fifo move-selection checks,
+  exception-mode multi-allocation rollback verification, and a hostile
+  allocator regression proving that `chunk` never calls `Alloc::construct()`.
+- Added deterministic static/dynamic genuine-32-bit stale-shadow wrap probes
+  for strict-RMW and single-writer atomic policies, mode-0 queue
+  relocation/state-preservation coverage, hostile non-zero counter/geometry
+  construction checks, hostile allocator regressions for all four dynamic
+  pointer-table allocation paths, and checked queue-path shadow-preservation
+  coverage. Hostile stale-shadow setup is kept separate from synchronized
+  checked-path setup.
+- Extended the genuine-32-bit H6 shadow matrix with checked `try_consume`
+  shadow-preservation regressions for `fifo`, `fifo_view`, `pool`, `pool_view`,
+  and `typed_pool` under both strict-RMW and single-writer counting policies.
+- Added raw `latest` C-array publish and oversized-payload rejection
+  regressions, plus a bounded-stack probe proving raw `latest` publish of a
+  4096-byte payload keeps an O(1) frame.
+- Extended the genuine-32-bit H6 shadow matrix with single write/read guard
+  shadow-preservation regressions across `fifo`, `fifo_view`, `pool`,
+  `typed_pool`, and `queue` under both counting policies.
+- Added unique-diagnostic compile-fail coverage for const/volatile/raw-array
+  payload rejection in `queue`, `typed_pool`, and `fifo`, and for the fully
+  static `buffer_pool` mode-0 copy-construction gate.
+- Extended the exception runtime smoke with `buffer_pool` regressions for
+  all three runtime shapes: throwing default construction and copy
+  assignment propagate from copy construction, copy assignment, and
+  `resize()` with zero leaks and preserved destinations, while
+  null-returning allocation failure still reports `false`.
+- Added allocation-failure/state-preservation regressions for transient static
+  management tables and an exception-mode static-`fifo` basic-guarantee test.
+- Compile-fail verification now requires exactly one unique library contract
+  diagnostic per negative scenario, and bounded-stack wrapper probes cover
+  both large outer FIFO capacity and large inner array/chunk capacity.
+
+### CI
+
+- Added exception-enabled runtime and ASan+UBSan coverage plus Cortex-M7 object
+  code generation with symbol/disassembly checks for unwanted runtime helpers.
+- Added host (both exception modes) and Cortex-M7 `-fstack-usage` gates that
+  reject static management frames above 512 bytes, using
+  `Capacity`/`Count == 4096` probes plus `array_fifo`/`chunk_fifo` inner
+  dimensions of 4096.
+- Added a hostile Windows macro smoke to the MSVC header job: `<windows.h>`
+  is included without `NOMINMAX` before every public header, so an unguarded
+  `numeric_limits` call fails the build.
+
+### Documentation
+
+- Clarified C++17 view-state recovery syntax, empty `buffer_pool` validity, and
+  RAII guard side effects during exception unwinding; added the missing SPDX
+  header to the internal value-swap helper.
+- Documented snapshot epoch/ABA limits, the owning `pool::push(U)` size
+  precondition, finite-period shadow behavior, custom-backend zero
+  normalization, and the bounded-stack management/failure contracts for
+  static owning containers. Clarified that actual dynamic `latest` growth
+  rebuilds storage and clears published state, while no-op management calls
+  preserve it.
+- Documented the raw `pool`/`pool_view` `push(data, size)` truncation
+  contract (`true` means "slot published", not "whole input fit"), the C++17
+  typed-overlay boundary across `pool` management (byte migration does not
+  carry a placement-new `U` lifetime), the trivially-copyable precondition
+  of the `chunk` DMA pattern, dynamic `chunk<T, 0>` being move-only, the
+  live-objects lifetime precondition of `fifo_view` and the array/chunk view
+  wrappers, the mandatory `clear()` reuse step in `chunk_fifo`, the
+  non-aligned dynamic payload of the `cache_aligned_chunk_fifo_view` alias,
+  the aligned-allocator requirement for over-aligned runtime `buffer_pool`
+  payloads, the unsafe object-representation contract of mutable
+  `queue::raw_bytes()`, and the two standalone include roots. Removed a
+  stale `queue_view` reference from the `queue.hpp` header comment.
+  Documented that `buffer_pool::resize()` is a reshape (prefix buffers and
+  bytes survive a shrink, the rest is released), unlike the grow-only ring
+  container `resize()`.
+
 ## [3.0.2] - 2026-08-21
 
 This patch release closes the remaining multi-axis management and generic C++

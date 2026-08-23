@@ -15,7 +15,7 @@
  * - Ideal for stack buffers or embedded storage.
  *
  * 2. DYNAMIC CHUNK (ChunkCapacity == 0):
- * - Backed by allocator-managed T[].
+ * - Backed by allocator-provided raw storage; chunk owns T lifetimes.
  * - "Eager" construction model: all [0..capacity) elements are always constructed.
  * - push() uses assignment (operator=), not construction.
  * - resize() only moves the logical cursor, it implies no construction/destruction cost.
@@ -34,7 +34,8 @@
 #include <cstring>      // std::memcpy
 #include <iterator>     // std::reverse_iterator
 #include <limits>
-#include <memory>       // std::allocator_traits, std::uninitialized_default_construct_n
+#include <memory>       // std::allocator_traits
+#include <new>          // placement new
 #include <type_traits>
 #include <utility>      // std::move, std::forward, std::swap
 
@@ -97,6 +98,8 @@ public:
                   "[spsc::chunk]: Static capacity must be > 0.");
     static_assert(std::is_default_constructible_v<T>,
                   "[spsc::chunk]: T must be default-constructible (stored in std::array).");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[spsc::chunk]: T destructor must be noexcept.");
     static_assert(std::is_move_assignable_v<T> || std::is_copy_assignable_v<T>,
                   "[spsc::chunk]: T must be move- or copy-assignable.");
 
@@ -117,8 +120,8 @@ public:
     // --------------------------------------------------------------------------
     // Ctors / Assignment
     // --------------------------------------------------------------------------
-    chunk() noexcept  = default;
-    ~chunk() noexcept = default;
+    chunk() noexcept(std::is_nothrow_default_constructible_v<storage_type>) = default;
+    ~chunk() = default;
 
     chunk(const chunk&) = default;
     chunk& operator=(const chunk&) = default;
@@ -339,8 +342,17 @@ public:
                   "[spsc::chunk]: dynamic chunk requires stateless allocator.");
     static_assert(std::is_same_v<alloc_pointer, pointer>,
                   "[spsc::chunk]: allocator must return raw pointers (T*).");
+    static_assert(!std::is_volatile_v<T>,
+                  "[spsc::chunk]: volatile payloads are not supported by the "
+                  "dynamic reserve/migration paths.");
     static_assert(std::is_default_constructible_v<T>,
                   "[spsc::chunk]: T must be default-constructible (eager initialization).");
+    static_assert(std::is_nothrow_destructible_v<T>,
+                  "[spsc::chunk]: T destructor must be noexcept.");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "[spsc::chunk]: allocator must be nothrow default-constructible.");
+    static_assert(::spsc::alloc::detail::allocator_size_covers_reg_v<allocator_type>,
+                  "[spsc::chunk]: allocator size_type must represent the reg domain.");
     static_assert(std::is_move_assignable_v<T> || std::is_copy_assignable_v<T>,
                   "[spsc::chunk]: T must be assignable.");
 
@@ -349,6 +361,10 @@ public:
                   "[spsc::chunk]: no-exceptions mode requires noexcept default constructor.");
     static_assert(std::is_nothrow_move_assignable_v<T> || std::is_nothrow_copy_assignable_v<T>,
                   "[spsc::chunk]: no-exceptions mode requires noexcept assignment.");
+    static_assert(
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<allocator_type>,
+        "[spsc::chunk]: no-exceptions mode requires allocator::allocate(size_type) "
+        "to be noexcept.");
 #endif
 
     // --------------------------------------------------------------------------
@@ -435,7 +451,11 @@ public:
         size_type constructed = 0;
         SPSC_TRY {
             for (; constructed < new_cap; ++constructed) {
-                alloc_traits::construct(alloc, new_storage + constructed);
+                // Alloc supplies raw T* storage only. Keep lifetime control in
+                // chunk so a custom Alloc::construct() cannot weaken the
+                // noexcept T() contract used by no-exceptions builds.
+                (void)::new (
+                    static_cast<void*>(new_storage + constructed)) T();
             }
         } SPSC_CATCH_ALL {
             if constexpr (!std::is_trivially_destructible_v<T>) {
@@ -482,7 +502,7 @@ public:
     [[nodiscard]] bool resize(const size_type n) {
         if (n > cap_) {
             // Heuristic: +50% + small padding
-            const size_type kMax = std::numeric_limits<size_type>::max();
+            const size_type kMax = (std::numeric_limits<size_type>::max)();
             size_type grow_cap = n;
             if (n <= static_cast<size_type>(kMax - 8u)) {
                 const size_type half = static_cast<size_type>(n >> 1u);

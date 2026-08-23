@@ -57,6 +57,7 @@
 #include <cstddef>                 // std::byte, std::ptrdiff_t
 #include <cstring>                 // std::memcpy
 #include <memory>                  // std::allocator_traits, uninitialized_default_construct_n, destroy_n
+#include <new>
 #include <type_traits>
 #include <utility>                 // std::swap, std::move, std::forward
 
@@ -134,10 +135,28 @@ public:
                   "[spsc::latest<void,0>]: requires always_equal allocator (stateless).");
     static_assert(slot_alloc_traits::is_always_equal::value,
                   "[spsc::latest<void,0>]: requires always_equal allocator (stateless).");
-    static_assert(std::is_default_constructible_v<byte_allocator_type>,
-                  "[spsc::latest<void,0>]: requires default-constructible allocator.");
-    static_assert(std::is_default_constructible_v<slot_allocator_type>,
-                  "[spsc::latest<void,0>]: requires default-constructible allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[spsc::latest<void,0>]: base allocator must be nothrow default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<byte_allocator_type>,
+                  "[spsc::latest<void,0>]: byte allocator must be nothrow default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<slot_allocator_type>,
+                  "[spsc::latest<void,0>]: slot allocator must be nothrow default-constructible.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+            slot_allocator_type>,
+        "[spsc::latest<void,0>]: no-exceptions mode requires slot "
+        "allocator::allocate(size_type) to be noexcept.");
+    static_assert(
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<
+            byte_allocator_type>,
+        "[spsc::latest<void,0>]: no-exceptions mode requires byte "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(::spsc::alloc::detail::allocator_size_covers_reg_v<byte_allocator_type>,
+                  "[spsc::latest<void,0>]: byte allocator size_type must represent the reg domain.");
+    static_assert(::spsc::alloc::detail::allocator_size_covers_reg_v<slot_allocator_type>,
+                  "[spsc::latest<void,0>]: slot allocator size_type must represent the reg domain.");
     static_assert(std::is_trivially_copyable_v<counter_value>,
                   "policy::counter_type::value_type must be trivially copyable (atomic-friendly)");
     static_assert(std::is_same_v<typename counter_type::value_type, typename geometry_type::value_type>,
@@ -393,6 +412,11 @@ public:
             return false;
         }
 
+        for (size_type slot = 0u; slot < depth_pow2; ++slot) {
+            (void)::new (static_cast<void*>(new_pool + slot))
+                pointer(nullptr);
+        }
+
         size_type i = 0u;
 
         SPSC_TRY {
@@ -635,18 +659,21 @@ public:
     }
 
 
+    // Direct representation copy, symmetric with pool::push(U&). No decay_t
+    // and no local temporary: decay would silently collapse a C-array
+    // argument to a pointer (publishing the address bytes instead of the
+    // payload), and a by-value temporary would cost O(sizeof(U)) stack.
     template<class U,
-             class V = std::decay_t<U>,
-             typename = std::enable_if_t<
-                 std::is_trivially_copyable_v<V> &&
-                 std::is_constructible_v<V, U&&>>>
-    RB_FORCEINLINE void push(U&& src) noexcept(std::is_nothrow_constructible_v<std::decay_t<U>, U&&>) {
-        SPSC_ASSERT(buffer_size() >= static_cast<size_type>(sizeof(V)));
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                     !std::is_volatile_v<U>, int> = 0>
+    RB_FORCEINLINE void push(const U& src) noexcept {
+        SPSC_ASSERT(buffer_size() >= static_cast<size_type>(sizeof(U)));
         SPSC_ASSERT(is_valid());
         if (RB_UNLIKELY(!is_valid())) {
             return;
         }
-        if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(V)))) {
+        if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(U)))) {
             return;
         }
 
@@ -655,22 +682,20 @@ public:
         if (RB_UNLIKELY(!snapshot.available)) {
             return;
         }
-        V tmp(std::forward<U>(src));
         pointer dst = slots_[snapshot.index];
-        std::memcpy(dst, &tmp, sizeof(V));
+        std::memcpy(dst, std::addressof(src), sizeof(U));
         Base::producer_commit_single(snapshot);
     }
 
     template<class U,
-             class V = std::decay_t<U>,
-             typename = std::enable_if_t<
-                 std::is_trivially_copyable_v<V> &&
-                 std::is_constructible_v<V, U&&>>>
-    [[nodiscard]] RB_FORCEINLINE bool try_push(U&& src) noexcept(std::is_nothrow_constructible_v<std::decay_t<U>, U&&>) {
+             std::enable_if_t<
+                 std::is_trivially_copyable_v<std::remove_cv_t<U>> &&
+                     !std::is_volatile_v<U>, int> = 0>
+    [[nodiscard]] RB_FORCEINLINE bool try_push(const U& src) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return false;
         }
-        if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(V)))) {
+        if (RB_UNLIKELY(buffer_size() < static_cast<size_type>(sizeof(U)))) {
             return false;
         }
 
@@ -679,9 +704,8 @@ public:
             return false;
         }
 
-        V tmp(std::forward<U>(src));
         pointer dst = slots_[snapshot.index];
-        std::memcpy(dst, &tmp, sizeof(V));
+        std::memcpy(dst, std::addressof(src), sizeof(U));
         Base::producer_commit_single(snapshot);
         return true;
     }
@@ -832,22 +856,30 @@ public:
                   "[spsc::latest<T,0>]: allocator pointer type must be T*.");
     static_assert(alloc_traits::is_always_equal::value,
                   "[spsc::latest<T,0>]: requires always_equal allocator (stateless).");
-    static_assert(std::is_default_constructible_v<allocator_type>,
-                  "[spsc::latest<T,0>]: requires default-constructible allocator.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[spsc::latest<T,0>]: base allocator must be nothrow default-constructible.");
+    static_assert(std::is_nothrow_default_constructible_v<allocator_type>,
+                  "[spsc::latest<T,0>]: allocator must be nothrow default-constructible.");
+#if (SPSC_ENABLE_EXCEPTIONS == 0)
+    static_assert(
+        ::spsc::alloc::detail::allocator_allocate_noexcept_v<allocator_type>,
+        "[spsc::latest<T,0>]: no-exceptions mode requires "
+        "allocator::allocate(size_type) to be noexcept.");
+#endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(::spsc::alloc::detail::allocator_size_covers_reg_v<allocator_type>,
+                  "[spsc::latest<T,0>]: allocator size_type must represent the reg domain.");
     static_assert(std::is_trivially_copyable_v<counter_value>,
                   "policy::counter_type::value_type must be trivially copyable (atomic-friendly)");
     static_assert(std::is_default_constructible_v<value_type>,
                   "[spsc::latest<T,0>]: value_type must be default-constructible.");
     static_assert(!std::is_const_v<value_type>,
                   "[spsc::latest<T,0>]: const T does not make sense for a writable container.");
+    static_assert(std::is_nothrow_destructible_v<value_type>,
+                  "[spsc::latest<T,0>]: value_type destructor must be noexcept.");
 
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<value_type>,
                   "[spsc::latest<T,0>]: no-exceptions mode requires noexcept default constructor.");
-    static_assert(std::is_nothrow_destructible_v<value_type>,
-                  "[spsc::latest<T,0>]: no-exceptions mode requires noexcept destructor.");
-    static_assert(std::is_nothrow_move_assignable_v<value_type> || std::is_nothrow_copy_assignable_v<value_type>,
-                  "[spsc::latest<T,0>]: no-exceptions mode requires noexcept assignment (move or copy).");
 #endif /* SPSC_ENABLE_EXCEPTIONS */
 
     static_assert(std::is_same_v<typename counter_type::value_type, typename geometry_type::value_type>,
@@ -1426,6 +1458,9 @@ class latest : private ::spsc::SPSCbase<Depth, Policy>
         ::spsc::detail::value_swappable_v<storage_type>;
     static constexpr bool kNoThrowStorageSwap =
         ::spsc::detail::value_swap_noexcept_v<storage_type>;
+    static constexpr bool kNoThrowMoveConstruction =
+        std::is_nothrow_default_constructible_v<storage_type> &&
+        kNoThrowStorageSwap;
     struct disabled_move_source;
     using move_source = std::conditional_t<kStorageSwapEnabled,
                                            latest&&,
@@ -1464,18 +1499,18 @@ public:
                   "[spsc::latest<T,Depth>]: value_type must be default-constructible.");
     static_assert(!std::is_const_v<value_type>,
                   "[spsc::latest<T,Depth>]: const T does not make sense for a writable container.");
+    static_assert(std::is_nothrow_default_constructible_v<base_allocator_type>,
+                  "[spsc::latest<T,Depth>]: base allocator must be nothrow default-constructible.");
     static_assert(std::is_default_constructible_v<allocator_type>,
-                  "[spsc::latest<T,Depth>]: allocator must be default-constructible (used by get_allocator()).");
+                  "[spsc::latest<T,Depth>]: allocator must be default-constructible.");
     static_assert(std::is_same_v<alloc_pointer, pointer>,
                   "[spsc::latest<T,Depth>]: allocator pointer type must be T*." );
+    static_assert(std::is_nothrow_destructible_v<value_type>,
+                  "[spsc::latest<T,Depth>]: value_type destructor must be noexcept.");
 
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
     static_assert(std::is_nothrow_default_constructible_v<value_type>,
                   "[spsc::latest<T,Depth>]: no-exceptions mode requires noexcept default constructor.");
-    static_assert(std::is_nothrow_destructible_v<value_type>,
-                  "[spsc::latest<T,Depth>]: no-exceptions mode requires noexcept destructor.");
-    static_assert(std::is_nothrow_move_assignable_v<value_type> || std::is_nothrow_copy_assignable_v<value_type>,
-                  "[spsc::latest<T,Depth>]: no-exceptions mode requires noexcept assignment (move or copy).");
 #endif /* SPSC_ENABLE_EXCEPTIONS */
 
     static_assert(std::is_same_v<typename counter_type::value_type, typename geometry_type::value_type>,
@@ -1499,7 +1534,7 @@ public:
     latest(const latest&) = delete;
     latest& operator=(const latest&) = delete;
 
-    latest(move_source other) noexcept(kNoThrowStorageSwap) {
+    latest(move_source other) noexcept(kNoThrowMoveConstruction) {
         if constexpr (kStorageSwapEnabled) {
             move_from(std::move(other));
         } else {

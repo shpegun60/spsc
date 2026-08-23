@@ -154,9 +154,16 @@ q.consume(snap);
 - `typed_pool(depth)` exists on dynamic variants
 - `resize(depth)` grows the dynamic ring of slot pointers
 - `resize()` on static variants allocates static storage if needed
-- copy and move are supported
+- deep copy is available when `T` is copy-constructible; in
+  `SPSC_ENABLE_EXCEPTIONS=0` mode that construction must also be `noexcept`
+- move is supported
 - `swap(other)` exchanges pool state
 - `destroy()` frees slot storage
+
+Static deep copy builds its replacement behind an allocator-backed transient
+pointer table. Stack use is independent of `Capacity`, no persistent layout is
+added, and allocation or element-copy failure leaves an existing assignment
+destination unchanged.
 
 ### State And Introspection
 
