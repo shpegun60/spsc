@@ -804,10 +804,15 @@ public:
     // size()/size_bytes() expose usable logical size.
     // span_bytes() exposes the physical policy-rounded span for valid storage.
     // ------------------------------------------------------------------------------------------
+    // Introspection accessors rely on the O(1) shape invariant (the slot
+    // table is all-or-nothing, maintained by commit-after-complete
+    // management) instead of the deep O(Count) pointer scan; is_valid()
+    // stays available as the explicit deep integrity check and still guards
+    // these paths in assert-enabled builds.
     [[nodiscard]] static constexpr size_type count() noexcept { return Count; }
-    [[nodiscard]] size_type size() const noexcept { return is_valid() ? buffer_size_ : 0u; }
-    [[nodiscard]] size_type size_bytes() const noexcept { return is_valid() ? detail::logical_buffer_bytes<size_type, value_type>(buffer_size_) : 0u; }
-    [[nodiscard]] size_type span_bytes() const noexcept { return is_valid() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
+    [[nodiscard]] size_type size() const noexcept { SPSC_ASSERT(is_valid()); return buffer_size_; }
+    [[nodiscard]] size_type size_bytes() const noexcept { SPSC_ASSERT(is_valid()); return detail::logical_buffer_bytes<size_type, value_type>(buffer_size_); }
+    [[nodiscard]] size_type span_bytes() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
     [[nodiscard]] static constexpr size_type alignment() noexcept { return static_cast<size_type>(alloc::policy_storage_alignment_v<policy_type, value_type>); }
     [[nodiscard]] size_type payload_bytes() const noexcept { return size_bytes(); }
     [[nodiscard]] size_type cache_span_bytes() const noexcept { return span_bytes(); }
@@ -817,21 +822,21 @@ public:
     // ------------------------------------------------------------------------------------------
     // Element Access
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] pointer data(const size_type index) noexcept { return (is_valid() && (index < Count)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (is_valid() && (index < Count)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] pointer data(const size_type index) noexcept { return (shape_ok_() && (index < Count)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (shape_ok_() && (index < Count)) ? buffers_[index] : nullptr; }
     [[nodiscard]] pointer operator[](const size_type index) noexcept
     {
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(buffer_size_ != 0u);
         SPSC_ASSERT(index < Count);
-        return (is_valid() && (buffer_size_ != 0u) && (index < Count)) ? buffers_[index] : nullptr;
+        return (shape_ok_() && (index < Count)) ? buffers_[index] : nullptr;
     }
     [[nodiscard]] const_pointer operator[](const size_type index) const noexcept
     {
         SPSC_ASSERT(is_valid());
         SPSC_ASSERT(buffer_size_ != 0u);
         SPSC_ASSERT(index < Count);
-        return (is_valid() && (buffer_size_ != 0u) && (index < Count)) ? buffers_[index] : nullptr;
+        return (shape_ok_() && (index < Count)) ? buffers_[index] : nullptr;
     }
 
 private:
@@ -840,6 +845,10 @@ private:
     // ------------------------------------------------------------------------------------------
     using scratch_table_type =
         alloc::detail::pointer_table_scratch<pointer, base_allocator_type>;
+
+    // O(1) shape coherence used by the release-path accessors; the deep
+    // O(Count) integrity scan stays in state_ok_()/is_valid().
+    [[nodiscard]] bool shape_ok_() const noexcept { return buffer_size_ != 0u; }
 
     [[nodiscard]] static bool state_ok_(const std::array<pointer, Count>& slot_ptrs,
                                         const size_type buffer_size) noexcept
@@ -1301,10 +1310,15 @@ public:
     // count()/size() expose usable logical shape.
     // span_bytes() exposes the physical policy-rounded span for valid storage.
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] size_type count() const noexcept { return is_valid() ? count_ : 0u; }
-    [[nodiscard]] size_type size() const noexcept { return is_valid() ? buffer_size_ : 0u; }
-    [[nodiscard]] size_type size_bytes() const noexcept { return is_valid() ? detail::logical_buffer_bytes<size_type, value_type>(buffer_size_) : 0u; }
-    [[nodiscard]] size_type span_bytes() const noexcept { return is_valid() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
+    // Introspection accessors rely on the O(1) shape invariant (the slot
+    // table is all-or-nothing, maintained by commit-after-complete
+    // management) instead of the deep O(count) pointer scan; is_valid()
+    // stays available as the explicit deep integrity check and still guards
+    // these paths in assert-enabled builds.
+    [[nodiscard]] size_type count() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? count_ : 0u; }
+    [[nodiscard]] size_type size() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? buffer_size_ : 0u; }
+    [[nodiscard]] size_type size_bytes() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? detail::logical_buffer_bytes<size_type, value_type>(buffer_size_) : 0u; }
+    [[nodiscard]] size_type span_bytes() const noexcept { SPSC_ASSERT(is_valid()); return shape_ok_() ? effective_buffer_size_bytes_(buffer_size_) : 0u; }
     [[nodiscard]] static constexpr size_type alignment() noexcept { return static_cast<size_type>(alloc::policy_storage_alignment_v<policy_type, value_type>); }
     [[nodiscard]] size_type payload_bytes() const noexcept { return size_bytes(); }
     [[nodiscard]] size_type cache_span_bytes() const noexcept { return span_bytes(); }
@@ -1314,15 +1328,21 @@ public:
     // ------------------------------------------------------------------------------------------
     // Element Access
     // ------------------------------------------------------------------------------------------
-    [[nodiscard]] pointer data(const size_type index) noexcept { return (is_valid() && (index < count_)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (is_valid() && (index < count_)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] pointer operator[](const size_type index) noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < count_); return (is_valid() && (index < count_)) ? buffers_[index] : nullptr; }
-    [[nodiscard]] const_pointer operator[](const size_type index) const noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < count_); return (is_valid() && (index < count_)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] pointer data(const size_type index) noexcept { return (shape_ok_() && (index < count_)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] const_pointer data(const size_type index) const noexcept { return (shape_ok_() && (index < count_)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] pointer operator[](const size_type index) noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < count_); return (shape_ok_() && (index < count_)) ? buffers_[index] : nullptr; }
+    [[nodiscard]] const_pointer operator[](const size_type index) const noexcept { SPSC_ASSERT(is_valid()); SPSC_ASSERT(index < count_); return (shape_ok_() && (index < count_)) ? buffers_[index] : nullptr; }
 
 private:
     // ------------------------------------------------------------------------------------------
     // Internal Helpers
     // ------------------------------------------------------------------------------------------
+    // O(1) shape coherence used by the release-path accessors; the deep
+    // O(count) integrity scan stays in state_ok_()/is_valid().
+    [[nodiscard]] bool shape_ok_() const noexcept {
+        return (buffers_ != nullptr) && (count_ != 0u) && (buffer_size_ != 0u);
+    }
+
     [[nodiscard]] static bool state_ok_(pointer* slot_ptrs,
                                         const size_type count,
                                         const size_type buffer_size) noexcept

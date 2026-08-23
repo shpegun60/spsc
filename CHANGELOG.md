@@ -8,6 +8,12 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Fixed
 
+- Runtime-size `buffer_pool` introspection accessors (`count()`, `size()`,
+  `size_bytes()`, `span_bytes()`, `data(i)`, `operator[]`) now use an O(1)
+  shape check plus the per-slot null guard instead of re-running the full
+  pointer-table scan on every call, so `for (i < count()) data(i)` loops are
+  O(N) instead of O(N²). `is_valid()` keeps its deep O(N) integrity-scan
+  semantics and still guards the accessors in assert-enabled builds.
 - Runtime-shaped `buffer_pool` forms no longer swallow user exceptions in
   exception-enabled builds: a throwing `T` construction or copy assignment
   inside copy construction, copy assignment, or `resize()` now cleans up
