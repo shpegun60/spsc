@@ -188,6 +188,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   payloads, the unsafe object-representation contract of mutable
   `queue::raw_bytes()`, and the two standalone include roots. Removed a
   stale `queue_view` reference from the `queue.hpp` header comment.
+  Documented that `buffer_pool::resize()` is a reshape (prefix buffers and
+  bytes survive a shrink, the rest is released), unlike the grow-only ring
+  container `resize()`.
 
 ## [3.0.2] - 2026-08-21
 

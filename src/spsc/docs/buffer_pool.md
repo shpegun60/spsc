@@ -73,6 +73,12 @@ dynamicShape.resize(8, 1500);
   for copy and resize. Stack use is independent of `Count`, container layout is
   unchanged, and a failed temporary allocation leaves the previous assignment
   or resize destination unchanged.
+- Unlike the ring containers, whose `resize()` is grow-only, `buffer_pool`
+  `resize()` is a reshape and may shrink: the leading `min(old, new)` buffers
+  survive with their first `min(old, new)` bytes preserved, and everything
+  beyond that is released. On success the pool holds exactly the requested
+  shape; on failure the previous shape and contents are untouched. Like all
+  management, it is not concurrent with ownership transfers.
 
 Runtime-size forms allocate payloads through the allocator's byte rebind.
 With a plain (non-cache-aligned) policy the default allocator only
