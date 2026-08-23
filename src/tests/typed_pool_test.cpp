@@ -195,6 +195,10 @@ static void api_smoke_compile() {
 
     static_assert(std::is_pointer_v<value_type>);
     static_assert(std::is_same_v<std::remove_pointer_t<value_type>, obj_type>);
+    static_assert(std::is_same_v<decltype(std::declval<Q&>().data()),
+                                 value_type const*>);
+    static_assert(std::is_same_v<decltype(std::declval<const Q&>().data()),
+                                 value_type const*>);
 
     // Producer
     static_assert(std::is_same_v<decltype(std::declval<Q&>().try_emplace(std::declval<std::uint32_t>())), bool>);
@@ -238,8 +242,6 @@ static void api_smoke_compile() {
     static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_write(reg{1})), typename Q::bulk_write_guard>);
     static_assert(std::is_same_v<decltype(std::declval<Q&>().scoped_read(reg{1})), typename Q::bulk_read_guard>);
 
-    // Const API should compile.
-    (void)sizeof(decltype(std::declval<const Q&>().data()));
 }
 
 static void api_compile_smoke_all() {

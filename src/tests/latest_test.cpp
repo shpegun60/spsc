@@ -2271,27 +2271,40 @@ static void reserve_resize_edge_cases_raw_dynamic() {
     const reg cap0 = q.capacity();
     const reg bs0  = q.bytes_per_slot();
 
-    QVERIFY(q.reserve(2u, 1u)); // No shrink.
+    // A no-op reserve must preserve the currently published state.
+    const std::uint32_t no_op_value = 0x13579BDFu;
+    QVERIFY(q.try_push(no_op_value));
+    QVERIFY(!q.empty());
+    QVERIFY(q.reserve(cap0, bs0));
     QCOMPARE(q.capacity(), cap0);
     QCOMPARE(q.bytes_per_slot(), bs0);
+    QVERIFY(!q.empty());
+    std::uint32_t out{};
+    std::memcpy(&out, q.try_front(), sizeof(out));
+    QCOMPARE(out, no_op_value);
 
-    // Each reserve axis is an independent minimum. Growing slot bytes must
-    // retain depth even when the requested minimum depth is smaller.
+    // Actual slot-byte growth rebuilds storage and clears published state.
     const reg grow_bytes_req = static_cast<reg>(bs0 + 8u);
-    QVERIFY(q.reserve(2u, grow_bytes_req));
+    QVERIFY(q.reserve(cap0, grow_bytes_req));
     QCOMPARE(q.capacity(), cap0);
     QCOMPARE(q.bytes_per_slot(), expected_raw_slot_bytes<Q>(grow_bytes_req));
+    QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
 
-    // The inverse cross-axis request must grow depth without shrinking bytes.
+    // The inverse cross-axis request grows depth without shrinking bytes and
+    // is destructive for the same reason.
+    const std::uint32_t depth_growth_value = 0x2468ACE0u;
+    QVERIFY(q.try_push(depth_growth_value));
+    QVERIFY(!q.empty());
     const reg bytes_after_growth = q.bytes_per_slot();
     QVERIFY(q.reserve(cap0 + 1u, 1u));
     QVERIFY(q.capacity() >= cap0 + 1u);
     QCOMPARE(q.bytes_per_slot(), bytes_after_growth);
     QVERIFY(q.empty());
+    QVERIFY(q.try_front() == nullptr);
 
     const std::uint32_t v = 0xDEADBEEFu;
     QVERIFY(q.try_push(v));
-    std::uint32_t out{};
     std::memcpy(&out, q.front(), sizeof(out));
     QCOMPARE(out, v);
 

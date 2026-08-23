@@ -100,7 +100,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Documented snapshot epoch/ABA limits, the owning `pool::push(U)` size
   precondition, finite-period shadow behavior, custom-backend zero
   normalization, and the bounded-stack management/failure contracts for
-  static owning containers.
+  static owning containers. Clarified that actual dynamic `latest` growth
+  rebuilds storage and clears published state, while no-op management calls
+  preserve it.
 
 ## [3.0.2] - 2026-08-21
 
