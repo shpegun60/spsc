@@ -171,6 +171,18 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   static owning containers. Clarified that actual dynamic `latest` growth
   rebuilds storage and clears published state, while no-op management calls
   preserve it.
+- Documented the raw `pool`/`pool_view` `push(data, size)` truncation
+  contract (`true` means "slot published", not "whole input fit"), the C++17
+  typed-overlay boundary across `pool` management (byte migration does not
+  carry a placement-new `U` lifetime), the trivially-copyable precondition
+  of the `chunk` DMA pattern, dynamic `chunk<T, 0>` being move-only, the
+  live-objects lifetime precondition of `fifo_view` and the array/chunk view
+  wrappers, the mandatory `clear()` reuse step in `chunk_fifo`, the
+  non-aligned dynamic payload of the `cache_aligned_chunk_fifo_view` alias,
+  the aligned-allocator requirement for over-aligned runtime `buffer_pool`
+  payloads, the unsafe object-representation contract of mutable
+  `queue::raw_bytes()`, and the two standalone include roots. Removed a
+  stale `queue_view` reference from the `queue.hpp` header comment.
 
 ## [3.0.2] - 2026-08-21
 

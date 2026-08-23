@@ -69,6 +69,12 @@ if (!q.try_push(packet, sizeof(packet))) {
 }
 ```
 
+`push(data, size)`/`try_push(data, size)` clamp the copy to `buffer_size()`:
+a `true` result means "one slot was published", not "the whole input fit".
+When the input can exceed the slot size, check it explicitly first, or use
+the typed `try_push(const U&)`, which rejects an oversized `U` instead of
+truncating it.
+
 ### Typed Header Plus Raw Payload
 
 ```cpp
@@ -304,6 +310,13 @@ if (auto guard = q.scoped_read()) {
 
 `CacheAligned` policies can influence default allocation and raw slot rounding.  
 That is helpful for aligned raw-buffer use, but cache maintenance still remains outside the container.
+
+`resize()` and deep copy migrate slot contents as raw bytes into fresh
+storage. In C++17 that byte copy does not carry over the lifetime of a `U`
+that was placement-new'd into the old slot: after a management operation,
+read migrated slots through `try_peek()` or byte access, and re-establish a
+typed overlay with placement-new before dereferencing `front_as<U>()` again.
+
 
 ## Snippet Catalog
 

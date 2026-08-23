@@ -366,6 +366,11 @@ q.push(payload, sizeof(payload));
 (void)q.try_push(payload, sizeof(payload));
 ```
 
+Both overloads clamp the copy to `buffer_size()`: a `true` result means
+"one slot was published", not "the whole input fit". Use the typed
+`try_push(const U&)` when an oversized input must be rejected instead of
+truncated.
+
 ### `try_publish()`, `publish(unsafe, n)`
 
 ```cpp

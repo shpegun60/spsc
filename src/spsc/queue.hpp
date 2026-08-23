@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Lifetime-managed SPSC Queue (Ring Buffer) for type T.
- * Interface compatible with spsc::fifo (owning) and queue_view (non-owning).
+ * Interface compatible with spsc::fifo (owning).
  *
  * Design goals:
  * - Modern:      constexpr, [[nodiscard]], optional span-based bulk API.

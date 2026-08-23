@@ -149,6 +149,11 @@ remain available and still select `CFA<>`.
 
 The examples below use the current pointer-based `try_*` API style used by the library.
 
+Standalone consumers must add two include roots: the directory that contains
+`spsc/` (so `#include "spsc/fifo.hpp"` resolves) and the repository root,
+because the public headers include the shared `basic_types.h` from there.
+The bundled `spsc.pri` adds both automatically for qmake projects.
+
 ### `fifo`: simplest owning queue
 
 ```cpp

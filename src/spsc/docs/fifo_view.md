@@ -142,6 +142,14 @@ That means:
 - if `T` is naturally aligned, a normal buffer is enough
 - if `T` is `alignas(32)`, the backing storage must also be 32-byte aligned
 
+Alignment is not lifetime. `attach()` validates geometry and alignment but
+never starts C++ object lifetimes: the backing storage must already contain
+live `T` objects for every slot. A `std::array<T, N>` or `std::vector<T>`
+provides them naturally; casting raw SRAM or shared memory to `T*` without
+creating the objects is undefined behavior in C++17. The same precondition
+applies to the `array_fifo_view`, `carray_fifo_view`, and `chunk_fifo_view`
+wrappers.
+
 For DMA or manually aligned payloads, make the external storage contract explicit.
 
 ## Good Fits

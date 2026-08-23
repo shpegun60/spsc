@@ -185,6 +185,16 @@ Because `queue` manages lifetime, the destructor and clear paths are semanticall
 
 Important: `data()` points at storage, but not every slot currently holds a live object.
 
+### `raw_bytes()` (with `std::span` support)
+
+`raw_bytes()` exposes the whole backing allocation as bytes — live objects
+in `[tail, head)` and raw, unconstructed slots alike — for checkpointing and
+diagnostics. The mutable overload is unsafe object-representation access:
+never modify bytes that belong to a live non-trivially-copyable `T` (that
+corrupts the object and its destructor), and never call it concurrently
+with producer/consumer traffic. Reading is always safe; treat writes as
+reserved for trivially-copyable payloads on a quiesced queue.
+
 ### Producer Methods
 
 - `push(value)` constructs in-place and advances head

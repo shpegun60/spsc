@@ -74,6 +74,13 @@ dynamicShape.resize(8, 1500);
   unchanged, and a failed temporary allocation leaves the previous assignment
   or resize destination unchanged.
 
+Runtime-size forms allocate payloads through the allocator's byte rebind.
+With a plain (non-cache-aligned) policy the default allocator only
+guarantees default-new alignment after that rebind, so an over-aligned `T`
+(for example `alignas(64)`) is rejected at compile time rather than being
+under-aligned at runtime. Give over-aligned runtime buffers a cache-aligned
+policy such as `CP`, or supply an explicitly aligned allocator.
+
 Cache-aligned policies can align storage and round the physical span reported by
 `cache_span_bytes()`. Runtime-sized variants allocate each payload separately,
 so treat this as a per-buffer alignment/span contract rather than a contiguous
