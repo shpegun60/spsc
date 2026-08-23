@@ -452,9 +452,6 @@ inline bool operator!=(const basic_allocator<T1, M1>& a,
 // Default allocator aliases
 // ============================================================================
 
-static_assert(SPSC_ENABLE_EXCEPTIONS == 0 || SPSC_ENABLE_EXCEPTIONS == 1,
-              "SPSC_ENABLE_EXCEPTIONS must be 0 or 1");
-
 using default_alloc = basic_allocator<std::byte,
     (SPSC_ENABLE_EXCEPTIONS != 0) ? fail_mode::throws : fail_mode::returns_null
 >;

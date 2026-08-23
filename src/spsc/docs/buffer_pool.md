@@ -74,11 +74,14 @@ dynamicShape.resize(8, 1500);
   unchanged, and a failed temporary allocation leaves the previous assignment
   or resize destination unchanged.
 - Unlike the ring containers, whose `resize()` is grow-only, `buffer_pool`
-  `resize()` is a reshape and may shrink: the leading `min(old, new)` buffers
-  survive with their first `min(old, new)` bytes preserved, and everything
-  beyond that is released. On success the pool holds exactly the requested
-  shape; on failure the previous shape and contents are untouched. Like all
-  management, it is not concurrent with ownership transfers.
+  `resize()` is a reshape and may shrink: the leading `min(old_count,
+  new_count)` buffers survive with their leading `min(old_size, new_size)`
+  elements of `T` preserved (the corresponding logical byte prefix is
+  elements times `sizeof(T)`), and everything beyond that is released. A
+  successful non-zero reshape leaves exactly the requested shape; passing
+  zero for any runtime axis is the documented reset to that form's coherent
+  empty shape. On failure the previous shape and contents are untouched.
+  Like all management, it is not concurrent with ownership transfers.
 
 Runtime-size forms allocate payloads through the allocator's byte rebind.
 With a plain (non-cache-aligned) policy the default allocator only
