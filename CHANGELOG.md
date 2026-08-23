@@ -17,7 +17,10 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   array-element views such as `carray_fifo_view` are unaffected). The
   fully static `buffer_pool` no-exceptions gate now also requires nothrow
   copy construction, matching the copy its defaulted copy constructor
-  performs.
+  performs. Dynamic `chunk<T, 0>` and the two runtime-size `buffer_pool`
+  forms likewise reject volatile payloads, whose placement-new/memcpy
+  construction paths cannot support them; static embedded `chunk` keeps its
+  assignment-based volatile support.
 - Runtime-size `buffer_pool` introspection accessors (`count()`, `size()`,
   `size_bytes()`, `span_bytes()`, `data(i)`, `operator[]`) now use an O(1)
   shape check plus the per-slot null guard instead of re-running the full

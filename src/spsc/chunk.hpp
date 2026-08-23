@@ -342,6 +342,9 @@ public:
                   "[spsc::chunk]: dynamic chunk requires stateless allocator.");
     static_assert(std::is_same_v<alloc_pointer, pointer>,
                   "[spsc::chunk]: allocator must return raw pointers (T*).");
+    static_assert(!std::is_volatile_v<T>,
+                  "[spsc::chunk]: volatile payloads are not supported by the "
+                  "dynamic reserve/migration paths.");
     static_assert(std::is_default_constructible_v<T>,
                   "[spsc::chunk]: T must be default-constructible (eager initialization).");
     static_assert(std::is_nothrow_destructible_v<T>,

@@ -220,6 +220,14 @@ using rejected_container = spsc::typed_pool<volatile int, 8u, spsc::policy::P>;
 using rejected_container = spsc::typed_pool<int[4], 8u, spsc::policy::P>;
 #elif defined(SPSC_TEST_FIFO_VOLATILE_PAYLOAD)
 using rejected_container = spsc::fifo<volatile int, 8u, spsc::policy::P>;
+#elif defined(SPSC_TEST_CHUNK_VOLATILE_PAYLOAD)
+using rejected_container = spsc::chunk<volatile int, 0u>;
+#elif defined(SPSC_TEST_BUFFER_POOL_FIXED_COUNT_VOLATILE)
+using rejected_container =
+    spsc::buffer_pool<volatile int, 0u, 4u, spsc::policy::P>;
+#elif defined(SPSC_TEST_BUFFER_POOL_DYNAMIC_VOLATILE)
+using rejected_container =
+    spsc::buffer_pool<volatile int, 0u, 0u, spsc::policy::P>;
 #elif defined(SPSC_TEST_BUFFER_POOL_MODE0_COPY_CTOR)
 using rejected_container =
     spsc::buffer_pool<throwing_copy_ctor_value, 4u, 2u, spsc::policy::P>;

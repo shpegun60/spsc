@@ -607,6 +607,9 @@ class buffer_pool<T, 0u, Count, Policy, Alloc>
                   "[buffer_pool]: dynamic-size buffers require default-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: dynamic-size buffers require copy-assignable T.");
+    static_assert(!std::is_volatile_v<T>,
+                  "[buffer_pool]: volatile payloads are not supported by "
+                  "runtime-size buffer construction.");
     static_assert(std::is_nothrow_destructible_v<T>,
                   "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)
@@ -1110,6 +1113,9 @@ class buffer_pool<T, 0u, 0u, Policy, Alloc>
                   "[buffer_pool]: dynamic buffers require default-constructible T.");
     static_assert(std::is_copy_assignable_v<T>,
                   "[buffer_pool]: dynamic buffers require copy-assignable T.");
+    static_assert(!std::is_volatile_v<T>,
+                  "[buffer_pool]: volatile payloads are not supported by "
+                  "runtime-size buffer construction.");
     static_assert(std::is_nothrow_destructible_v<T>,
                   "[buffer_pool]: T destructor must be noexcept.");
 #if (SPSC_ENABLE_EXCEPTIONS == 0)

@@ -168,6 +168,21 @@ $scenarios = @(
         defines = @('SPSC_TEST_FIFO_VOLATILE_PAYLOAD=1')
     },
     @{
+        name = 'volatile dynamic chunk payload'
+        expected = '[spsc::chunk]: volatile payloads are not supported by the dynamic reserve/migration paths.'
+        defines = @('SPSC_TEST_CHUNK_VOLATILE_PAYLOAD=1')
+    },
+    @{
+        name = 'volatile fixed-count buffer_pool payload'
+        expected = '[buffer_pool]: volatile payloads are not supported by runtime-size buffer construction.'
+        defines = @('SPSC_TEST_BUFFER_POOL_FIXED_COUNT_VOLATILE=1')
+    },
+    @{
+        name = 'volatile fully dynamic buffer_pool payload'
+        expected = '[buffer_pool]: volatile payloads are not supported by runtime-size buffer construction.'
+        defines = @('SPSC_TEST_BUFFER_POOL_DYNAMIC_VOLATILE=1')
+    },
+    @{
         name = 'throwing copy constructor in fully static buffer_pool no-exceptions mode'
         expected = '[buffer_pool]: no-exceptions mode requires noexcept copy-constructible T.'
         defines = @('SPSC_TEST_BUFFER_POOL_MODE0_COPY_CTOR=1')
