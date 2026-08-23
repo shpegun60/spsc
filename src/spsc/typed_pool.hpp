@@ -215,6 +215,17 @@ public:
         "[spsc::typed_pool]: no-exceptions mode requires object "
         "allocator::allocate(size_type) to be noexcept.");
 #endif /* SPSC_ENABLE_EXCEPTIONS == 0 */
+    static_assert(
+        !std::is_const_v<object_type>,
+        "[spsc::typed_pool]: const T does not make sense for a writable pool.");
+    static_assert(
+        !std::is_volatile_v<object_type>,
+        "[spsc::typed_pool]: volatile payloads are not supported by the "
+        "manual object-lifetime paths.");
+    static_assert(
+        !std::is_array_v<object_type>,
+        "[spsc::typed_pool]: raw array payloads are not supported; use "
+        "std::array.");
     static_assert(std::is_nothrow_destructible_v<object_type>,
                   "[spsc::typed_pool]: object_type destructor must be noexcept.");
     static_assert(std::is_same_v<value_type, pointer>,

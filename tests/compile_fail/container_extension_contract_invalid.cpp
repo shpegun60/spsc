@@ -132,6 +132,16 @@ struct throwing_destructor_value {
     ~throwing_destructor_value() noexcept(false) {}
 };
 
+// Mode-0 gate for the fully static buffer_pool copy constructor: nothrow
+// default construction and copy assignment, but a throwing copy constructor.
+struct throwing_copy_ctor_value {
+    throwing_copy_ctor_value() noexcept = default;
+    throwing_copy_ctor_value(const throwing_copy_ctor_value&) noexcept(false) {}
+    throwing_copy_ctor_value&
+    operator=(const throwing_copy_ctor_value&) noexcept = default;
+    ~throwing_copy_ctor_value() noexcept = default;
+};
+
 #if defined(SPSC_TEST_THROWING_ALLOCATOR_CHUNK)
 using rejected_container =
     spsc::chunk<int, 0u, throwing_allocate_allocator<std::byte>>;
@@ -198,6 +208,21 @@ using rejected_container =
 #elif defined(SPSC_TEST_THROWING_DESTRUCTOR)
 using rejected_container =
     spsc::queue<throwing_destructor_value, 0u, spsc::policy::P>;
+#elif defined(SPSC_TEST_QUEUE_VOLATILE_PAYLOAD)
+using rejected_container = spsc::queue<volatile int, 8u, spsc::policy::P>;
+#elif defined(SPSC_TEST_QUEUE_ARRAY_PAYLOAD)
+using rejected_container = spsc::queue<int[4], 8u, spsc::policy::P>;
+#elif defined(SPSC_TEST_TYPED_POOL_CONST_PAYLOAD)
+using rejected_container = spsc::typed_pool<const int, 8u, spsc::policy::P>;
+#elif defined(SPSC_TEST_TYPED_POOL_VOLATILE_PAYLOAD)
+using rejected_container = spsc::typed_pool<volatile int, 8u, spsc::policy::P>;
+#elif defined(SPSC_TEST_TYPED_POOL_ARRAY_PAYLOAD)
+using rejected_container = spsc::typed_pool<int[4], 8u, spsc::policy::P>;
+#elif defined(SPSC_TEST_FIFO_VOLATILE_PAYLOAD)
+using rejected_container = spsc::fifo<volatile int, 8u, spsc::policy::P>;
+#elif defined(SPSC_TEST_BUFFER_POOL_MODE0_COPY_CTOR)
+using rejected_container =
+    spsc::buffer_pool<throwing_copy_ctor_value, 4u, 2u, spsc::policy::P>;
 #else
 using rejected_container =
     spsc::queue<int, 0u, spsc::policy::P, narrow_allocator<std::byte>>;

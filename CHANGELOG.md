@@ -8,6 +8,16 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Fixed
 
+- Unsupported payload categories are now rejected at the contract level
+  instead of failing deep inside template instantiation: `queue` rejects
+  volatile and raw-array payloads, `typed_pool` rejects const, volatile,
+  and raw-array payloads, and owning `fifo` rejects volatile payloads,
+  whose manual-lifetime and trivial-copy management paths cannot support
+  them (`std::array` remains the supported aggregate payload, and
+  array-element views such as `carray_fifo_view` are unaffected). The
+  fully static `buffer_pool` no-exceptions gate now also requires nothrow
+  copy construction, matching the copy its defaulted copy constructor
+  performs.
 - Runtime-size `buffer_pool` introspection accessors (`count()`, `size()`,
   `size_bytes()`, `span_bytes()`, `data(i)`, `operator[]`) now use an O(1)
   shape check plus the per-slot null guard instead of re-running the full
@@ -124,6 +134,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Extended the genuine-32-bit H6 shadow matrix with single write/read guard
   shadow-preservation regressions across `fifo`, `fifo_view`, `pool`,
   `typed_pool`, and `queue` under both counting policies.
+- Added unique-diagnostic compile-fail coverage for const/volatile/raw-array
+  payload rejection in `queue`, `typed_pool`, and `fifo`, and for the fully
+  static `buffer_pool` mode-0 copy-construction gate.
 - Extended the exception runtime smoke with `buffer_pool` regressions for
   all three runtime shapes: throwing default construction and copy
   assignment propagate from copy construction, copy assignment, and

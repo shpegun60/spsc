@@ -136,6 +136,41 @@ $scenarios = @(
         name = 'throwing value destructor'
         expected = '[spsc::queue]: value_type destructor must be noexcept.'
         defines = @('SPSC_TEST_THROWING_DESTRUCTOR=1')
+    },
+    @{
+        name = 'volatile queue payload'
+        expected = '[spsc::queue]: volatile payloads are not supported by the manual object-lifetime paths.'
+        defines = @('SPSC_TEST_QUEUE_VOLATILE_PAYLOAD=1')
+    },
+    @{
+        name = 'raw array queue payload'
+        expected = '[spsc::queue]: raw array payloads are not supported; use std::array.'
+        defines = @('SPSC_TEST_QUEUE_ARRAY_PAYLOAD=1')
+    },
+    @{
+        name = 'const typed_pool payload'
+        expected = '[spsc::typed_pool]: const T does not make sense for a writable pool.'
+        defines = @('SPSC_TEST_TYPED_POOL_CONST_PAYLOAD=1')
+    },
+    @{
+        name = 'volatile typed_pool payload'
+        expected = '[spsc::typed_pool]: volatile payloads are not supported by the manual object-lifetime paths.'
+        defines = @('SPSC_TEST_TYPED_POOL_VOLATILE_PAYLOAD=1')
+    },
+    @{
+        name = 'raw array typed_pool payload'
+        expected = '[spsc::typed_pool]: raw array payloads are not supported; use std::array.'
+        defines = @('SPSC_TEST_TYPED_POOL_ARRAY_PAYLOAD=1')
+    },
+    @{
+        name = 'volatile fifo payload'
+        expected = '[spsc::fifo]: volatile payloads are not supported by the trivial-copy management paths.'
+        defines = @('SPSC_TEST_FIFO_VOLATILE_PAYLOAD=1')
+    },
+    @{
+        name = 'throwing copy constructor in fully static buffer_pool no-exceptions mode'
+        expected = '[buffer_pool]: no-exceptions mode requires noexcept copy-constructible T.'
+        defines = @('SPSC_TEST_BUFFER_POOL_MODE0_COPY_CTOR=1')
     }
 )
 

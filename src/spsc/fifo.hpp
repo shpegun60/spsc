@@ -150,6 +150,10 @@ public:
     static_assert(
         !std::is_const_v<value_type>,
         "[spsc::fifo]: const T does not make sense for a writable FIFO.");
+    static_assert(
+        !std::is_volatile_v<value_type>,
+        "[spsc::fifo]: volatile payloads are not supported by the "
+        "trivial-copy management paths.");
     static_assert(std::is_nothrow_destructible_v<value_type>,
                   "[spsc::fifo]: value_type destructor must be noexcept.");
 

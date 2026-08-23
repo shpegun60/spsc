@@ -136,6 +136,10 @@ class buffer_pool
                   "[buffer_pool]: no-exceptions mode requires noexcept default-constructible T.");
     static_assert(std::is_nothrow_copy_assignable_v<T>,
                   "[buffer_pool]: no-exceptions mode requires noexcept copy-assignable T.");
+    // The fully static form copies through the defaulted copy constructor,
+    // so mode 0 must also prove nothrow copy construction of T.
+    static_assert(std::is_nothrow_copy_constructible_v<T>,
+                  "[buffer_pool]: no-exceptions mode requires noexcept copy-constructible T.");
 #endif
 
 public:

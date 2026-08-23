@@ -136,6 +136,13 @@ public:
     static_assert(
         !std::is_const_v<value_type>,
         "[spsc::queue]: const T does not make sense for a writable queue.");
+    static_assert(
+        !std::is_volatile_v<value_type>,
+        "[spsc::queue]: volatile payloads are not supported by the manual "
+        "object-lifetime paths.");
+    static_assert(
+        !std::is_array_v<value_type>,
+        "[spsc::queue]: raw array payloads are not supported; use std::array.");
     static_assert(std::is_nothrow_destructible_v<value_type>,
                   "[spsc::queue]: value_type destructor must be noexcept.");
     static_assert(std::numeric_limits<counter_value>::digits >= 2,
