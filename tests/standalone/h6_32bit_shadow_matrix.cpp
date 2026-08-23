@@ -1,8 +1,14 @@
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 
 #include "fifo.hpp"
+#include "fifo_view.hpp"
+#include "pool.hpp"
+#include "pool_view.hpp"
 #include "queue.hpp"
+#include "typed_pool.hpp"
 
 static_assert(sizeof(reg) == 4u,
               "H6 32-bit matrix must be compiled for a genuine 32-bit reg domain");
@@ -262,6 +268,105 @@ bool checked_queue_paths_preserve_shadow() noexcept
     return q.try_pop() && q.empty();
 }
 
+// Shared scenario for every snapshot-consuming container: publish two
+// elements, snapshot them, publish a third, then commit the snapshot through
+// checked try_consume(). The commit must preserve the consumer shadow proven
+// by the validation, so the following try_front() must not need a
+// synchronized head reload.
+template<class Policy, class Container, class Push, class FrontIs>
+bool checked_consume_preserves_shadow_case(Container& c, Push push,
+                                           FrontIs front_is) noexcept
+{
+    using counter_type = typename Policy::counter_type;
+
+    if (!push(c, 20u) || !push(c, 21u)) {
+        return false;
+    }
+    const auto snapshot = c.make_snapshot();
+    if (!push(c, 22u) || !c.try_consume(snapshot)) {
+        return false;
+    }
+
+    counter_type::reset_load_count();
+    if (!front_is(c, 22u)) {
+        return false;
+    }
+    if constexpr (spsc::detail::rb_use_shadow_v<Policy>) {
+        if (counter_type::synchronized_loads != 0u) {
+            return false;
+        }
+    }
+
+    return c.try_pop(1u) && c.empty();
+}
+
+template<bool SingleWriter>
+bool checked_consume_paths_preserve_shadow() noexcept
+{
+    using policy_type = counting_policy<SingleWriter>;
+
+    const auto push_value = [](auto& c, const std::uint32_t v) noexcept {
+        return c.try_push(v);
+    };
+    const auto typed_front_is = [](auto& c, const std::uint32_t v) noexcept {
+        const auto* front = c.try_front();
+        return front != nullptr && *front == v;
+    };
+    const auto raw_front_is = [](auto& c, const std::uint32_t v) noexcept {
+        const void* front = c.try_front();
+        if (front == nullptr) {
+            return false;
+        }
+        std::uint32_t out{};
+        std::memcpy(&out, front, sizeof(out));
+        return out == v;
+    };
+
+    spsc::fifo<std::uint32_t, 8u, policy_type> f;
+    if (!f.is_valid() ||
+        !checked_consume_preserves_shadow_case<policy_type>(f, push_value,
+                                                            typed_front_is)) {
+        return false;
+    }
+
+    std::array<std::uint32_t, 8u> view_storage{};
+    spsc::fifo_view<std::uint32_t, 8u, policy_type> fv;
+    if (!fv.attach(view_storage) ||
+        !checked_consume_preserves_shadow_case<policy_type>(fv, push_value,
+                                                            typed_front_is)) {
+        return false;
+    }
+
+    spsc::pool<8u, policy_type> p{
+        static_cast<reg>(sizeof(std::uint32_t))};
+    if (!p.is_valid() ||
+        !checked_consume_preserves_shadow_case<policy_type>(p, push_value,
+                                                            raw_front_is)) {
+        return false;
+    }
+
+    std::array<std::array<unsigned char, sizeof(std::uint32_t)>, 8u> payload{};
+    void* slots[8u] = {};
+    for (std::size_t i = 0u; i < 8u; ++i) {
+        slots[i] = payload[i].data();
+    }
+    spsc::pool_view<8u, policy_type> pv;
+    if (!pv.attach(slots, static_cast<reg>(sizeof(std::uint32_t))) ||
+        !checked_consume_preserves_shadow_case<policy_type>(pv, push_value,
+                                                            raw_front_is)) {
+        return false;
+    }
+
+    spsc::typed_pool<std::uint32_t, 8u, policy_type> tp;
+    if (!tp.is_valid() ||
+        !checked_consume_preserves_shadow_case<policy_type>(tp, push_value,
+                                                            typed_front_is)) {
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -273,7 +378,9 @@ int main()
                    hostile_shadow_alias_suite<8u, h6_strict_policy>() &&
                    hostile_shadow_alias_suite<0u, h6_strict_policy>() &&
                    checked_queue_paths_preserve_shadow<true>() &&
-                   checked_queue_paths_preserve_shadow<false>()
+                   checked_queue_paths_preserve_shadow<false>() &&
+                   checked_consume_paths_preserve_shadow<true>() &&
+                   checked_consume_paths_preserve_shadow<false>()
                ? 0
                : 1;
 }

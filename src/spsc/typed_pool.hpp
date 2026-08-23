@@ -582,7 +582,11 @@ public:
             }
         }
 
-        pop(snap_used);
+        // Checked commit: the range was just proven readable, so keep the
+        // consumer shadow instead of routing through the unchecked pop() path
+        // (which poisons the shadow on 32-bit shadow-enabled builds).
+        destroy_prefix_(snap_used);
+        Base::advance_tail_checked(snap_used);
         return true;
     }
     void consume_all() noexcept {
@@ -903,10 +907,7 @@ public:
     RB_FORCEINLINE void pop(const size_type n) noexcept {
         SPSC_ASSERT(consumer_can_read_cached_(n));
 
-        for (size_type k = 0; k < n; ++k) {
-            pointer p = object_ptr((Base::tail() + k) & Base::mask());
-            detail::destroy_at(p);
-        }
+        destroy_prefix_(n);
         Base::advance_tail_unchecked(n);
     }
 
@@ -923,10 +924,7 @@ public:
             return false;
         }
 
-        for (size_type k = 0; k < n; ++k) {
-            pointer p = object_ptr((Base::tail() + k) & Base::mask());
-            detail::destroy_at(p);
-        }
+        destroy_prefix_(n);
         Base::advance_tail_checked(n);
         return true;
     }
@@ -1531,6 +1529,19 @@ private:
     [[nodiscard]] RB_FORCEINLINE bool
     consumer_can_read_cached_(const size_type n = 1u) const noexcept {
         return is_valid() && Base::consumer_can_read_cached(n);
+    }
+
+    // Destroy the n oldest live objects without advancing the tail. Shared by
+    // pop(n)/try_pop(n)/try_consume() so the object-lifetime logic has a
+    // single definition while each caller picks its own commit flavor.
+    RB_FORCEINLINE void destroy_prefix_(const size_type n) noexcept {
+        if constexpr (!std::is_trivially_destructible_v<object_type>) {
+            const size_type tail = Base::tail();
+            const size_type mask = Base::mask();
+            for (size_type k = 0u; k < n; ++k) {
+                detail::destroy_at(object_ptr((tail + k) & mask));
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------------------

@@ -305,7 +305,10 @@ present.
 Shadow delta validation is safe across ordinary counter wrap. It cannot carry
 generation information through an entire counter-value period. For enabled
 sub-64-bit shadows, unchecked producer/consumer progress invalidates the local
-shadow so the next cached check reloads the real opposite counter. The 64-bit
+shadow so the next cached check reloads the real opposite counter. Checked
+commits — including a successful `try_consume(snapshot)` in every container
+that offers it — keep the local shadow they just proved, so the following
+cached check does not need a synchronized reload. The 64-bit
 hot path intentionally has no extra invalidation store; retaining a stale
 shadow across all `2^64` counter values is treated as practically unreachable,
 not claimed to be mathematically impossible.

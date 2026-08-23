@@ -563,7 +563,10 @@ public:
             }
         }
 
-        pop(snap_used);
+        // Checked commit: the range was just proven readable, so keep the
+        // consumer shadow instead of routing through the unchecked pop() path
+        // (which poisons the shadow on 32-bit shadow-enabled builds).
+        Base::advance_tail_checked(snap_used);
         return true;
     }
 

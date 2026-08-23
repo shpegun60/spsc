@@ -42,6 +42,13 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Validated `queue::try_pop(n)` and `queue::try_consume(snapshot)` operations
   now share prefix destruction with their unchecked counterparts but advance
   through the checked consumer path, preserving a proven consumer shadow.
+- `try_consume(snapshot)` in `fifo`, `fifo_view`, `pool`, `pool_view`, and
+  `typed_pool` (inherited by the `array_fifo` and `chunk_fifo` wrappers) now
+  commits through the checked consumer path instead of the unchecked `pop(n)`
+  commit, matching `queue` and preserving the proven consumer shadow on
+  explicit 32-bit shadow-enabled configurations. `typed_pool` object
+  destruction for `pop(n)`/`try_pop(n)`/`try_consume` now shares a single
+  prefix-destruction helper.
 - In no-exceptions mode, a non-empty dynamic `queue` rejects growth before
   allocation unless its live values have a no-throw move or copy construction
   path. Empty queues can still grow for immovable or throwing-relocation types.
@@ -77,6 +84,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   pointer-table allocation paths, and checked queue-path shadow-preservation
   coverage. Hostile stale-shadow setup is kept separate from synchronized
   checked-path setup.
+- Extended the genuine-32-bit H6 shadow matrix with checked `try_consume`
+  shadow-preservation regressions for `fifo`, `fifo_view`, `pool`, `pool_view`,
+  and `typed_pool` under both strict-RMW and single-writer counting policies.
 - Added allocation-failure/state-preservation regressions for transient static
   management tables and an exception-mode static-`fifo` basic-guarantee test.
 - Compile-fail verification now requires exactly one unique library contract
