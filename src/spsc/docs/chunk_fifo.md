@@ -61,8 +61,11 @@ aligned payloads.
 `block->clear()` at claim time is part of the reuse contract, not example
 decoration: consumer `pop()` releases the slot without clearing the embedded
 chunk object, so once the ring wraps, `claim()` hands back a block that still
-carries the previous logical length and contents. Skipping `clear()` silently
-appends new elements after stale ones.
+carries the previous logical length and contents. `clear()` is therefore
+required before append-style `push`/`emplace` refills — skipping it silently
+appends new elements after stale ones. A producer that rewrites the block
+wholesale and sets the length explicitly via `resize(n)`/`commit_size(n)`
+overwrites the stale length itself and does not need `clear()`.
 
 ## Consumer Example
 

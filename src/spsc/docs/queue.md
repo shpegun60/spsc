@@ -192,8 +192,10 @@ in `[tail, head)` and raw, unconstructed slots alike — for checkpointing and
 diagnostics. The mutable overload is unsafe object-representation access:
 never modify bytes that belong to a live non-trivially-copyable `T` (that
 corrupts the object and its destructor), and never call it concurrently
-with producer/consumer traffic. Reading is always safe; treat writes as
-reserved for trivially-copyable payloads on a quiesced queue.
+with producer/consumer traffic. Reads are safe for bytes backing live or
+previously initialized slots; bytes of never-written slots hold
+indeterminate values and carry no meaning. Treat writes as reserved for
+trivially-copyable payloads on a quiesced queue.
 
 ### Producer Methods
 

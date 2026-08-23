@@ -20,7 +20,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   performs. Dynamic `chunk<T, 0>` and the two runtime-size `buffer_pool`
   forms likewise reject volatile payloads, whose placement-new/memcpy
   construction paths cannot support them; static embedded `chunk` keeps its
-  assignment-based volatile support.
+  assignment-based volatile support. `SPSC_ENABLE_EXCEPTIONS` is validated
+  as strictly 0/1 in `spsc_config.hpp` itself, so view-only includes reject
+  an invalid value too.
 - Runtime-size `buffer_pool` introspection accessors (`count()`, `size()`,
   `size_bytes()`, `span_bytes()`, `data(i)`, `operator[]`) now use an O(1)
   shape check plus the per-slot null guard instead of re-running the full
