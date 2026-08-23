@@ -235,15 +235,23 @@ using fixed_count_buffers =
 
     scratch_allocator_state::fail_pointer_tables = false;
 #if (SPSC_ENABLE_EXCEPTIONS != 0)
+    // A throwing pointer-table allocator now propagates from buffer_pool
+    // management exactly like it does from pool/typed_pool: the destination
+    // is preserved and nothing leaks.
     scratch_allocator_state::throw_from_pointer_tables = true;
     bool threw = false;
     try {
         destination = source;
-    } catch (...) {
+    } catch (const scratch_allocation_failure&) {
         threw = true;
     }
-    const bool resize_result = destination.resize(5u);
-    ok = ok && !threw && !resize_result && destination.size() == 2u &&
+    bool resize_threw = false;
+    try {
+        (void)destination.resize(5u);
+    } catch (const scratch_allocation_failure&) {
+        resize_threw = true;
+    }
+    ok = ok && threw && resize_threw && destination.size() == 2u &&
          destination.data(0u)[0] == std::byte{200u} &&
          destination.data(3u)[1] == std::byte{231u} &&
          scratch_allocator_state::payload_attempts == payload_attempts &&
