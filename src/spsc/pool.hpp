@@ -1208,7 +1208,7 @@ public:
             // Publish on scope-exit if armed.
             // Note: as<U>() arms automatically; get()/peek() do not.
             if (p_ && ptr_ && publish_on_destroy_) {
-                p_->publish();
+                (void)p_->try_publish();
             }
         }
 
@@ -1245,7 +1245,7 @@ public:
         // Explicit publish now.
         void commit() noexcept {
             if (p_ && ptr_) {
-                p_->publish();
+                (void)p_->try_publish();
             }
             cancel();
         }
@@ -1283,7 +1283,7 @@ public:
         read_guard& operator=(read_guard&&) = delete;
 
         ~read_guard() noexcept {
-            if (active_ && p_) { p_->pop(); }
+            if (active_ && p_) { (void)p_->try_pop(); }
         }
 
         [[nodiscard]] pointer get() const noexcept { return ptr_; }
@@ -1300,7 +1300,7 @@ public:
         }
 
         void commit() noexcept {
-            if (active_ && p_) { p_->pop(); }
+            if (active_ && p_) { (void)p_->try_pop(); }
             active_ = false;
             p_ = nullptr;
             ptr_ = nullptr;

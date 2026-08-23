@@ -367,6 +367,198 @@ bool checked_consume_paths_preserve_shadow() noexcept
     return true;
 }
 
+template<class Policy>
+[[nodiscard]] bool h6_loads_clean() noexcept
+{
+    if constexpr (spsc::detail::rb_use_shadow_v<Policy>) {
+        return Policy::counter_type::synchronized_loads == 0u;
+    } else {
+        return true;
+    }
+}
+
+// Single RAII guards acquire through checked claim/front, so their commit
+// must also stay on the checked path: after a guard commits, the next guard
+// acquisition on the same endpoint must be served from the preserved shadow
+// without a synchronized opposite-counter reload.
+template<bool SingleWriter>
+bool checked_single_guards_preserve_shadow() noexcept
+{
+    using policy_type = counting_policy<SingleWriter>;
+    using counter_type = typename policy_type::counter_type;
+
+    // fifo: assignment-based guards.
+    {
+        spsc::fifo<std::uint32_t, 8u, policy_type> f;
+        {
+            auto g = f.scoped_write();
+            if (!g) { return false; }
+            *g = 10u;
+            g.commit();
+        }
+        counter_type::reset_load_count();
+        {
+            auto g = f.scoped_write();
+            if (!g) { return false; }
+            *g = 11u;
+            g.commit();
+        }
+        {
+            auto g = f.scoped_write();
+            if (!g) { return false; }
+            g.cancel();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+
+        if (f.try_front() == nullptr) { return false; } // warm consumer shadow
+        counter_type::reset_load_count();
+        {
+            auto g = f.scoped_read();
+            if (!g || *g != 10u) { return false; }
+            g.commit();
+        }
+        {
+            auto g = f.scoped_read();
+            if (!g || *g != 11u) { return false; }
+            g.cancel();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+        if (!f.try_pop() || !f.empty()) { return false; }
+    }
+
+    // fifo_view: same guard family over external storage.
+    {
+        std::array<std::uint32_t, 8u> storage{};
+        spsc::fifo_view<std::uint32_t, 8u, policy_type> v;
+        if (!v.attach(storage)) { return false; }
+        {
+            auto g = v.scoped_write();
+            if (!g) { return false; }
+            *g = 20u;
+            g.commit();
+        }
+        counter_type::reset_load_count();
+        {
+            auto g = v.scoped_write();
+            if (!g) { return false; }
+            *g = 21u;
+            g.commit();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+
+        if (v.try_front() == nullptr) { return false; }
+        counter_type::reset_load_count();
+        {
+            auto g = v.scoped_read();
+            if (!g || *g != 20u) { return false; }
+            g.commit();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+        if (!v.try_pop() || !v.empty()) { return false; }
+    }
+
+    // pool: raw byte slots.
+    {
+        spsc::pool<8u, policy_type> p{
+            static_cast<reg>(sizeof(std::uint32_t))};
+        if (!p.is_valid()) { return false; }
+        const auto write_value = [](auto& guard, const std::uint32_t value) {
+            std::memcpy(guard.get(), &value, sizeof(value));
+        };
+        const auto read_value = [](auto& guard) {
+            std::uint32_t out{};
+            std::memcpy(&out, guard.get(), sizeof(out));
+            return out;
+        };
+        {
+            auto g = p.scoped_write();
+            if (!g) { return false; }
+            write_value(g, 30u);
+            g.commit();
+        }
+        counter_type::reset_load_count();
+        {
+            auto g = p.scoped_write();
+            if (!g) { return false; }
+            write_value(g, 31u);
+            g.commit();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+
+        if (p.try_front() == nullptr) { return false; }
+        counter_type::reset_load_count();
+        {
+            auto g = p.scoped_read();
+            if (!g || read_value(g) != 30u) { return false; }
+            g.commit();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+        if (!p.try_pop() || !p.empty()) { return false; }
+    }
+
+    // typed_pool: guard-managed object lifetime.
+    {
+        spsc::typed_pool<std::uint32_t, 8u, policy_type> tp;
+        if (!tp.is_valid()) { return false; }
+        {
+            auto g = tp.scoped_write();
+            if (!g) { return false; }
+            (void)g.emplace(40u);
+            g.commit();
+        }
+        counter_type::reset_load_count();
+        {
+            auto g = tp.scoped_write();
+            if (!g) { return false; }
+            (void)g.emplace(41u);
+            g.commit();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+
+        if (tp.try_front() == nullptr) { return false; }
+        counter_type::reset_load_count();
+        {
+            auto g = tp.scoped_read();
+            if (!g || *g.get() != 40u) { return false; }
+            g.commit();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+        if (!tp.try_pop() || !tp.empty()) { return false; }
+    }
+
+    // queue: manual-lifetime guards via emplace.
+    {
+        spsc::queue<std::uint32_t, 8u, policy_type> q;
+        if (!q.is_valid()) { return false; }
+        {
+            auto g = q.scoped_write();
+            if (!g) { return false; }
+            (void)g.emplace(50u);
+            g.commit();
+        }
+        counter_type::reset_load_count();
+        {
+            auto g = q.scoped_write();
+            if (!g) { return false; }
+            (void)g.emplace(51u);
+            g.commit();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+
+        if (q.try_front() == nullptr) { return false; }
+        counter_type::reset_load_count();
+        {
+            auto g = q.scoped_read();
+            if (!g || *g.get() != 50u) { return false; }
+            g.commit();
+        }
+        if (!h6_loads_clean<policy_type>()) { return false; }
+        if (!q.try_pop() || !q.empty()) { return false; }
+    }
+
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -380,7 +572,9 @@ int main()
                    checked_queue_paths_preserve_shadow<true>() &&
                    checked_queue_paths_preserve_shadow<false>() &&
                    checked_consume_paths_preserve_shadow<true>() &&
-                   checked_consume_paths_preserve_shadow<false>()
+                   checked_consume_paths_preserve_shadow<false>() &&
+                   checked_single_guards_preserve_shadow<true>() &&
+                   checked_single_guards_preserve_shadow<false>()
                ? 0
                : 1;
 }

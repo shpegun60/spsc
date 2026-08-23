@@ -1319,7 +1319,7 @@ public:
 
         ~write_guard() noexcept {
             if (active_ && q_ && publish_on_destroy_) {
-                q_->publish();
+                (void)q_->try_publish();
             }
         }
 
@@ -1353,7 +1353,7 @@ public:
 
         void commit() noexcept {
             if (active_ && q_) {
-                q_->publish();
+                (void)q_->try_publish();
             }
             cancel();
         }
@@ -1393,7 +1393,7 @@ public:
 
         ~read_guard() noexcept {
             if (active_ && q_) {
-                q_->pop();
+                (void)q_->try_pop();
             }
         }
 
@@ -1408,7 +1408,7 @@ public:
 
         void commit() noexcept {
             if (active_ && q_) {
-                q_->pop();
+                (void)q_->try_pop();
             }
 
             active_ = false;

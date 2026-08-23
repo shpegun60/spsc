@@ -1363,7 +1363,7 @@ public:
 
             if (publish_on_destroy_ && constructed_) {
                 // Object becomes visible to the consumer.
-                p_->publish();
+                (void)p_->try_publish();
             } else if (constructed_) {
                 // Constructed but not published: destroy safely.
                 ::spsc::detail::destroy_at(std::launder(ptr_));
@@ -1417,7 +1417,7 @@ public:
             if (p_ && ptr_) {
                 SPSC_ASSERT(constructed_ && "write_guard::commit() publishing an unconstructed slot");
                 if (constructed_) {
-                    p_->publish();
+                    (void)p_->try_publish();
                 }
             }
 
@@ -1466,7 +1466,7 @@ public:
 
         ~read_guard() noexcept {
             if (active_ && p_) {
-                p_->pop();
+                (void)p_->try_pop();
             }
         }
 
@@ -1480,7 +1480,7 @@ public:
         explicit operator bool() const noexcept { return active_; }
         void commit() noexcept {
             if (active_ && p_) {
-                p_->pop();
+                (void)p_->try_pop();
             }
             cancel();
         }

@@ -8,6 +8,13 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Fixed
 
+- Single RAII write/read guards in `fifo`, `fifo_view`, `pool`, `typed_pool`,
+  and `queue` now commit through the checked `try_publish()`/`try_pop()`
+  paths instead of the unchecked owner commit, preserving the consumer/
+  producer shadow their checked acquisition already proved on explicit
+  32-bit shadow-enabled builds. Bulk `unsafe` guards keep their unchecked
+  commit-and-poison semantics; `pool_view` single guards already committed
+  through validated snapshots.
 - Public headers now survive Windows' function-like `min`/`max` macros:
   every `std::numeric_limits<T>::max()`/`min()` call uses the
   `(std::numeric_limits<T>::max)()` idiom (16 call sites across the allocator
@@ -100,6 +107,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Added raw `latest` C-array publish and oversized-payload rejection
   regressions, plus a bounded-stack probe proving raw `latest` publish of a
   4096-byte payload keeps an O(1) frame.
+- Extended the genuine-32-bit H6 shadow matrix with single write/read guard
+  shadow-preservation regressions across `fifo`, `fifo_view`, `pool`,
+  `typed_pool`, and `queue` under both counting policies.
 - Added allocation-failure/state-preservation regressions for transient static
   management tables and an exception-mode static-`fifo` basic-guarantee test.
 - Compile-fail verification now requires exactly one unique library contract

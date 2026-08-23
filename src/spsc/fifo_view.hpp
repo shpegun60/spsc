@@ -1175,7 +1175,7 @@ public:
         write_guard& operator=(write_guard&&) = delete;
 
         ~write_guard() noexcept {
-            if (active_ && q_ && publish_on_destroy_) { q_->publish(); }
+            if (active_ && q_ && publish_on_destroy_) { (void)q_->try_publish(); }
         }
 
         void publish_on_destroy() const noexcept {
@@ -1200,7 +1200,7 @@ public:
         explicit operator bool() const noexcept { return active_; }
 
         void commit() noexcept {
-            if (active_ && q_) { q_->publish(); }
+            if (active_ && q_) { (void)q_->try_publish(); }
             cancel();
         }
 
@@ -1238,7 +1238,7 @@ public:
         read_guard& operator=(read_guard&&) = delete;
 
         ~read_guard() noexcept {
-            if (active_ && q_) { q_->pop(); }
+            if (active_ && q_) { (void)q_->try_pop(); }
         }
 
         [[nodiscard]] pointer   get()        const noexcept { return ptr_; }
@@ -1248,7 +1248,7 @@ public:
         explicit operator bool()             const noexcept { return active_; }
 
         void commit() noexcept {
-            if (active_ && q_) { q_->pop(); }
+            if (active_ && q_) { (void)q_->try_pop(); }
 
             active_ = false;
             q_ = nullptr;

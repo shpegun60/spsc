@@ -1362,7 +1362,7 @@ public:
             }
 
             if (publish_on_destroy_ && constructed_) {
-                q_->publish();
+                (void)q_->try_publish();
                 return;
             }
 
@@ -1411,7 +1411,7 @@ public:
             if (q_ && ptr_) {
                 SPSC_ASSERT(constructed_ && "write_guard::commit() publishing an unconstructed slot");
                 if (constructed_) {
-                    q_->publish();
+                    (void)q_->try_publish();
                 }
             }
 
@@ -1460,7 +1460,7 @@ public:
 
         ~read_guard() noexcept {
             if (active_ && q_) {
-                q_->pop();
+                (void)q_->try_pop();
             }
         }
 
@@ -1474,7 +1474,7 @@ public:
         explicit operator bool() const noexcept { return active_; }
         void commit() noexcept {
             if (active_ && q_) {
-                q_->pop();
+                (void)q_->try_pop();
             }
             cancel();
         }
