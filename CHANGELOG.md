@@ -8,6 +8,14 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Fixed
 
+- Runtime-shaped `buffer_pool` forms no longer swallow user exceptions in
+  exception-enabled builds: a throwing `T` construction or copy assignment
+  inside copy construction, copy assignment, or `resize()` now cleans up
+  every transient allocation (including already-built sibling buffers) and
+  propagates, matching the rest of the owning containers. The destination of
+  an assignment or resize is preserved, a copy constructor can no longer
+  silently produce an empty pool, and null-returning allocation failure
+  still reports `false` without throwing.
 - Single RAII write/read guards in `fifo`, `fifo_view`, `pool`, `typed_pool`,
   and `queue` now commit through the checked `try_publish()`/`try_pop()`
   paths instead of the unchecked owner commit, preserving the consumer/
@@ -110,6 +118,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 - Extended the genuine-32-bit H6 shadow matrix with single write/read guard
   shadow-preservation regressions across `fifo`, `fifo_view`, `pool`,
   `typed_pool`, and `queue` under both counting policies.
+- Extended the exception runtime smoke with `buffer_pool` regressions for
+  all three runtime shapes: throwing default construction and copy
+  assignment propagate from copy construction, copy assignment, and
+  `resize()` with zero leaks and preserved destinations, while
+  null-returning allocation failure still reports `false`.
 - Added allocation-failure/state-preservation regressions for transient static
   management tables and an exception-mode static-`fifo` basic-guarantee test.
 - Compile-fail verification now requires exactly one unique library contract

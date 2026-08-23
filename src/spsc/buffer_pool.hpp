@@ -387,9 +387,16 @@ public:
         }
 
         const size_type copy_count = is_valid() ? ((count_ < count) ? count_ : count) : 0u;
-        if (!copy_prefix_(new_buffers, count, buffers_, copy_count)) {
+        SPSC_TRY {
+            if (!copy_prefix_(new_buffers, count, buffers_, copy_count)) {
+                destroy_buffer_block_(new_buffers, count);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
             destroy_buffer_block_(new_buffers, count);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<stored_buffer_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         destroy();
@@ -468,7 +475,10 @@ private:
                 std::destroy_n(ptr, built);
                 alloc_traits::deallocate(alloc, ptr, count);
             }
-            return false;
+            if constexpr (!(kNoexceptAllocate &&
+                          std::is_nothrow_default_constructible_v<stored_buffer_type>)) {
+                SPSC_RETHROW;
+            }
         }
 
         out = ptr;
@@ -509,7 +519,9 @@ private:
                 dst[i] = src[i];
             }
         } SPSC_CATCH_ALL {
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<stored_buffer_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         return true;
@@ -543,9 +555,18 @@ private:
             return false;
         }
 
-        if (!copy_prefix_(new_buffers, other.count_, other.buffers_, other.count_)) {
+        SPSC_TRY {
+            if (!copy_prefix_(new_buffers, other.count_, other.buffers_, other.count_)) {
+                destroy_buffer_block_(new_buffers, other.count_);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
+            // Release the transient destination, then let the caller's
+            // exception propagate; the previous state is untouched.
             destroy_buffer_block_(new_buffers, other.count_);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<stored_buffer_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         buffers_ = new_buffers;
@@ -742,9 +763,16 @@ public:
         }
 
         const size_type copy_size = is_valid() ? ((buffer_size_ < buffer_size) ? buffer_size_ : buffer_size) : 0u;
-        if (!copy_prefix_(scratch.data(), buffer_size, buffers_.data(), copy_size)) {
+        SPSC_TRY {
+            if (!copy_prefix_(scratch.data(), buffer_size, buffers_.data(), copy_size)) {
+                release_all_buffers_(scratch.data(), buffer_size);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
             release_all_buffers_(scratch.data(), buffer_size);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         destroy();
@@ -857,7 +885,10 @@ private:
             if (raw != nullptr) {
                 byte_alloc_traits::deallocate(alloc, raw, effective_bytes);
             }
-            return false;
+            if constexpr (!(kNoexceptByteAllocate &&
+                          std::is_nothrow_default_constructible_v<value_type>)) {
+                SPSC_RETHROW;
+            }
         }
 
         out = ptr;
@@ -886,13 +917,27 @@ private:
             return false;
         }
 
-        for (size_type i = 0u; i < Count; ++i) {
-            if (!allocate_buffer_(buffer_size, out[i])) {
-                for (size_type j = 0u; j < i; ++j) {
-                    release_buffer_(out[j], buffer_size);
-                    out[j] = nullptr;
+        size_type built = 0u;
+        SPSC_TRY {
+            for (; built < Count; ++built) {
+                if (!allocate_buffer_(buffer_size, out[built])) {
+                    for (size_type j = 0u; j < built; ++j) {
+                        release_buffer_(out[j], buffer_size);
+                        out[j] = nullptr;
+                    }
+                    return false;
                 }
-                return false;
+            }
+        } SPSC_CATCH_ALL {
+            // The failing slot cleaned itself up; release the built prefix
+            // and let the caller's exception propagate.
+            for (size_type j = 0u; j < built; ++j) {
+                release_buffer_(out[j], buffer_size);
+                out[j] = nullptr;
+            }
+            if constexpr (!(kNoexceptByteAllocate &&
+                          std::is_nothrow_default_constructible_v<value_type>)) {
+                SPSC_RETHROW;
             }
         }
 
@@ -935,7 +980,9 @@ private:
                 }
             }
         } SPSC_CATCH_ALL {
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         return true;
@@ -944,11 +991,9 @@ private:
     static bool allocate_scratch_(scratch_table_type& scratch) noexcept(
         kNoexceptTableAllocate)
     {
-        SPSC_TRY {
-            return scratch.allocate(Count);
-        } SPSC_CATCH_ALL {
-            return false;
-        }
+        // A null-returning table allocator still reports false; a throwing
+        // one propagates like every other owning allocation path.
+        return scratch.allocate(Count);
     }
 
     void commit_scratch_(pointer const* const fresh) noexcept
@@ -990,10 +1035,19 @@ private:
             return false;
         }
 
-        if (!copy_prefix_(scratch.data(), other.buffer_size_,
-                          other.buffers_.data(), other.buffer_size_)) {
+        SPSC_TRY {
+            if (!copy_prefix_(scratch.data(), other.buffer_size_,
+                              other.buffers_.data(), other.buffer_size_)) {
+                release_all_buffers_(scratch.data(), other.buffer_size_);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
+            // Release the transient destination, then let the caller's
+            // exception propagate; the previous state is untouched.
             release_all_buffers_(scratch.data(), other.buffer_size_);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         destroy();
@@ -1205,9 +1259,16 @@ public:
 
         const size_type copy_count = is_valid() ? ((count_ < count) ? count_ : count) : 0u;
         const size_type copy_size = is_valid() ? ((buffer_size_ < buffer_size) ? buffer_size_ : buffer_size) : 0u;
-        if (!copy_prefix_(new_buffers, count, buffer_size, buffers_, copy_count, copy_size)) {
+        SPSC_TRY {
+            if (!copy_prefix_(new_buffers, count, buffer_size, buffers_, copy_count, copy_size)) {
+                destroy_shape_(new_buffers, count, buffer_size);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
             destroy_shape_(new_buffers, count, buffer_size);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         destroy();
@@ -1313,7 +1374,10 @@ private:
             if (raw != nullptr) {
                 byte_alloc_traits::deallocate(alloc, raw, effective_bytes);
             }
-            return false;
+            if constexpr (!(kNoexceptAllocateObjects &&
+                          std::is_nothrow_default_constructible_v<value_type>)) {
+                SPSC_RETHROW;
+            }
         }
 
         out = ptr;
@@ -1374,7 +1438,10 @@ private:
                 }
                 slot_alloc_traits::deallocate(slot_alloc, slot_ptrs, count);
             }
-            return false;
+            if constexpr (!(kNoexceptAllocateSlots && kNoexceptAllocateObjects &&
+                          std::is_nothrow_default_constructible_v<value_type>)) {
+                SPSC_RETHROW;
+            }
         }
 
         out = slot_ptrs;
@@ -1432,7 +1499,9 @@ private:
                 }
             }
         } SPSC_CATCH_ALL {
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         return true;
@@ -1469,9 +1538,18 @@ private:
             return false;
         }
 
-        if (!copy_prefix_(new_buffers, other.count_, other.buffer_size_, other.buffers_, other.count_, other.buffer_size_)) {
+        SPSC_TRY {
+            if (!copy_prefix_(new_buffers, other.count_, other.buffer_size_, other.buffers_, other.count_, other.buffer_size_)) {
+                destroy_shape_(new_buffers, other.count_, other.buffer_size_);
+                return false;
+            }
+        } SPSC_CATCH_ALL {
+            // Release the transient destination, then let the caller's
+            // exception propagate; the previous state is untouched.
             destroy_shape_(new_buffers, other.count_, other.buffer_size_);
-            return false;
+            if constexpr (!std::is_nothrow_copy_assignable_v<value_type>) {
+                SPSC_RETHROW;
+            }
         }
 
         buffers_ = new_buffers;

@@ -1,3 +1,4 @@
+#include "src/spsc/buffer_pool.hpp"
 #include "src/spsc/chunk.hpp"
 #include "src/spsc/fifo.hpp"
 #include "src/spsc/latest.hpp"
@@ -241,6 +242,209 @@ static_assert(!std::is_nothrow_default_constructible_v<static_chunk>);
            fifo.try_pop();
 }
 
+// ---------------------------------------------------------------------------
+// buffer_pool exception contract: runtime-shaped forms must propagate user
+// exceptions after complete cleanup (no leak, previous state preserved),
+// while null-returning allocation failure keeps reporting false.
+// ---------------------------------------------------------------------------
+
+struct copy_error {};
+
+struct bp_probe {
+    static inline bool throw_on_default{false};
+    static inline bool throw_on_copy_assign{false};
+    static inline int live{0};
+
+    int value{0};
+
+    bp_probe() {
+        if (throw_on_default) {
+            throw default_error{};
+        }
+        ++live;
+    }
+    bp_probe(const bp_probe& other) : value(other.value) { ++live; }
+    bp_probe& operator=(const bp_probe& other) {
+        if (throw_on_copy_assign) {
+            throw copy_error{};
+        }
+        value = other.value;
+        return *this;
+    }
+    ~bp_probe() noexcept { --live; }
+};
+
+struct bp_probe_flags_reset {
+    ~bp_probe_flags_reset() noexcept {
+        bp_probe::throw_on_default = false;
+        bp_probe::throw_on_copy_assign = false;
+    }
+};
+
+template<class Pool, class Resize, class GrowResize>
+[[nodiscard]] bool buffer_pool_exceptions_for_shape(Resize resize,
+                                                    GrowResize grow) {
+    bp_probe_flags_reset reset_flags{};
+    bp_probe::throw_on_default = false;
+    bp_probe::throw_on_copy_assign = false;
+
+    const int live_before = bp_probe::live;
+
+    // Baseline shape with recognizable payload values.
+    Pool source;
+    if (!resize(source) || !source.is_valid()) {
+        return false;
+    }
+    source.data(0u)[0].value = 71;
+
+    // 1. Throwing default construction during a growing resize propagates,
+    //    leaks nothing, and preserves the previous shape and payload.
+    {
+        const int live_valid = bp_probe::live;
+        bp_probe::throw_on_default = true;
+        bool caught = false;
+        try {
+            (void)grow(source);
+        } catch (const default_error&) {
+            caught = true;
+        }
+        bp_probe::throw_on_default = false;
+        if (!caught || bp_probe::live != live_valid || !source.is_valid() ||
+            source.data(0u)[0].value != 71) {
+            return false;
+        }
+    }
+
+    // 2. A throwing copy assignment inside the copy constructor propagates
+    //    instead of producing a silent empty pool, and leaks nothing.
+    {
+        const int live_valid = bp_probe::live;
+        bp_probe::throw_on_copy_assign = true;
+        bool caught = false;
+        try {
+            Pool copy(source);
+            (void)copy;
+        } catch (const copy_error&) {
+            caught = true;
+        }
+        bp_probe::throw_on_copy_assign = false;
+        if (!caught || bp_probe::live != live_valid ||
+            source.data(0u)[0].value != 71) {
+            return false;
+        }
+    }
+
+    // 3. Copy assignment propagates and preserves the destination.
+    {
+        Pool destination;
+        if (!resize(destination)) {
+            return false;
+        }
+        destination.data(0u)[0].value = 88;
+
+        const int live_valid = bp_probe::live;
+        bp_probe::throw_on_copy_assign = true;
+        bool caught = false;
+        try {
+            destination = source;
+        } catch (const copy_error&) {
+            caught = true;
+        }
+        bp_probe::throw_on_copy_assign = false;
+        if (!caught || bp_probe::live != live_valid ||
+            !destination.is_valid() || destination.data(0u)[0].value != 88) {
+            return false;
+        }
+    }
+
+    source.destroy();
+    return bp_probe::live == live_before;
+}
+
+[[nodiscard]] bool buffer_pool_exception_contract_holds() {
+    using fixed_size_pool = ::spsc::buffer_pool<bp_probe, 4u, 0u,
+                                                ::spsc::policy::P>;
+    using fixed_count_pool = ::spsc::buffer_pool<bp_probe, 0u, 4u,
+                                                 ::spsc::policy::P>;
+    using dynamic_pool = ::spsc::buffer_pool<bp_probe, 0u, 0u,
+                                             ::spsc::policy::P>;
+
+    const bool fixed_size_ok =
+        buffer_pool_exceptions_for_shape<fixed_size_pool>(
+            [](fixed_size_pool& p) { return p.resize(2u); },
+            [](fixed_size_pool& p) { return p.resize(3u); });
+    const bool fixed_count_ok =
+        buffer_pool_exceptions_for_shape<fixed_count_pool>(
+            [](fixed_count_pool& p) { return p.resize(2u); },
+            [](fixed_count_pool& p) { return p.resize(3u); });
+    const bool dynamic_ok =
+        buffer_pool_exceptions_for_shape<dynamic_pool>(
+            [](dynamic_pool& p) { return p.resize(2u, 2u); },
+            [](dynamic_pool& p) { return p.resize(3u, 3u); });
+
+    return fixed_size_ok && fixed_count_ok && dynamic_ok;
+}
+
+// Null-returning allocation failure (as opposed to a thrown exception) must
+// keep reporting false without throwing and without touching current state.
+struct null_alloc_gate {
+    static inline bool fail{false};
+};
+
+template<class T>
+struct null_returning_allocator {
+    using value_type = T;
+    using pointer = T*;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using is_always_equal = std::true_type;
+
+    template<class U>
+    struct rebind { using other = null_returning_allocator<U>; };
+
+    null_returning_allocator() noexcept = default;
+
+    template<class U>
+    null_returning_allocator(const null_returning_allocator<U>&) noexcept {}
+
+    [[nodiscard]] pointer allocate(const size_type count) noexcept {
+        if (null_alloc_gate::fail) {
+            return nullptr;
+        }
+        return static_cast<pointer>(
+            ::operator new(count * sizeof(value_type), std::nothrow));
+    }
+
+    void deallocate(pointer ptr, size_type) noexcept {
+        ::operator delete(ptr);
+    }
+};
+
+[[nodiscard]] bool buffer_pool_null_allocation_still_reports_false() {
+    using pool_type = ::spsc::buffer_pool<int, 4u, 0u, ::spsc::policy::P,
+                                          null_returning_allocator<int>>;
+
+    null_alloc_gate::fail = false;
+    pool_type pool;
+    if (!pool.resize(2u) || !pool.is_valid()) {
+        return false;
+    }
+    pool.data(0u)[0] = 5;
+
+    null_alloc_gate::fail = true;
+    bool grew = true;
+    try {
+        grew = pool.resize(3u);
+    } catch (...) {
+        null_alloc_gate::fail = false;
+        return false;
+    }
+    null_alloc_gate::fail = false;
+
+    return !grew && pool.is_valid() && pool.count() == 2u &&
+           pool.data(0u)[0] == 5;
+}
+
 } // namespace
 
 int main() {
@@ -248,7 +452,9 @@ int main() {
                    latest_move_propagates_default_failure() &&
                    chunk_default_propagates_failure() &&
                    throwing_allocator_cleanup_is_complete() &&
-                   guards_have_documented_unwind_semantics()
+                   guards_have_documented_unwind_semantics() &&
+                   buffer_pool_exception_contract_holds() &&
+                   buffer_pool_null_allocation_still_reports_false()
                ? 0
                : 1;
 }
