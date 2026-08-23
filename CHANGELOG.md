@@ -8,6 +8,11 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ### Fixed
 
+- Public headers now survive Windows' function-like `min`/`max` macros:
+  every `std::numeric_limits<T>::max()`/`min()` call uses the
+  `(std::numeric_limits<T>::max)()` idiom (16 call sites across the allocator
+  core, `chunk`, `fifo`, `fifo_view`, `pool`, `pool_view`, and `typed_pool`).
+  The library never `#undef`s the consumer's macros.
 - Raw `latest<void>` `push(U)`/`try_push(U)` no longer decay their argument:
   a C-array payload now publishes its contents instead of the decayed
   pointer's address bytes, volatile arguments are rejected at the contract
@@ -109,6 +114,9 @@ The format is based on Keep a Changelog and the project follows Semantic Version
   reject static management frames above 512 bytes, using
   `Capacity`/`Count == 4096` probes plus `array_fifo`/`chunk_fifo` inner
   dimensions of 4096.
+- Added a hostile Windows macro smoke to the MSVC header job: `<windows.h>`
+  is included without `NOMINMAX` before every public header, so an unguarded
+  `numeric_limits` call fails the build.
 
 ### Documentation
 

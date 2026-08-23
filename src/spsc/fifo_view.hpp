@@ -658,7 +658,7 @@ public:
     // Bulk / Regions
     // ------------------------------------------------------------------------------------------
     [[nodiscard]] regions
-    claim_write(const ::spsc::unsafe_t, const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+    claim_write(const ::spsc::unsafe_t, const size_type max_count = (std::numeric_limits<size_type>::max)()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }
@@ -715,7 +715,7 @@ public:
     }
 
     [[nodiscard]] regions
-    claim_read(const ::spsc::unsafe_t, const size_type max_count = std::numeric_limits<size_type>::max()) noexcept {
+    claim_read(const ::spsc::unsafe_t, const size_type max_count = (std::numeric_limits<size_type>::max)()) noexcept {
         if (RB_UNLIKELY(!is_valid())) {
             return {};
         }

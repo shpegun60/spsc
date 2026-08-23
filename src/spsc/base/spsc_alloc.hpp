@@ -56,7 +56,7 @@ constexpr std::size_t max_sz(const std::size_t a, const std::size_t b) noexcept 
 }
 
 constexpr bool add_overflow(const std::size_t a, const std::size_t b) noexcept {
-    return a > (std::numeric_limits<std::size_t>::max() - b);
+    return a > ((std::numeric_limits<std::size_t>::max)() - b);
 }
 
 template<fail_mode Mode>
@@ -103,7 +103,7 @@ template<fail_mode Mode>
         alignment = alignof(void*);
     }
 
-    const std::uintptr_t upMax = std::numeric_limits<std::uintptr_t>::max();
+    const std::uintptr_t upMax = (std::numeric_limits<std::uintptr_t>::max)();
     const std::size_t upMaxSz  = static_cast<std::size_t>(upMax);
 
     if (RB_UNLIKELY(!is_pow2(alignment) || ((alignment - 1u) > upMaxSz))) {
@@ -280,7 +280,7 @@ public:
             return nullptr;
         }
 
-        if (RB_UNLIKELY(n > (std::numeric_limits<size_type>::max() / sizeof(T)))) {
+        if (RB_UNLIKELY(n > ((std::numeric_limits<size_type>::max)() / sizeof(T)))) {
             return static_cast<T*>(detail::fail_ptr<Mode>());
         }
 
@@ -394,7 +394,7 @@ public:
             return nullptr;
         }
 
-        if (RB_UNLIKELY(n > (std::numeric_limits<size_type>::max() / sizeof(T)))) {
+        if (RB_UNLIKELY(n > ((std::numeric_limits<size_type>::max)() / sizeof(T)))) {
             return static_cast<T*>(detail::fail_ptr<Mode>());
         }
 
@@ -494,7 +494,7 @@ private:
     static_assert(static_cast<long double>(Policy::allocator_alignment) > 0.0L &&
                       static_cast<long double>(Policy::allocator_alignment) <=
                           static_cast<long double>(
-                              std::numeric_limits<std::size_t>::max()),
+                              (std::numeric_limits<std::size_t>::max)()),
                   "[spsc::alloc]: Policy::allocator_alignment must be positive "
                   "and representable as size_t");
     static_assert(alignment != 0u && is_pow2(alignment),

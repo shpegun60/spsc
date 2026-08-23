@@ -499,7 +499,7 @@ public:
     [[nodiscard]] bool resize(const size_type n) {
         if (n > cap_) {
             // Heuristic: +50% + small padding
-            const size_type kMax = std::numeric_limits<size_type>::max();
+            const size_type kMax = (std::numeric_limits<size_type>::max)();
             size_type grow_cap = n;
             if (n <= static_cast<size_type>(kMax - 8u)) {
                 const size_type half = static_cast<size_type>(n >> 1u);
