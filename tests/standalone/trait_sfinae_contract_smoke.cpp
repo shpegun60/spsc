@@ -680,10 +680,12 @@ using slot_for_move_only = ::spsc::detail::cache_aligned_slot<move_only, 64u>;
 static_assert(!std::is_constructible_v<slot_for_move_only, const move_only&>);
 static_assert(std::is_constructible_v<slot_for_move_only, move_only&&>);
 
+// Fill a cache line so MSVC /W4 /WX does not diagnose intentional tail padding.
+// The array still needs the slot wrapper because its natural alignment is smaller.
 using copy_safe_array_fifo =
-    ::spsc::cache_aligned_array_fifo<value, 4u, 8u>;
+    ::spsc::cache_aligned_array_fifo<value, 16u, 8u>;
 using throwing_copy_array_fifo =
-    ::spsc::cache_aligned_array_fifo<throwing_copy_construction, 4u, 8u>;
+    ::spsc::cache_aligned_array_fifo<throwing_copy_construction, 16u, 8u>;
 static_assert(std::is_nothrow_constructible_v<
               typename copy_safe_array_fifo::slot_type,
               const typename copy_safe_array_fifo::array_type&>);
