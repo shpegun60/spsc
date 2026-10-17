@@ -32,7 +32,8 @@ struct alignas(Align) cache_aligned_slot : T {
     template<class U = T,
              std::enable_if_t<std::is_same_v<U, T> &&
                               std::is_constructible_v<T, const T&>, int> = 0>
-    cache_aligned_slot(const T& other) : T(other) {}
+    cache_aligned_slot(const T& other) noexcept(std::is_nothrow_copy_constructible_v<T>)
+        : T(other) {}
 
     template<class U = T,
              std::enable_if_t<std::is_same_v<U, T> &&

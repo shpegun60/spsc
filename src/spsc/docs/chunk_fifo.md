@@ -112,7 +112,9 @@ using Blocks = spsc::chunk_fifo<std::uint16_t, 0, 8>;
 Blocks q;
 
 for (std::size_t i = 0; i < static_cast<std::size_t>(q.capacity()); ++i) {
-    q.data()[i].reserve(256);
+    if (!q.data()[i].reserve(256)) {
+        return; // Do not start the endpoints with an unprepared block.
+    }
     q.data()[i].clear();
 }
 ```
@@ -223,10 +225,12 @@ if (auto* block = q.try_claim()) {
 ```
 
 ```cpp
-auto& block = q.claim();
-block.clear();
-fill_block(block);
-q.publish();
+if (!q.full()) {
+    auto& block = q.claim();
+    block.clear();
+    fill_block(block);
+    q.publish();
+}
 ```
 
 ### `publish()`
@@ -287,5 +291,7 @@ std::array<View::value_type, 8> backing{};
 View view{backing.data(), backing.size()};
 
 auto st = view.state();
-view.attach(backing.data(), backing.size(), st);
+if (!view.attach(backing.data(), backing.size(), st)) {
+    return;
+}
 ```

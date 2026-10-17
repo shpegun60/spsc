@@ -82,7 +82,9 @@ delay before consuming the captured range.
 
 ```cpp
 spsc::array_fifo_view<std::uint8_t, 64, 0>::state_t st{savedHead, savedTail};
-q.attach(backing.data(), backing.size(), st);
+if (!q.attach(backing.data(), backing.size(), st)) {
+    return; // Keep the endpoints stopped when recovery fails.
+}
 ```
 
 This inherits the `fifo_view` indices-only recovery contract. Save and validate
@@ -173,9 +175,11 @@ if (auto* frame = q.try_claim()) {
 ```
 
 ```cpp
-auto& frame = q.claim();
-frame.fill(0x11);
-q.publish();
+if (!q.full()) {
+    auto& frame = q.claim();
+    frame.fill(0x11);
+    q.publish();
+}
 ```
 
 ### `publish()`, `publish(unsafe, n)`
@@ -234,5 +238,7 @@ std::array<std::array<std::uint8_t, 64>, 8> backing{};
 spsc::array_fifo_view<std::uint8_t, 64, 0> view{backing.data(), backing.size()};
 
 auto st = view.state();
-view.attach(backing.data(), backing.size(), st);
+if (!view.attach(backing.data(), backing.size(), st)) {
+    return;
+}
 ```

@@ -30,6 +30,14 @@ Hot-path producer and consumer operations are the concurrent API surface:
 - `pop`
 - `consume`
 
+Unchecked FIFO operations still need an acquire-backed readiness proof from
+the calling endpoint; being actually non-empty or non-full is not enough.
+Prefer `try_*`, or check `!full()`/`can_write(n)` as producer and
+`!empty()`/`can_read(n)` as consumer before using the proved slot budget.
+Successful `try_claim()` and `try_front()` already prove the matching
+`publish()` and `pop()` transaction. See
+[Common Concepts](common-concepts.md#checked-and-unchecked-endpoint-operations).
+
 Management operations are **not** concurrent:
 
 - `resize`
@@ -54,10 +62,14 @@ it is only an approximate, non-linearizable snapshot. It can be stale as soon
 as it returns, and a transient snapshot can conservatively report no readable
 or writable space.
 
-Do not use a public observation as a reservation or as a substitute for
-`try_push()` / `try_claim()` or `try_front()` / `try_pop()`. The endpoint
-operations retain their own role-local cache for the hot path; public queries
-intentionally do not modify that cache. They can still read both endpoint
+An observation made by a third context cannot reserve space or data for an
+endpoint. The producer itself may use a positive `can_write(n)` or `!full()`
+result as the synchronization proof for that many unchecked writes; only the
+producer advances head. The consumer has the corresponding `can_read(n)` or
+`!empty()` proof; only it advances tail. Stay within that checked budget and
+keep management stopped. Checked endpoint operations retain their own
+role-local cache for the hot path; public queries intentionally do not modify
+that cache. They can still read both endpoint
 index cache lines, so a monitoring thread can create cache traffic even though
 it never touches an endpoint cache.
 
@@ -201,7 +213,7 @@ The queue does not block by itself.
 Use RTOS primitives around it.
 
 ```cpp
-// Producer task or ISR:
+// Producer task:
 if (q.try_push(msg)) {
     xTaskNotifyGive(consumerTaskHandle);
 }
@@ -219,6 +231,57 @@ for (;;) {
 
 The SPSC container transports the data. FreeRTOS handles wakeup and scheduling.
 
+An ISR producer uses the interrupt-safe notification API and requests a context
+switch through the port's ISR yield macro:
+
+```cpp
+// Inside the producer ISR, after acknowledging the peripheral interrupt:
+BaseType_t higherPriorityTaskWoken = pdFALSE;
+if (q.try_push(msg)) {
+    vTaskNotifyGiveFromISR(consumerTaskHandle, &higherPriorityTaskWoken);
+}
+portYIELD_FROM_ISR(higherPriorityTaskWoken);
+```
+
+[`xTaskNotifyGive()`](https://freertos.org/Documentation/02-Kernel/04-API-references/05-Direct-to-task-notifications/01-xTaskNotifyGive)
+is task-only. Interrupts that call FreeRTOS must also use a priority permitted by
+the port's `configMAX_SYSCALL_INTERRUPT_PRIORITY` rules; on Cortex-M, a smaller
+numeric priority means a higher urgency. See
+[`vTaskNotifyGiveFromISR()`](https://freertos.org/Documentation/02-Kernel/04-API-references/05-Direct-to-task-notifications/02-vTaskNotifyGiveFromISR).
+
+### Initialize Task Handles Before Starting Either Endpoint
+
+The examples below require startup to fill each notification handle through
+the output argument of `xTaskCreate()` before starting the scheduler. Do not
+wait for the consumer task body to assign its own handle: a producer task or
+an enabled peripheral interrupt can run first and notify a null handle.
+
+For example, create a task-to-task pipeline while the scheduler is stopped:
+
+```cpp
+void ConsumerTask(void*);
+void ProducerTask(void*);
+static TaskHandle_t consumerTaskHandle = nullptr;
+
+bool create_pipeline_before_scheduler()
+{
+    if (xTaskCreate(ConsumerTask, "consumer", configMINIMAL_STACK_SIZE, nullptr,
+                    tskIDLE_PRIORITY + 1, &consumerTaskHandle) != pdPASS) {
+        return false;
+    }
+    return xTaskCreate(ProducerTask, "producer", configMINIMAL_STACK_SIZE, nullptr,
+                       tskIDLE_PRIORITY + 1, nullptr) == pdPASS;
+}
+```
+
+Start the scheduler only after queue initialization and all required task
+creations succeed. The stack size and priorities above are placeholders for
+application sizing. For an ISR-to-task pipeline, create the consumer in the
+same way and keep its peripheral interrupt disabled until the consumer task
+starts. The consumer can then enable that interrupt, with its handle already
+set. Handles remain unchanged while the pipeline runs; stop its endpoints
+before deleting a task.
+
 ## 6. Real Task -> Task Examples
 
 ### Command FIFO Between Two Tasks
@@ -234,6 +297,7 @@ struct Command {
 using CommandQ = spsc::fifo<Command, 64, spsc::policy::CA<>>;
 
 static CommandQ commandQ;
+// Startup passes &workerTaskHandle to xTaskCreate(WorkerTask, ...).
 static TaskHandle_t workerTaskHandle = nullptr;
 
 void ControlTask(void*)
@@ -251,8 +315,6 @@ void ControlTask(void*)
 
 void WorkerTask(void*)
 {
-    workerTaskHandle = xTaskGetCurrentTaskHandle();
-
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -270,6 +332,7 @@ Use `queue` when destruction timing matters:
 
 ```cpp
 #include "queue.hpp"
+#include <string>
 
 struct Message {
     std::string text;
@@ -279,6 +342,7 @@ struct Message {
 using MessageQ = spsc::queue<Message, 32, spsc::policy::CA<>>;
 
 static MessageQ messageQ;
+// Startup passes &loggerTaskHandle to xTaskCreate(LoggerTask, ...).
 static TaskHandle_t loggerTaskHandle = nullptr;
 
 void ProducerTask(void*)
@@ -297,8 +361,6 @@ void ProducerTask(void*)
 
 void LoggerTask(void*)
 {
-    loggerTaskHandle = xTaskGetCurrentTaskHandle();
-
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -326,6 +388,7 @@ struct Telemetry {
 using TelemetryQ = spsc::latest<Telemetry, 8, spsc::policy::CA<>>;
 
 static TelemetryQ telemetryQ;
+// Startup passes &uiTaskHandle to xTaskCreate(UiTask, ...).
 static TaskHandle_t uiTaskHandle = nullptr;
 
 void SamplerTask(void*)
@@ -350,8 +413,6 @@ void SamplerTask(void*)
 
 void UiTask(void*)
 {
-    uiTaskHandle = xTaskGetCurrentTaskHandle();
-
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -373,6 +434,7 @@ void UiTask(void*)
 using EventQ = spsc::fifo<std::uint32_t, 64, spsc::policy::CA<>>;
 
 static EventQ eventQ;
+// Startup passes &eventTaskHandle to xTaskCreate(EventTask, ...).
 static TaskHandle_t eventTaskHandle = nullptr;
 
 extern "C" void EXTI15_10_IRQHandler(void)
@@ -390,7 +452,7 @@ extern "C" void EXTI15_10_IRQHandler(void)
 
 void EventTask(void*)
 {
-    eventTaskHandle = xTaskGetCurrentTaskHandle();
+    enable_event_irq(); // Platform hook; task handle and IRQ priority are ready.
 
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -411,6 +473,7 @@ void EventTask(void*)
 using RxPool = spsc::pool<16, spsc::policy::CA<>>;
 
 static RxPool rxPool{128};
+// Startup passes &parserTaskHandle to xTaskCreate(ParserTask, ...).
 static TaskHandle_t parserTaskHandle = nullptr;
 
 extern "C" void ADC_IRQHandler(void)
@@ -429,7 +492,7 @@ extern "C" void ADC_IRQHandler(void)
 
 void ParserTask(void*)
 {
-    parserTaskHandle = xTaskGetCurrentTaskHandle();
+    enable_adc_irq(); // Platform hook; rxPool and task handle are ready.
 
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -545,6 +608,8 @@ When one side is an ISR:
 - keep the ISR hot path short
 - do not call management APIs from the ISR
 - publish only fully prepared data
+- use `...FromISR()` for FreeRTOS calls and a kernel-permitted IRQ priority
+- enable the peripheral interrupt only after its target task handle is ready
 
 Typical ISR producer pattern:
 
@@ -627,19 +692,30 @@ static void* rxSlots[kDepth];
 using DmaPool = spsc::pool_view<kDepth, spsc::policy::CA<>>;
 static DmaPool dmaPool;
 
-void init_dma_pool()
+bool init_dma_pool()
 {
     for (std::size_t i = 0; i < kDepth; ++i) {
         rxSlots[i] = rxBuffers[i];
     }
 
-    dmaPool.attach(rxSlots, kBytes);
+    return dmaPool.attach(rxSlots, kBytes);
 }
 ```
 
 ### DMA Completion Callback Feeding A Task
 
+This MCU-specific example serializes the producer transaction across a task
+and its DMA-completion ISR: the task claims and arms one transfer, then only
+the completion ISR publishes that slot. It assumes the platform's interrupt
+and DMA lifecycle makes the task's setup visible to the ISR and prevents
+overlapping producer operations. `activeRxSlot` is shared under that platform
+contract; this is not a portable C++ thread handoff. Keep arming in the shown
+task and do not add another producer or start a second DMA transfer while one
+is active.
+
 ```cpp
+// Startup checks init_dma_pool() and passes &dmaTaskHandle to
+// xTaskCreate(DmaConsumerTask, ...) before starting the scheduler.
 static TaskHandle_t dmaTaskHandle = nullptr;
 static void* activeRxSlot = nullptr;
 
@@ -673,7 +749,7 @@ extern "C" void DMA1_Stream0_IRQHandler(void)
 
 void DmaConsumerTask(void*)
 {
-    dmaTaskHandle = xTaskGetCurrentTaskHandle();
+    enable_dma_irq(); // Platform hook; pool, handle, and IRQ priority are ready.
     arm_next_rx_dma();
 
     for (;;) {

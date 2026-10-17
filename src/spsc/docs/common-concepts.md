@@ -26,6 +26,25 @@ approximate snapshot, not a third endpoint or a reservation. See
 [Concurrency and FreeRTOS](concurrency-and-freertos.md) for the supported
 policy families.
 
+### Checked And Unchecked Endpoint Operations
+
+For FIFO-like containers, unchecked `push`, `emplace`, `claim`, `front`, and
+`pop` require the calling endpoint to have already proved enough writable or
+readable slots. With an atomic policy, that proof must also acquire the
+opposite endpoint's publication: the producer can use `!full()` or
+`can_write(n)`, and the consumer can use `!empty()` or `can_read(n)`. Use only
+the proved number of slots before checking again. A third observer's result,
+or an assumption that the queue must be non-empty/non-full, is insufficient.
+
+The unchecked call itself need not load the opposite counter with acquire
+ordering. `SPSC_ASSERT` is a diagnostic hook and is a no-op by default; do not
+rely on it to supply synchronization. Prefer `try_*` operations unless
+the endpoint already holds a checked budget, region, or snapshot. A successful
+`try_claim()` proves its slot for the matching `publish()`; a successful
+`try_front()` proves its item for the matching `pop()`. Finish that transaction
+without same-side interleaving or management. `latest` has its own newest-state
+protocol; see its container guide.
+
 ## 2. Static vs Dynamic Geometry
 
 Most containers come in two forms:
@@ -95,8 +114,8 @@ Different containers expose different producer models.
 Typical on `fifo` and `queue`:
 
 ```cpp
-q.push(value);
-q.emplace(args...);
+(void)q.try_push(value);
+(void)q.try_emplace(args...);
 ```
 
 This is the easiest style when you already have a ready-made object.

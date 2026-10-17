@@ -433,7 +433,9 @@ inspect_storage_bytes(ring.data(), ring.size());
 ### `push()`
 
 ```cpp
-q.push(42);
+if (!q.full()) {
+    q.push(42);
+}
 ```
 
 ### `try_push()`
@@ -447,7 +449,9 @@ if (!q.try_push(value)) {
 ### `emplace()`
 
 ```cpp
-q.emplace(arg1, arg2, arg3);
+if (!q.full()) {
+    q.emplace(arg1, arg2, arg3);
+}
 ```
 
 ### `try_emplace()`
@@ -461,9 +465,11 @@ if (auto* slot = q.try_emplace(arg1, arg2, arg3)) {
 ### `claim()`
 
 ```cpp
-auto& slot = q.claim();
-slot = produce_value();
-q.publish();
+if (!q.full()) {
+    auto& slot = q.claim();
+    slot = produce_value();
+    q.publish();
+}
 ```
 
 ### `try_claim()`

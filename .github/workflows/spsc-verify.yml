@@ -238,6 +238,11 @@ jobs:
             "$RUNNER_TEMP/default_policy_${name}"
           }
           compile_and_run modern
+          compile_and_run native_aligned \
+            -DSPSC_ALLOC_PREFER_ALIGNED_NEW=1
+          compile_and_run native_aligned_exceptions \
+            -DSPSC_ALLOC_PREFER_ALIGNED_NEW=1 \
+            -DSPSC_ENABLE_EXCEPTIONS=1
           compile_and_run legacy_plain \
             -DSPSC_TEST_LEGACY_DEFAULT_POLICY=0 \
             -DSPSC_DEFAULT_POLICY_ATOMIC=0
@@ -270,6 +275,16 @@ jobs:
             -o "$RUNNER_TEMP/v303_exception_runtime_smoke" \
             tests/standalone/v303_exception_runtime_smoke.cpp
           "$RUNNER_TEMP/v303_exception_runtime_smoke"
+      - name: Verify latest counter-wrap publication and sticky consumption
+        run: |
+          for shadows in 0 1; do
+            g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic-errors \
+              -DSPSC_ENABLE_SHADOW_INDICES="$shadows" \
+              -I. -Isrc/spsc \
+              -o "$RUNNER_TEMP/latest_counter_wrap_smoke_$shadows" \
+              tests/standalone/latest_counter_wrap_smoke.cpp
+            "$RUNNER_TEMP/latest_counter_wrap_smoke_$shadows"
+          done
       - name: Verify bounded static-container management
         run: |
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic-errors \

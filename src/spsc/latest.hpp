@@ -159,6 +159,8 @@ public:
                   "[spsc::latest<void,0>]: slot allocator size_type must represent the reg domain.");
     static_assert(std::is_trivially_copyable_v<counter_value>,
                   "policy::counter_type::value_type must be trivially copyable (atomic-friendly)");
+    static_assert(sizeof(counter_value) >= sizeof(size_type),
+                  "[spsc::latest<void,0>]: counter_type::value_type must be at least as wide as reg.");
     static_assert(std::is_same_v<typename counter_type::value_type, typename geometry_type::value_type>,
                   "policy::counter_type::value_type and policy::geometry_type::value_type must match");
     static_assert(std::is_unsigned_v<counter_value>,
@@ -874,6 +876,8 @@ public:
                   "[spsc::latest<T,0>]: value_type must be default-constructible.");
     static_assert(!std::is_const_v<value_type>,
                   "[spsc::latest<T,0>]: const T does not make sense for a writable container.");
+    static_assert(!std::is_volatile_v<value_type>,
+                  "[spsc::latest<T,0>]: volatile payloads are not supported by the dynamic allocation and construction paths.");
     static_assert(std::is_nothrow_destructible_v<value_type>,
                   "[spsc::latest<T,0>]: value_type destructor must be noexcept.");
 
@@ -882,6 +886,8 @@ public:
                   "[spsc::latest<T,0>]: no-exceptions mode requires noexcept default constructor.");
 #endif /* SPSC_ENABLE_EXCEPTIONS */
 
+    static_assert(sizeof(counter_value) >= sizeof(size_type),
+                  "[spsc::latest<T,0>]: counter_type::value_type must be at least as wide as reg.");
     static_assert(std::is_same_v<typename counter_type::value_type, typename geometry_type::value_type>,
                   "policy::counter_type::value_type and policy::geometry_type::value_type must match");
     static_assert(std::is_unsigned_v<counter_value>,
@@ -1513,6 +1519,8 @@ public:
                   "[spsc::latest<T,Depth>]: no-exceptions mode requires noexcept default constructor.");
 #endif /* SPSC_ENABLE_EXCEPTIONS */
 
+    static_assert(sizeof(counter_value) >= sizeof(size_type),
+                  "[spsc::latest<T,Depth>]: counter_type::value_type must be at least as wide as reg.");
     static_assert(std::is_same_v<typename counter_type::value_type, typename geometry_type::value_type>,
                   "policy::counter_type::value_type and policy::geometry_type::value_type must match");
     static_assert(std::is_unsigned_v<counter_value>,
@@ -1633,8 +1641,6 @@ public:
     [[nodiscard]] RB_FORCEINLINE size_type read_size() const noexcept {
         return static_cast<size_type>(Base::read_size());
     }
-
-    // Static: destroy == clear indices (no allocations).
 
     // Static: destroy == clear indices (no allocations).
     RB_FORCEINLINE void destroy() noexcept {

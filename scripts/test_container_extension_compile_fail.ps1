@@ -48,6 +48,26 @@ function Get-UniqueLibraryContractMessages {
 
 $scenarios = @(
     @{
+        name = 'volatile dynamic latest payload'
+        expected = '[spsc::latest<T,0>]: volatile payloads are not supported by the dynamic allocation and construction paths.'
+        defines = @('SPSC_TEST_LATEST_DYNAMIC_VOLATILE_PAYLOAD=1')
+    },
+    @{
+        name = 'counter value_type narrower than reg in static latest'
+        expected = '[spsc::latest<T,Depth>]: counter_type::value_type must be at least as wide as reg.'
+        defines = @('SPSC_TEST_NARROW_COUNTER_STATIC_LATEST=1')
+    },
+    @{
+        name = 'counter value_type narrower than reg in dynamic typed latest'
+        expected = '[spsc::latest<T,0>]: counter_type::value_type must be at least as wide as reg.'
+        defines = @('SPSC_TEST_NARROW_COUNTER_DYNAMIC_LATEST=1')
+    },
+    @{
+        name = 'counter value_type narrower than reg in dynamic raw latest'
+        expected = '[spsc::latest<void,0>]: counter_type::value_type must be at least as wide as reg.'
+        defines = @('SPSC_TEST_NARROW_COUNTER_RAW_LATEST=1')
+    },
+    @{
         name = 'allocator size_type narrower than reg'
         expected = '[spsc::queue]: allocator size_type must represent the reg domain.'
         defines = @()

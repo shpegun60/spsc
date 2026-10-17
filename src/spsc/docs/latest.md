@@ -27,6 +27,8 @@ There are three main forms:
 - `latest<T, 0, Policy, Alloc>`: dynamic typed slots
 - `latest<T, Depth, Policy, Alloc>`: static typed slots
 
+Dynamic typed `latest<T, 0>` requires non-volatile `T`; its allocation and construction paths do not support volatile-qualified objects.
+
 ## Typed Static Example
 
 ```cpp

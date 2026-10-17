@@ -19,7 +19,7 @@
  *   - Multiple backends with different memory and concurrency semantics:
  *       * PlainCounter<T>
  *           - Raw integral variable (no fences, no atomics, constexpr-friendly).
- *           - Suitable for single-core or externally synchronized code paths.
+ *           - Suitable for one execution context or externally synchronized code paths.
  *
  *       * VolatileCounter<T>
  *           - Volatile integral variable.
@@ -233,7 +233,7 @@ inline constexpr bool is_integral_not_bool_v =
 
 /* ------------------------------ PlainCounter ------------------------------
  * Raw loads/stores, no fences, constexpr-friendly.
- * Suitable for single-core or when external synchronization is guaranteed.
+ * Suitable for one execution context or when external synchronization is guaranteed.
  * -------------------------------------------------------------------------- */
 template<typename T>
 class PlainCounter {
