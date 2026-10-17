@@ -161,10 +161,10 @@ public:
     const_iterator cbegin() const noexcept { return const_iterator(begin_); }
     const_iterator cend() const noexcept { return const_iterator(end_); }
 
-    // Logical size (contract: end >= begin). Returns 0 if violated.
+    // Logical size (contract: modular distance <= capacity). Returns 0 if violated.
     [[nodiscard]] size_type size() const noexcept {
         // Wrap-safe logical size; bounded by capacity derived from iterator mask.
-        // Fails closed (returns 0) if the snapshot is corrupted.
+        // Returns 0 for mismatched storage/masks or an out-of-range distance.
         const size_type cap = static_cast<size_type>(begin_.mask() + 1u);
         if (begin_.data() == nullptr ||
             begin_.data() != end_.data() ||
@@ -227,7 +227,7 @@ public:
 
     [[nodiscard]] size_type size() const noexcept {
         // Wrap-safe logical size; bounded by capacity derived from iterator mask.
-        // Fails closed (returns 0) if the snapshot is corrupted.
+        // Returns 0 for mismatched storage/masks or an out-of-range distance.
         const size_type cap = static_cast<size_type>(begin_.mask() + 1u);
         if (begin_.data() == nullptr ||
             begin_.data() != end_.data() ||

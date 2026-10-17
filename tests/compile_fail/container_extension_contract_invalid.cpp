@@ -142,7 +142,18 @@ struct throwing_copy_ctor_value {
     ~throwing_copy_ctor_value() noexcept = default;
 };
 
-#if defined(SPSC_TEST_THROWING_ALLOCATOR_CHUNK)
+using narrow_counter_policy = spsc::policy::Policy<
+    spsc::cnt::PlainCounter<std::uint8_t>>;
+
+#if defined(SPSC_TEST_NARROW_COUNTER_STATIC_LATEST)
+using rejected_container = spsc::latest<int, 8u, narrow_counter_policy>;
+#elif defined(SPSC_TEST_NARROW_COUNTER_DYNAMIC_LATEST)
+using rejected_container = spsc::latest<int, 0u, narrow_counter_policy>;
+#elif defined(SPSC_TEST_NARROW_COUNTER_RAW_LATEST)
+using rejected_container = spsc::latest<void, 0u, narrow_counter_policy>;
+#elif defined(SPSC_TEST_LATEST_DYNAMIC_VOLATILE_PAYLOAD)
+using rejected_container = spsc::latest<volatile int, 0u, spsc::policy::P>;
+#elif defined(SPSC_TEST_THROWING_ALLOCATOR_CHUNK)
 using rejected_container =
     spsc::chunk<int, 0u, throwing_allocate_allocator<std::byte>>;
 #elif defined(SPSC_TEST_THROWING_ALLOCATOR_FIFO)

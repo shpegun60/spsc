@@ -213,3 +213,6 @@ make assembly
 
 The PowerShell runner is the canonical Windows capture path because it adds the
 machine manifest and affinity selection.
+
+The Makefile tracks included library headers. When changing the compiler,
+`CXXFLAGS`, or `CPPFLAGS`, use `make -B` to rebuild with the new command line.

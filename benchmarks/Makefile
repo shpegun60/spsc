@@ -1,8 +1,12 @@
 CXX ?= g++
 ROOT := $(abspath ..)
 BUILD_DIR ?= .build
-TARGET := $(BUILD_DIR)/spsc_bench
+ifeq ($(OS),Windows_NT)
+EXEEXT ?= .exe
+endif
+TARGET := $(BUILD_DIR)/spsc_bench$(EXEEXT)
 ASSEMBLY := $(BUILD_DIR)/hotpath_probe.s
+DEPENDENCY := $(BUILD_DIR)/spsc_bench.d
 
 CXXFLAGS ?= -std=c++17 -O3 -DNDEBUG -march=native -pthread
 CPPFLAGS += -I$(ROOT) -I$(ROOT)/src -I$(ROOT)/third_party/rigtorp_spscqueue/include \
@@ -19,8 +23,10 @@ all: $(TARGET)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(TARGET): spsc_bench.cpp $(ROOT)/third_party/rigtorp_spscqueue/include/rigtorp/SPSCQueue.h | $(BUILD_DIR)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $<
+$(TARGET): spsc_bench.cpp $(ROOT)/third_party/rigtorp_spscqueue/include/rigtorp/SPSCQueue.h Makefile | $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -MF $(DEPENDENCY) -MQ $@ -o $@ $<
 
 assembly: hotpath_probe.cpp | $(BUILD_DIR)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -S -o $(ASSEMBLY) $<
+
+-include $(DEPENDENCY)

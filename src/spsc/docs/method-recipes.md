@@ -58,6 +58,16 @@ if (q.can_write(8)) {
 }
 ```
 
+For FIFO-like containers, unchecked `push`, `emplace`, `claim`, `front`, and
+`pop` need a readiness proof made by the calling endpoint. With atomic
+policies this check also acquires the opposite endpoint's publication; the
+unchecked operation need not repeat that acquire. `!full()` proves one write,
+`!empty()` proves one read, and `can_write(n)`/`can_read(n)` prove a bounded
+batch. Consume only that budget. An unrelated observer's result or the mere
+assumption that space/data exists is insufficient. A successful `try_claim()`
+or `try_front()` already proves its matching `publish()` or `pop()`. See
+[Common Concepts](common-concepts.md#checked-and-unchecked-endpoint-operations).
+
 ## 2. Value-Based Producer: `push` / `try_push`
 
 Use this when you already have a finished value.
@@ -86,7 +96,9 @@ when the payload size is not statically guaranteed.
 Use this when constructing the object directly is clearer than creating a temporary.
 
 ```cpp
-q.emplace(arg1, arg2, arg3);
+if (!q.full()) {
+    q.emplace(arg1, arg2, arg3);
+}
 
 if (auto* slot = q.try_emplace(arg1, arg2, arg3)) {
     use_immediately(*slot);

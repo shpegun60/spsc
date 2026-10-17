@@ -4,7 +4,9 @@
 #include "src/spsc/latest.hpp"
 #include "src/spsc/pool.hpp"
 #include "src/spsc/queue.hpp"
+#include "src/spsc/typed_pool.hpp"
 
+#include <array>
 #include <cstddef>
 #include <new>
 #include <type_traits>
@@ -445,6 +447,259 @@ struct null_returning_allocator {
            pool.data(0u)[0] == 5;
 }
 
+// Fail at every position of a live prefix, including after partial migration.
+// Check both object lifetimes and raw allocation ownership; all checks remain
+// active even when compiled with NDEBUG.
+struct payload_error {};
+
+struct relocation_probe {
+    static inline int live{0};
+    static inline unsigned copies{0u};
+    static inline unsigned assignments{0u};
+    static inline unsigned fail_copy{0u};
+    static inline unsigned fail_assignment{0u};
+
+    int value{0};
+
+    relocation_probe() noexcept { ++live; }
+    explicit relocation_probe(const int input) noexcept : value(input) { ++live; }
+    relocation_probe(const relocation_probe& other) : value(other.value) {
+        if (++copies == fail_copy) {
+            throw payload_error{};
+        }
+        ++live;
+    }
+    relocation_probe(relocation_probe&& other) noexcept(false)
+        : value(other.value) {
+        ++live;
+        other.value = -1;
+    }
+    relocation_probe& operator=(const relocation_probe& other) {
+        if (++assignments == fail_assignment) {
+            throw payload_error{};
+        }
+        value = other.value;
+        return *this;
+    }
+    relocation_probe& operator=(relocation_probe&& other) noexcept(false) {
+        value = other.value;
+        other.value = -1;
+        return *this;
+    }
+    ~relocation_probe() noexcept { --live; }
+
+    static void fail_on(const unsigned copy, const unsigned assignment) noexcept {
+        copies = assignments = 0u;
+        fail_copy = copy;
+        fail_assignment = assignment;
+    }
+};
+
+using relocation_allocator = throwing_allocator<relocation_probe>;
+
+[[nodiscard]] int payload_value(const relocation_probe& value) noexcept {
+    return value.value;
+}
+[[nodiscard]] int payload_value(const relocation_probe* const value) noexcept {
+    return value != nullptr ? value->value : -1;
+}
+
+template<class Container>
+[[nodiscard]] bool has_original_prefix(const Container& container) {
+    return container.size() == 3u && payload_value(container[0u]) == 1 &&
+           payload_value(container[1u]) == 2 &&
+           payload_value(container[2u]) == 3;
+}
+
+template<class Action>
+[[nodiscard]] bool catches_payload_failure(Action action) {
+    bool caught = false;
+    try {
+        action();
+    } catch (const payload_error&) {
+        caught = true;
+    }
+    relocation_probe::fail_on(0u, 0u);
+    return caught;
+}
+
+template<class Container>
+[[nodiscard]] bool advance_empty_ring(Container& container,
+                                      const unsigned initial_cursor) {
+    for (unsigned i = 0u; i < initial_cursor; ++i) {
+        if (!container.try_emplace(0) || !container.try_pop()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template<class Container, class Resize, class Prepare>
+[[nodiscard]] bool relocation_failure_cases(Resize resize,
+                                            const bool copy_construction,
+                                            Prepare prepare) {
+    for (unsigned position = 1u; position <= 3u; ++position) {
+        Container container;
+        if (!resize(container, 4u) || !prepare(container) ||
+            container.try_emplace(1) == nullptr ||
+            container.try_emplace(2) == nullptr ||
+            container.try_emplace(3) == nullptr) {
+            return false;
+        }
+
+        const auto* const previous_data = container.data();
+        const int previous_live = relocation_probe::live;
+        const auto previous_blocks = allocation_tracker::live_blocks;
+        relocation_probe::fail_on(copy_construction ? position : 0u,
+                                  copy_construction ? 0u : position);
+        const bool caught = catches_payload_failure(
+            [&] { (void)resize(container, 8u); });
+
+        if (!caught || relocation_probe::live != previous_live ||
+            allocation_tracker::live_blocks != previous_blocks ||
+            container.data() != previous_data || container.capacity() != 4u ||
+            !has_original_prefix(container)) {
+            return false;
+        }
+    }
+    return relocation_probe::live == 0 && allocation_tracker::live_blocks == 0u;
+}
+
+template<reg Capacity>
+[[nodiscard]] bool typed_pool_copy_failure_cases(const unsigned initial_cursor) {
+    using pool_type = ::spsc::typed_pool<relocation_probe, Capacity,
+                                       ::spsc::policy::P, relocation_allocator>;
+
+    for (unsigned position = 1u; position <= 3u; ++position) {
+        pool_type source;
+        pool_type destination;
+        if constexpr (Capacity == 0u) {
+            if (!source.resize(4u) || !destination.resize(4u)) {
+                return false;
+            }
+        }
+        if (!advance_empty_ring(source, initial_cursor) ||
+            !source.try_emplace(1) || !source.try_emplace(2) ||
+            !source.try_emplace(3) || !destination.try_emplace(9)) {
+            return false;
+        }
+
+        const auto* const previous_data = destination.data();
+        const int previous_live = relocation_probe::live;
+        const auto previous_blocks = allocation_tracker::live_blocks;
+        relocation_probe::fail_on(position, 0u);
+        const bool assignment_caught = catches_payload_failure(
+            [&] { destination = source; });
+
+        if (!assignment_caught || relocation_probe::live != previous_live ||
+            allocation_tracker::live_blocks != previous_blocks ||
+            destination.data() != previous_data || destination.size() != 1u ||
+            destination.front()->value != 9 || !has_original_prefix(source)) {
+            return false;
+        }
+
+        relocation_probe::fail_on(position, 0u);
+        const bool construction_caught = catches_payload_failure([&] {
+            pool_type copy(source);
+            (void)copy;
+        });
+        if (!construction_caught || relocation_probe::live != previous_live ||
+            allocation_tracker::live_blocks != previous_blocks ||
+            !has_original_prefix(source)) {
+            return false;
+        }
+    }
+    return relocation_probe::live == 0 && allocation_tracker::live_blocks == 0u;
+}
+
+[[nodiscard]] bool typed_pool_grow_allocation_failures() {
+    using pool_type = ::spsc::typed_pool<relocation_probe, 0u,
+                                       ::spsc::policy::P, relocation_allocator>;
+
+    // Growing 4 -> 8 allocates one pointer table and four additional payloads.
+    for (unsigned position = 1u; position <= 5u; ++position) {
+        if (relocation_probe::live != 0 || allocation_tracker::live_blocks != 0u) {
+            return false;
+        }
+        allocation_tracker::reset(0u);
+        pool_type pool;
+        if (!pool.resize(4u) || !advance_empty_ring(pool, 3u) ||
+            !pool.try_emplace(1) || !pool.try_emplace(2) ||
+            !pool.try_emplace(3)) {
+            return false;
+        }
+
+        const auto* const previous_data = pool.data();
+        const std::array<relocation_probe*, 4u> previous_slots{
+            pool.data()[0u], pool.data()[1u],
+            pool.data()[2u], pool.data()[3u]};
+        const int previous_live = relocation_probe::live;
+        const auto previous_blocks = allocation_tracker::live_blocks;
+        allocation_tracker::throw_on_call = allocation_tracker::calls + position;
+        bool caught = false;
+        try {
+            (void)pool.resize(8u);
+        } catch (const allocation_error&) {
+            caught = true;
+        }
+        allocation_tracker::throw_on_call = 0u;
+
+        if (!caught || relocation_probe::live != previous_live ||
+            allocation_tracker::live_blocks != previous_blocks ||
+            pool.data() != previous_data || pool.capacity() != 4u ||
+            !has_original_prefix(pool)) {
+            return false;
+        }
+        for (reg i = 0u; i < previous_slots.size(); ++i) {
+            if (pool.data()[i] != previous_slots[i]) {
+                return false;
+            }
+        }
+        if (!pool.resize(8u) || !has_original_prefix(pool)) {
+            return false;
+        }
+    }
+    return relocation_probe::live == 0 && allocation_tracker::live_blocks == 0u;
+}
+
+[[nodiscard]] bool payload_rollback_is_complete() {
+    using object_queue = ::spsc::queue<relocation_probe, 0u,
+                                     ::spsc::policy::P, relocation_allocator>;
+    using value_fifo = ::spsc::fifo<relocation_probe, 0u,
+                                  ::spsc::policy::P, relocation_allocator>;
+    using dynamic_chunk = ::spsc::chunk<relocation_probe, 0u,
+                                       relocation_allocator>;
+
+    allocation_tracker::reset(0u);
+    relocation_probe::fail_on(0u, 0u);
+    const auto resize = [](auto& container, const reg count) {
+        return container.resize(count);
+    };
+    const auto reserve = [](auto& container, const reg count) {
+        return container.reserve(count);
+    };
+
+    // Cursor 3 places the prefix at physical slots [3,0,1], exercising both
+    // sides of a wrapped ring. There are 36 ring payload failures in total.
+    for (unsigned cursor = 0u; cursor <= 3u; cursor += 3u) {
+        const auto prepare = [cursor](auto& container) {
+            return advance_empty_ring(container, cursor);
+        };
+        if (!relocation_failure_cases<object_queue>(resize, true, prepare) ||
+            !typed_pool_copy_failure_cases<4u>(cursor) ||
+            !typed_pool_copy_failure_cases<0u>(cursor) ||
+            !relocation_failure_cases<value_fifo>(resize, false, prepare)) {
+            return false;
+        }
+    }
+
+    // Plus three contiguous chunk failures and five typed_pool allocation
+    // failures: 44 injected failures, each with lifetime/ownership checks.
+    return relocation_failure_cases<dynamic_chunk>(
+               reserve, false, [](auto&) { return true; }) &&
+           typed_pool_grow_allocation_failures();
+}
+
 } // namespace
 
 int main() {
@@ -454,7 +709,8 @@ int main() {
                    throwing_allocator_cleanup_is_complete() &&
                    guards_have_documented_unwind_semantics() &&
                    buffer_pool_exception_contract_holds() &&
-                   buffer_pool_null_allocation_still_reports_false()
+                   buffer_pool_null_allocation_still_reports_false() &&
+                   payload_rollback_is_complete()
                ? 0
                : 1;
 }

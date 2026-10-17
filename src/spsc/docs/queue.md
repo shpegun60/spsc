@@ -321,7 +321,9 @@ if (!q.empty()) {
 ### `push()`
 
 ```cpp
-q.push(Message{1, "hello"});
+if (!q.full()) {
+    q.push(Message{1, "hello"});
+}
 ```
 
 ### `try_push()`
@@ -335,7 +337,9 @@ if (!q.try_push(Message{2, "world"})) {
 ### `emplace()`
 
 ```cpp
-q.emplace(3, "ready");
+if (!q.full()) {
+    q.emplace(3, "ready");
+}
 ```
 
 ### `try_emplace()`
@@ -349,9 +353,11 @@ if (auto* msg = q.try_emplace(4, "queued")) {
 ### `claim()`
 
 ```cpp
-auto* slot = q.claim();
-::new (static_cast<void*>(slot)) Message(5, "manual");
-q.publish();
+if (!q.full()) {
+    auto* slot = q.claim();
+    ::new (static_cast<void*>(slot)) Message(5, "manual");
+    q.publish();
+}
 ```
 
 ### `try_claim()`

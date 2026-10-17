@@ -6,6 +6,37 @@ The format is based on Keep a Changelog and the project follows Semantic Version
 
 ## [Unreleased]
 
+## [3.0.4] - 2026-10-17
+
+This patch release hardens `latest` custom-counter contracts, preserves
+conditional `noexcept` for cache-aligned slots, and expands rollback and
+counter-wrap regression coverage. Public state layouts and the v3
+default-policy model are unchanged.
+
+### Fixed
+
+- All three `latest` forms now reject custom counter values narrower than
+  `reg`; previously such a backend could lose a publication when its counter
+  wrapped. Dynamic typed `latest` also rejects unsupported volatile payloads
+  at its public contract boundary.
+- Cache-aligned slot construction from a const payload now preserves its
+  conditional `noexcept`, including bulk array construction.
+- The benchmark Makefile tracks included headers and the native Windows
+  executable suffix, preventing stale binaries and unnecessary rebuilds.
+- FreeRTOS examples distinguish task and ISR notification APIs and initialize
+  task handles before producers start. Unchecked endpoint recipes now explain
+  the required acquire-backed readiness proof.
+
+### Tests
+
+- Added `latest` counter-wrap and sticky-consumption checks for all three
+  storage forms, both atomic backends, and shadow settings, plus four negative
+  extension-contract scenarios.
+- Expanded exception rollback coverage to 44 failure points across wrapped
+  and unwrapped payload prefixes and dynamic `typed_pool` allocation failures.
+- Added native aligned-allocation CI smoke in both exception modes and
+  conditional slot/bulk-copy `noexcept` assertions.
+
 ## [3.0.3] - 2026-08-23
 
 This patch release closes the full post-v3.0.2 paranoid-audit backlog: a raw
@@ -581,7 +612,8 @@ First stable public release of the `spsc` container library.
 - Future bug-fix-only updates should use `1.0.x`.
 - New backward-compatible features should use `1.1.0`, `1.2.0`, and so on.
 
-[Unreleased]: https://github.com/shpegun60/spsc/compare/v3.0.3...HEAD
+[Unreleased]: https://github.com/shpegun60/spsc/compare/v3.0.4...HEAD
+[3.0.4]: https://github.com/shpegun60/spsc/compare/v3.0.3...v3.0.4
 [3.0.3]: https://github.com/shpegun60/spsc/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/shpegun60/spsc/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/shpegun60/spsc/compare/v3.0.0...v3.0.1
