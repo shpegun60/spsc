@@ -64,7 +64,6 @@ HEADERS += \
     ../test_suite_entries.h \
     ../test_suite_registry.h \
     ../basic_types.h \
-    ../macro.h \
     ../src/tests/test_config.hpp \
     ../src/tests/test_build_config.hpp \
     ../src/tests/test_reserve_allocator.hpp \
